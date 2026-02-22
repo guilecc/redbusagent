@@ -12,6 +12,7 @@ import * as p from '@clack/prompts';
 import pc from 'picocolors';
 import { Vault, type VaultTier2Config, type VaultTier1Config, type Tier2Provider } from '@redbusagent/shared';
 import { fetchTier2Models } from './model-fetcher.js';
+import { WhatsAppChannel } from '@redbusagent/daemon/dist/channels/whatsapp.js';
 
 // ─── Wizard ───────────────────────────────────────────────────────
 
@@ -136,10 +137,28 @@ export async function runOnboardingWizard(): Promise<boolean> {
     await new Promise(r => setTimeout(r, 500));
     saveSpinner.stop('Configuração salva!');
 
+    // ── Step 7: WhatsApp Integration (Channel Extension) ───────
+
+    const configureWhatsApp = await p.confirm({
+        message: 'Deseja conectar o redbusagent ao seu WhatsApp para controlá-lo remotamente via celular?',
+        initialValue: false,
+    });
+    if (p.isCancel(configureWhatsApp)) return false;
+
+    if (configureWhatsApp) {
+        if (WhatsAppChannel.hasSession()) {
+            p.note('WhatsApp já pareado perfeitamente no Cofre.', 'WhatsApp Conectado');
+        } else {
+            // Interactive WhatsApp Pair via terminal
+            await WhatsAppChannel.loginInteractively();
+        }
+    }
+
     p.note(
         `Provedor: ${pc.bold(tier2Config.provider)}/${pc.bold(tier2Config.model)}\n` +
         `Auth: ${pc.bold(tier2Config.authToken ? 'OAuth token' : 'API key')}\n` +
         `Ollama: ${pc.bold(tier1Config.enabled ? `${tier1Config.model} @ ${tier1Config.url}` : 'desativado')}\n` +
+        `WhatsApp: ${pc.bold(WhatsAppChannel.hasSession() ? 'Conectado ✅' : 'Não conectado')}\n` +
         `Vault: ${pc.dim(Vault.configPath)}`,
         '✅ Resumo da configuração',
     );

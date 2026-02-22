@@ -57,9 +57,18 @@ export function getSystemPromptTier2(): string {
 Você possui memórias profundas guardadas via Embeddings nas seguintes categorias conhecidas: [${map.join(', ')}].
 Se o usuário perguntar algo relacionado, USE a ferramenta \`search_memory\` para recuperar o contexto do Cognitive Map local antes de responder.
 Também use \`memorize\` se observar ou descobrir novos fatos de infraestrutura arquitetural duradoura que valham a pena guardar no cortex, ou se o usuário pedir explicitamente para "guardar na memória".
+
+REGRA CRÍTICA PARA MEMORIZAÇÃO: ANTES de usar \`memorize\`, você DEVE SEMPRE usar \`search_memory\` na categoria alvo para verificar se algo parecido ou conflitante já foi armazenado.
+Se a informação já existir ou houver conflito, seja crítico e avise o usuário ANTES de memorizar novamente (ex: "Eu já tenho anotado que o banco é PostgreSQL, mas você está dizendo MySQL agora. Devo sobrescrever/corrigir?").
 `;
 
-   return BASE_SYSTEM_PROMPT + '\n' + memoryInject;
+   const timeContext = `
+## Relógio do Sistema
+Você tem acesso ao relógio do sistema. Para saber que horas são ou inferir quando um alerta deve tocar, use isto:
+O momento atual é: ${new Date().toLocaleString('pt-BR')}.
+`;
+
+   return BASE_SYSTEM_PROMPT + '\n' + timeContext + '\n' + memoryInject;
 }
 
 /**

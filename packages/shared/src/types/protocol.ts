@@ -95,6 +95,24 @@ export interface ChatToolResultMessage extends BaseMessage {
     };
 }
 
+// ─── Proactive Messages (Heartbeat extensions) ──────────────────────
+
+export interface ProactiveThoughtMessage extends BaseMessage {
+    readonly type: 'proactive:thought';
+    readonly payload: {
+        readonly text: string;
+        readonly status: 'thinking' | 'action' | 'done';
+    };
+}
+
+export interface SystemAlertMessage extends BaseMessage {
+    readonly type: 'system:alert';
+    readonly payload: {
+        readonly id: string;
+        readonly message: string;
+    };
+}
+
 // ─── Client → Server Messages ─────────────────────────────────────
 
 export interface PingMessage extends BaseMessage {
@@ -124,7 +142,9 @@ export type DaemonMessage =
     | ChatStreamDoneMessage
     | ChatErrorMessage
     | ChatToolCallMessage
-    | ChatToolResultMessage;
+    | ChatToolResultMessage
+    | ProactiveThoughtMessage
+    | SystemAlertMessage;
 
 export type ClientMessage =
     | PingMessage

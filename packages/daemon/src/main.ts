@@ -23,6 +23,7 @@ import { getRouterStatus } from './core/cognitive-router.js';
 import { Forge } from './core/forge.js';
 import { ToolRegistry } from './core/tool-registry.js';
 import { OllamaManager } from './core/ollama-manager.js';
+import { WhatsAppChannel } from './channels/whatsapp.js';
 
 // ── Configuration ─────────────────────────────────────────────────
 
@@ -113,11 +114,19 @@ if (shouldRunLocalEngine) {
     });
 }
 
+// ── Extensions (Channels) ─────────────────────────────────────────
+
+const whatsapp = new WhatsAppChannel();
+whatsapp.startSilent().catch(err => {
+    console.error('  ❌ Failed to start WhatsApp Bridge:', err);
+});
+
 // ── Graceful Shutdown ─────────────────────────────────────────────
 
 async function shutdown(signal: string): Promise<void> {
     console.log(`\n  🛑 Received ${signal}. Shutting down gracefully...`);
     OllamaManager.shutdown();
+    await whatsapp.stop();
     heartbeat.stop();
     await wsServer.shutdown();
     console.log('  👋 Daemon stopped.\n');

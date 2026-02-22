@@ -24,6 +24,7 @@ ${pc.bold('Uso:')}
 ${pc.bold('Comandos:')}
   ${pc.yellow('start')}    Inicia o Daemon + TUI interativa
   ${pc.yellow('config')}   Abre o assistente de configuração
+  ${pc.yellow('channel')}  Gerencia Canais Extras (ex: whatsapp)
   ${pc.yellow('help')}     Mostra esta mensagem
 
 ${pc.bold('Começando:')}
@@ -46,6 +47,12 @@ export async function main(args: string[]): Promise<void> {
         case 'setup': {
             const { configCommand } = await import('./commands/config.js');
             await configCommand();
+            break;
+        }
+
+        case 'channel': {
+            const { channelCommand } = await import('./commands/channel.js');
+            await channelCommand(args.slice(1));
             break;
         }
 

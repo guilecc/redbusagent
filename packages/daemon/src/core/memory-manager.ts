@@ -47,10 +47,12 @@ export class MemoryManager {
     /**
      * Stores a new memory vector in the given category.
      */
-    static async memorize(category: string, content: string): Promise<void> {
+    static async memorize(rawCategory: string, content: string): Promise<void> {
+        let category = rawCategory.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '_');
+        if (!category) category = 'general';
         const db = await lancedb.connect(this.memoryDir);
 
-        console.log(`  🧠 💾 Memorizing into category "${category}"...`);
+        console.log(`  🧠 💾 Memorizing into category "${category}" (from "${rawCategory}")...`);
         const vector = await this.generateEmbedding(content);
         const record = [{ vector, content }];
 
@@ -70,7 +72,9 @@ export class MemoryManager {
     /**
      * Semantically searches the memory vector timeline for a given query.
      */
-    static async searchMemory(category: string, query: string, limit = 5): Promise<string[]> {
+    static async searchMemory(rawCategory: string, query: string, limit = 5): Promise<string[]> {
+        let category = rawCategory.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '_');
+        if (!category) category = 'general';
         const db = await lancedb.connect(this.memoryDir);
         const tableNames = await db.tableNames();
 

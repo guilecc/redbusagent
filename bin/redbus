@@ -15,6 +15,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # Add local node_modules/.bin to PATH so tsx is resolvable
 export PATH="$PROJECT_ROOT/node_modules/.bin:$PATH"
 export NODE_PATH="$PROJECT_ROOT/node_modules"
+export NODE_OPTIONS="${NODE_OPTIONS:-} --no-deprecation"
 
 # Run node with tsx loader
 exec node --import tsx "$PROJECT_ROOT/packages/cli/src/main.ts" "$@"

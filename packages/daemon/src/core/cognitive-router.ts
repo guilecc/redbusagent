@@ -26,6 +26,7 @@ import { SYSTEM_PROMPT_TIER1, getSystemPromptTier2 } from './system-prompt.js';
 import { createAndRunTool } from './tools/create-and-run.js';
 import { memorizeTool } from './tools/memorize.js';
 import { searchMemoryTool } from './tools/search-memory.js';
+import { scheduleAlertTool } from './tools/schedule-alert.js';
 import { ToolRegistry } from './tool-registry.js';
 
 // ─── Provider Factory ─────────────────────────────────────────────
@@ -81,6 +82,7 @@ function assembleTools() {
         create_and_run_tool: createAndRunTool,
         memorize: memorizeTool,
         search_memory: searchMemoryTool,
+        schedule_alert: scheduleAlertTool,
         ...dynamicTools,
     };
 }

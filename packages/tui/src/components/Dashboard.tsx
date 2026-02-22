@@ -15,6 +15,7 @@ import type {
     DaemonMessage,
     HeartbeatMessage,
     ChatRequestMessage,
+    ProactiveThoughtMessage,
 } from '@redbusagent/shared';
 import {
     APP_NAME,
@@ -60,6 +61,7 @@ export function Dashboard(): React.ReactElement {
     const [isStreaming, setIsStreaming] = useState(false);
     const [inputValue, setInputValue] = useState('');
     const [currentModel, setCurrentModel] = useState<string | null>(null);
+    const [proactiveThought, setProactiveThought] = useState<{ text: string; status: 'thinking' | 'action' | 'done' } | null>(null);
 
     const clientRef = useRef<TuiWsClient | null>(null);
     const currentRequestIdRef = useRef<string | null>(null);
@@ -178,6 +180,23 @@ export function Dashboard(): React.ReactElement {
 
             case 'system:status':
                 addLog(`Sistema: ${message.payload.status}`, 'blue');
+                break;
+
+            case 'system:alert':
+                setChatLines((prev) => [
+                    ...prev.slice(-(MAX_CHAT_LINES - 2)),
+                    '',
+                    `⏰ ALERTA AGENDADO: ${message.payload.message}`,
+                ]);
+                addLog(`Alerta disparado: ${message.payload.id}`, 'yellow');
+                break;
+
+            case 'proactive:thought':
+                if (message.payload.status === 'done' || !message.payload.text) {
+                    setProactiveThought(null);
+                } else {
+                    setProactiveThought({ text: message.payload.text, status: message.payload.status });
+                }
                 break;
 
             case 'chat:stream:chunk':
@@ -354,8 +373,25 @@ export function Dashboard(): React.ReactElement {
                 ))}
             </Box>
 
+            {/* ── Background Proactive Thoughts Panel ─────────────────────── */}
+            {proactiveThought && (
+                <Box
+                    marginTop={1}
+                    borderStyle="round"
+                    borderColor={proactiveThought.status === 'thinking' ? 'magenta' : 'green'}
+                    paddingX={1}
+                >
+                    <Text bold color={proactiveThought.status === 'thinking' ? 'magenta' : 'green'}>
+                        {proactiveThought.status === 'thinking' ? '⏳ [Processo de Fundo: Pensando] ' : '⚡ [Processo de Fundo: Agindo] '}
+                    </Text>
+                    <Text italic color="gray">
+                        {proactiveThought.text}
+                    </Text>
+                </Box>
+            )}
+
             {/* ── Footer ──────────────────────────────────────────── */}
-            <Box marginTop={0} gap={2}>
+            <Box marginTop={1} gap={2}>
                 <Text color="gray" italic dimColor>
                     Enter: enviar  •  Ctrl+C: sair
                 </Text>
