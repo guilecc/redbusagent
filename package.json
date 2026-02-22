@@ -1,0 +1,25 @@
+{
+  "name": "redbusagent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Autonomous terminal agent with Client-Server architecture (Daemon + TUI)",
+  "workspaces": [
+    "packages/shared",
+    "packages/daemon",
+    "packages/tui"
+  ],
+  "scripts": {
+    "dev:daemon": "npm run dev --workspace=packages/daemon",
+    "dev:tui": "npm run dev --workspace=packages/tui",
+    "build": "npm run build --workspaces",
+    "clean": "rm -rf packages/*/dist packages/*/node_modules node_modules"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.3.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  }
+}

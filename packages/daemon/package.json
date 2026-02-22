@@ -1,0 +1,20 @@
+{
+    "name": "@redbusagent/daemon",
+    "version": "0.1.0",
+    "private": true,
+    "description": "Headless daemon server for redbusagent — WebSocket backbone",
+    "type": "module",
+    "main": "./dist/main.js",
+    "scripts": {
+        "build": "tsc --project tsconfig.json",
+        "dev": "tsx --watch src/main.ts",
+        "start": "node dist/main.js"
+    },
+    "dependencies": {
+        "@redbusagent/shared": "*",
+        "ws": "^8.18.0"
+    },
+    "devDependencies": {
+        "@types/ws": "^8.5.14"
+    }
+}
