@@ -2,12 +2,13 @@
  * @redbusagent/tui — WebSocket Client
  *
  * Manages the WebSocket connection to the daemon, with automatic
- * reconnection logic. Decoupled from UI — emits parsed protocol
+ * reconnection logic. Supports both receiving DaemonMessages and
+ * sending ClientMessages. Decoupled from UI — emits parsed protocol
  * messages via a callback so React components stay pure.
  */
 
 import WebSocket from 'ws';
-import type { DaemonMessage } from '@redbusagent/shared';
+import type { DaemonMessage, ClientMessage } from '@redbusagent/shared';
 import { WS_RECONNECT_DELAY_MS } from '@redbusagent/shared';
 
 export interface WsClientOptions {
@@ -29,6 +30,13 @@ export class TuiWsClient {
     connect(): void {
         this.intentionalClose = false;
         this.createSocket();
+    }
+
+    /** Send a typed message to the daemon */
+    send(message: ClientMessage): void {
+        if (this.socket && this.socket.readyState === WebSocket.OPEN) {
+            this.socket.send(JSON.stringify(message));
+        }
     }
 
     /** Gracefully close the connection (no auto-reconnect) */
@@ -60,7 +68,7 @@ export class TuiWsClient {
                 const message = JSON.parse(raw.toString()) as DaemonMessage;
                 this.options.onMessage(message);
             } catch {
-                // Ignore malformed messages in PoC; future: structured error handling
+                // Ignore malformed messages; future: structured error handling
             }
         });
 

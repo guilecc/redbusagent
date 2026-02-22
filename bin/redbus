@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# redbusagent — Global CLI Entrypoint
+# Resolves tsx from local node_modules and runs the CLI with TypeScript support
+
+# Resolve the real script location (follows symlinks)
+SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SOURCE" ]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# Add local node_modules/.bin to PATH so tsx is resolvable
+export PATH="$PROJECT_ROOT/node_modules/.bin:$PATH"
+export NODE_PATH="$PROJECT_ROOT/node_modules"
+
+# Run node with tsx loader
+exec node --import tsx "$PROJECT_ROOT/packages/cli/src/main.ts" "$@"

@@ -4,7 +4,8 @@
  * Bootstraps the daemon process:
  *  1. Starts the WebSocket server
  *  2. Launches the Heartbeat service
- *  3. Handles graceful shutdown on SIGINT/SIGTERM
+ *  3. Initializes the Chat Handler (Cognitive Router bridge)
+ *  4. Handles graceful shutdown on SIGINT/SIGTERM
  */
 
 import {
@@ -12,9 +13,15 @@ import {
     DEFAULT_HOST,
     APP_NAME,
     APP_VERSION,
+    Vault,
 } from '@redbusagent/shared';
+import type { ClientMessage } from '@redbusagent/shared';
 import { DaemonWsServer } from './infra/ws-server.js';
 import { HeartbeatService } from './core/heartbeat.js';
+import { ChatHandler } from './core/chat-handler.js';
+import { getRouterStatus } from './core/cognitive-router.js';
+import { Forge } from './core/forge.js';
+import { ToolRegistry } from './core/tool-registry.js';
 
 // ── Configuration ─────────────────────────────────────────────────
 
@@ -27,6 +34,33 @@ console.log(`\n🔴 ${APP_NAME} daemon v${APP_VERSION}`);
 console.log(`   PID: ${process.pid}`);
 console.log(`   Listening on ws://${HOST}:${PORT}\n`);
 
+// Initialize Forge & Registry
+Forge.ensureWorkspace();
+ToolRegistry.ensureFile();
+
+// Display vault status
+if (Vault.isConfigured()) {
+    console.log(`  🔐 Vault: ${Vault.configPath}`);
+} else {
+    console.log('  🔐 Vault: ⚠️  não configurado — rode: redbus config');
+}
+
+// Display router status
+const routerStatus = getRouterStatus();
+console.log('  🧠 Cognitive Router:');
+console.log(`     Tier 1 (Local):  ${routerStatus.tier1.model} @ ${routerStatus.tier1.url} [${routerStatus.tier1.enabled ? '✅' : '⏸️  desativado'}]`);
+if (routerStatus.tier2) {
+    if (routerStatus.tier2.configured) {
+        console.log(`     Tier 2 (Cloud):  ${routerStatus.tier2.provider}/${routerStatus.tier2.model} [✅ ${routerStatus.tier2.authMethod}]`);
+    } else {
+        console.log(`     Tier 2 (Cloud):  ${routerStatus.tier2.provider}/${routerStatus.tier2.model} [⚠️  credenciais ausentes]`);
+    }
+} else {
+    console.log('     Tier 2 (Cloud):  ⚠️  não configurado');
+}
+console.log(`  🔨 Forge: ${Forge.dir} (${routerStatus.forgedTools} ferramentas registradas)`);
+console.log('');
+
 const wsServer = new DaemonWsServer({
     port: PORT,
     host: HOST,
@@ -36,12 +70,27 @@ const wsServer = new DaemonWsServer({
     onDisconnection: (clientId) => {
         console.log(`  ⛓️‍💥 Client disconnected: ${clientId} (total: ${wsServer.connectionCount})`);
     },
+    onClientMessage: (clientId: string, message: ClientMessage) => {
+        switch (message.type) {
+            case 'chat:request':
+                void chatHandler.handleChatRequest(clientId, message);
+                break;
+            case 'ping':
+                console.log(`  📡 Ping from ${clientId}`);
+                break;
+            default:
+                console.log(`  ❓ Unknown message type from ${clientId}:`, (message as { type: string }).type);
+        }
+    },
 });
 
 const heartbeat = new HeartbeatService(wsServer, PORT);
 heartbeat.start();
 
+const chatHandler = new ChatHandler(wsServer);
+
 console.log('  💓 Heartbeat service started');
+console.log('  💬 Chat handler initialized');
 console.log('  ✅ Daemon is ready. Waiting for TUI connections...\n');
 
 // ── Graceful Shutdown ─────────────────────────────────────────────

@@ -1,0 +1,17 @@
+{
+    "name": "@redbusagent/cli",
+    "version": "0.1.0",
+    "private": true,
+    "description": "CLI entrypoint, onboarding wizard, and command router for redbusagent",
+    "type": "module",
+    "main": "./dist/main.js",
+    "scripts": {
+        "build": "tsc --project tsconfig.json",
+        "dev": "tsx src/main.ts"
+    },
+    "dependencies": {
+        "@redbusagent/shared": "*",
+        "@clack/prompts": "^0.10.0",
+        "picocolors": "^1.1.1"
+    }
+}

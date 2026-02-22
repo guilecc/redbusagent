@@ -6,3 +6,4 @@
 
 export * from './constants.js';
 export * from './types/protocol.js';
+export * from './vault/vault.js';

@@ -1,19 +1,20 @@
 /**
  * @redbusagent/daemon — WebSocket Server
  *
- * Manages the WebSocket server lifecycle, client connections, and
- * message broadcasting. This is the core infrastructure layer for
- * daemon-to-TUI communication.
+ * Manages the WebSocket server lifecycle, client connections,
+ * message broadcasting, and incoming message routing.
+ * This is the core infrastructure layer for daemon↔TUI communication.
  */
 
 import { WebSocketServer, WebSocket } from 'ws';
-import type { DaemonMessage } from '@redbusagent/shared';
+import type { DaemonMessage, ClientMessage } from '@redbusagent/shared';
 
 export interface WsServerOptions {
     readonly port: number;
     readonly host: string;
     readonly onConnection?: (clientId: string) => void;
     readonly onDisconnection?: (clientId: string) => void;
+    readonly onClientMessage?: (clientId: string, message: ClientMessage) => void;
 }
 
 export class DaemonWsServer {
@@ -43,6 +44,14 @@ export class DaemonWsServer {
         }
     }
 
+    /** Send a typed message to a specific client */
+    sendTo(clientId: string, message: DaemonMessage): void {
+        const socket = this.clients.get(clientId);
+        if (socket && socket.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify(message));
+        }
+    }
+
     /** Number of currently connected clients */
     get connectionCount(): number {
         return this.clients.size;
@@ -69,6 +78,15 @@ export class DaemonWsServer {
         const clientId = `tui-${++this.clientCounter}`;
         this.clients.set(clientId, socket);
         this.options.onConnection?.(clientId);
+
+        socket.on('message', (raw) => {
+            try {
+                const message = JSON.parse(raw.toString()) as ClientMessage;
+                this.options.onClientMessage?.(clientId, message);
+            } catch {
+                console.error(`[ws-server] Malformed message from ${clientId}`);
+            }
+        });
 
         socket.on('close', () => {
             this.clients.delete(clientId);
