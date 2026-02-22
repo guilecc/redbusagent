@@ -22,19 +22,25 @@ import {
     validateTier2Config,
     resolveAnthropicAuth,
 } from '../infra/llm-config.js';
-import { SYSTEM_PROMPT, SYSTEM_PROMPT_TIER1 } from './system-prompt.js';
+import { SYSTEM_PROMPT_TIER1, getSystemPromptTier2 } from './system-prompt.js';
 import { createAndRunTool } from './tools/create-and-run.js';
+import { memorizeTool } from './tools/memorize.js';
+import { searchMemoryTool } from './tools/search-memory.js';
 import { ToolRegistry } from './tool-registry.js';
 
 // ─── Provider Factory ─────────────────────────────────────────────
 
+import { OllamaManager } from './ollama-manager.js';
+
 function createTier1Model(): LanguageModel {
-    const { url, model } = getTier1Config();
+    const { model } = getTier1Config();
     const ollama = createOpenAI({
-        baseURL: `${url}/v1`,
+        baseURL: `${OllamaManager.baseUrl}/v1`,
         apiKey: 'ollama',
     });
-    return ollama(model);
+    // Padrão que definimos para puxar é llama3.2:1b se local não for estritamente configurado
+    const targetModel = model === 'llama3' ? 'llama3.2:1b' : model;
+    return ollama(targetModel);
 }
 
 function createTier2Model(): LanguageModel {
@@ -73,6 +79,8 @@ function assembleTools() {
 
     return {
         create_and_run_tool: createAndRunTool,
+        memorize: memorizeTool,
+        search_memory: searchMemoryTool,
         ...dynamicTools,
     };
 }
@@ -142,7 +150,7 @@ export async function askTier2(
     // Enrich system prompt with forge context
     const toolsSummary = ToolRegistry.getToolsSummary();
     const fullSystemPrompt = [
-        SYSTEM_PROMPT,
+        getSystemPromptTier2(),
         context ? `\n## Contexto Adicional da Sessão\n${context}` : '',
         `\n## Ferramentas Forjadas\n${toolsSummary}`,
     ].join('');

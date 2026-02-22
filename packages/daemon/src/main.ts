@@ -22,6 +22,7 @@ import { ChatHandler } from './core/chat-handler.js';
 import { getRouterStatus } from './core/cognitive-router.js';
 import { Forge } from './core/forge.js';
 import { ToolRegistry } from './core/tool-registry.js';
+import { OllamaManager } from './core/ollama-manager.js';
 
 // ── Configuration ─────────────────────────────────────────────────
 
@@ -93,10 +94,30 @@ console.log('  💓 Heartbeat service started');
 console.log('  💬 Chat handler initialized');
 console.log('  ✅ Daemon is ready. Waiting for TUI connections...\n');
 
+// ── Background Engine Download & Start ────────────────────────────
+
+// The engine is mandatory for local workflows. Run it always.
+const shouldRunLocalEngine = true;
+if (shouldRunLocalEngine) {
+    // Send progress to TUI connected clients
+    OllamaManager.setCallbacks((status) => {
+        wsServer.broadcast({
+            type: 'system:status',
+            timestamp: new Date().toISOString(),
+            payload: { status: status as any } // Overload system:status display in TUI
+        });
+    });
+
+    OllamaManager.startup().catch((err) => {
+        console.error('  ❌ Failed to start managed Ollama:', err);
+    });
+}
+
 // ── Graceful Shutdown ─────────────────────────────────────────────
 
 async function shutdown(signal: string): Promise<void> {
     console.log(`\n  🛑 Received ${signal}. Shutting down gracefully...`);
+    OllamaManager.shutdown();
     heartbeat.stop();
     await wsServer.shutdown();
     console.log('  👋 Daemon stopped.\n');

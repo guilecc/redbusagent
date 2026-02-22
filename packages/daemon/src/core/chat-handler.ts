@@ -16,8 +16,15 @@ export class ChatHandler {
         clientId: string,
         message: ChatRequestMessage,
     ): Promise<void> {
-        const { requestId, content, tier } = message.payload;
-        const targetTier = tier ?? 'tier2';
+        const { requestId } = message.payload;
+        let { content, tier } = message.payload;
+        let targetTier = tier ?? 'tier2';
+
+        // Trivial escape hatch force-routing to local engine (Slash Command menu equivalent)
+        if (content.trim().toLowerCase().startsWith('/local')) {
+            targetTier = 'tier1';
+            content = content.replace(/^\/local\s*/i, '');
+        }
 
         console.log(`  🧠 [${targetTier}] Processing request ${requestId.slice(0, 8)}... from ${clientId}`);
 

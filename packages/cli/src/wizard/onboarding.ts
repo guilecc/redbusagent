@@ -11,7 +11,7 @@
 import * as p from '@clack/prompts';
 import pc from 'picocolors';
 import { Vault, type VaultTier2Config, type VaultTier1Config, type Tier2Provider } from '@redbusagent/shared';
-import { fetchTier2Models, fetchOllamaModels } from './model-fetcher.js';
+import { fetchTier2Models } from './model-fetcher.js';
 
 // ─── Wizard ───────────────────────────────────────────────────────
 
@@ -109,7 +109,7 @@ export async function runOnboardingWizard(): Promise<boolean> {
     // ── Step 5: Tier 1 (Ollama Local) ─────────────────────────
 
     const configureTier1 = await p.confirm({
-        message: 'Deseja configurar um modelo local via Ollama (Tier 1)?',
+        message: 'Deseja habilitar o motor de IA local auto-gerenciado (Tier 1)?',
         initialValue: true,
     });
     if (p.isCancel(configureTier1)) return false;
@@ -117,49 +117,9 @@ export async function runOnboardingWizard(): Promise<boolean> {
     let tier1Config: VaultTier1Config;
 
     if (configureTier1) {
-        const ollamaUrl = await p.text({
-            message: 'URL do Ollama:',
-            placeholder: 'http://127.0.0.1:11434',
-            defaultValue: 'http://127.0.0.1:11434',
-            initialValue: existingConfig?.tier1?.url ?? 'http://127.0.0.1:11434',
-        });
-        if (p.isCancel(ollamaUrl)) return false;
-
-        // Try to fetch Ollama models dynamically too
-        const ollamaSpinner = p.spinner();
-        ollamaSpinner.start('Buscando modelos locais no Ollama...');
-
-        const ollamaResult = await fetchOllamaModels(ollamaUrl);
-
-        if (ollamaResult.success && ollamaResult.models.length > 0) {
-            ollamaSpinner.stop(pc.green(`${ollamaResult.models.length} modelos locais encontrados!`));
-
-            const ollamaModel = await p.select({
-                message: 'Qual modelo local usar?',
-                options: ollamaResult.models.map(m => ({
-                    value: m.id,
-                    label: m.label,
-                    hint: m.hint,
-                })),
-            });
-            if (p.isCancel(ollamaModel)) return false;
-
-            tier1Config = { enabled: true, url: ollamaUrl, model: ollamaModel };
-        } else {
-            ollamaSpinner.stop(pc.yellow('Ollama não encontrado — digite o nome do modelo manualmente'));
-
-            const manualModel = await p.text({
-                message: 'Nome do modelo Ollama:',
-                placeholder: 'llama3',
-                defaultValue: 'llama3',
-                initialValue: existingConfig?.tier1?.model ?? 'llama3',
-            });
-            if (p.isCancel(manualModel)) return false;
-
-            tier1Config = { enabled: true, url: ollamaUrl, model: manualModel };
-        }
+        tier1Config = { enabled: true, url: 'http://127.0.0.1:11434', model: 'llama3.2:1b' };
     } else {
-        tier1Config = { enabled: false, url: 'http://127.0.0.1:11434', model: 'llama3' };
+        tier1Config = { enabled: false, url: 'http://127.0.0.1:11434', model: 'llama3.2:1b' };
     }
 
     // ── Step 6: Save to Vault ─────────────────────────────────
