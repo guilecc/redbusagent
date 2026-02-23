@@ -123,7 +123,10 @@ export async function runOnboardingWizard(): Promise<boolean> {
         tier1Config = { enabled: false, url: 'http://127.0.0.1:11434', model: 'llama3.2:1b' };
     }
 
-    // ── Step 6: Save to Vault ─────────────────────────────────
+    // ── Step 6: Save to Vault (initial — before WhatsApp) ─────
+
+    // Preserve existing owner_phone_number if re-running config
+    let ownerPhoneNumber: string | undefined = existingConfig?.owner_phone_number;
 
     const saveSpinner = p.spinner();
     saveSpinner.start('Salvando configuração no Cofre...');
@@ -132,6 +135,7 @@ export async function runOnboardingWizard(): Promise<boolean> {
         version: Vault.schemaVersion,
         tier2: tier2Config,
         tier1: tier1Config,
+        ...(ownerPhoneNumber ? { owner_phone_number: ownerPhoneNumber } : {}),
     });
 
     await new Promise(r => setTimeout(r, 500));
@@ -146,6 +150,40 @@ export async function runOnboardingWizard(): Promise<boolean> {
     if (p.isCancel(configureWhatsApp)) return false;
 
     if (configureWhatsApp) {
+        // ── 🛡️ OWNER FIREWALL: Ask for phone number BEFORE QR ──
+        p.note(
+            pc.bold(pc.red('🛡️  FIREWALL DE SEGURANÇA DO PROPRIETÁRIO')) + '\n\n' +
+            'Por segurança, o agente será ' + pc.bold('BLOQUEADO') + ' para interagir\n' +
+            pc.bold('EXCLUSIVAMENTE') + ' com o número informado abaixo.\n' +
+            'Nenhuma mensagem de grupos ou outros contatos será processada.',
+            '🔒 Segurança WhatsApp',
+        );
+
+        const phoneNumber = await p.text({
+            message: 'Qual é o seu número de WhatsApp? (Apenas números, com DDI e DDD. Ex: 5511999999999)',
+            placeholder: '5511999999999',
+            defaultValue: ownerPhoneNumber,
+            validate: (v) => {
+                const cleaned = v.replace(/\D/g, '');
+                if (cleaned.length < 10) return 'Número muito curto. Use DDI + DDD + número. Ex: 5511999999999';
+                if (cleaned.length > 15) return 'Número muito longo. Máximo 15 dígitos.';
+                if (cleaned !== v.trim()) return 'Use apenas números, sem espaços, traços ou parênteses.';
+            },
+        });
+        if (p.isCancel(phoneNumber)) return false;
+
+        ownerPhoneNumber = phoneNumber.trim().replace(/\D/g, '');
+
+        // Re-save Vault with owner_phone_number
+        Vault.write({
+            version: Vault.schemaVersion,
+            tier2: tier2Config,
+            tier1: tier1Config,
+            owner_phone_number: ownerPhoneNumber,
+        });
+
+        p.log.success(`🛡️  Firewall ativado para: ${pc.bold(ownerPhoneNumber)}@c.us`);
+
         if (WhatsAppChannel.hasSession()) {
             p.note('WhatsApp já pareado perfeitamente no Cofre.', 'WhatsApp Conectado');
         } else {
@@ -159,6 +197,9 @@ export async function runOnboardingWizard(): Promise<boolean> {
         `Auth: ${pc.bold(tier2Config.authToken ? 'OAuth token' : 'API key')}\n` +
         `Ollama: ${pc.bold(tier1Config.enabled ? `${tier1Config.model} @ ${tier1Config.url}` : 'desativado')}\n` +
         `WhatsApp: ${pc.bold(WhatsAppChannel.hasSession() ? 'Conectado ✅' : 'Não conectado')}\n` +
+        (ownerPhoneNumber
+            ? `Firewall: ${pc.bold(pc.green(`🛡️  ATIVO — ${ownerPhoneNumber}@c.us`))}\n`
+            : `Firewall: ${pc.bold(pc.dim('não configurado'))}\n`) +
         `Vault: ${pc.dim(Vault.configPath)}`,
         '✅ Resumo da configuração',
     );

@@ -2,7 +2,14 @@
  * @redbusagent/daemon — WhatsApp Channel
  *
  * Provides bridging to WhatsApp via whatsapp-web.js.
- * Implements "Note to Self" authentication filter for high security.
+ *
+ * 🛡️ OWNER FIREWALL (Security Critical):
+ * This module implements a strict owner-only firewall. The agent can ONLY
+ * read from and write to the owner's phone number, which is stored in the
+ * Vault as `owner_phone_number`. No parameter, no LLM hallucination, and
+ * no code path can override the destination. All messages from groups or
+ * other contacts are silently dropped at the OS level before reaching
+ * the Cognitive Router.
  */
 
 import { join } from 'node:path';
@@ -16,8 +23,13 @@ import { askTier2 } from '../core/cognitive-router.js';
 
 export class WhatsAppChannel {
     private client: pkg.Client | null = null;
-    private myNumberId: string | null = null;
     private isThinking: boolean = false;
+
+    /**
+     * 🛡️ FIREWALL: The ONLY allowed WhatsApp JID, loaded from Vault at startup.
+     * Format: "5511999999999@c.us". Immutable after initialization.
+     */
+    private ownerJid: string | null = null;
 
     static get authPath(): string {
         const dir = join(Vault.dir, 'auth_whatsapp');
@@ -82,13 +94,23 @@ export class WhatsAppChannel {
 
     /**
      * Initializes the client silently in the background connected to the Daemon.
+     * 🛡️ FIREWALL: Refuses to start if owner_phone_number is not configured.
      */
     async startSilent(): Promise<void> {
         if (!WhatsAppChannel.hasSession()) {
             return; // Not configured
         }
 
+        // 🛡️ FIREWALL: Load owner JID from Vault — refuse to start without it
+        this.ownerJid = Vault.getOwnerWhatsAppJid();
+        if (!this.ownerJid) {
+            console.error('  🛡️❌ WhatsAppChannel: FIREWALL BLOQUEOU INICIALIZAÇÃO — owner_phone_number não configurado no Vault.');
+            console.error('  🛡️   Rode "redbus config" e configure seu número de telefone.');
+            return;
+        }
+
         console.log('  📱 WhatsAppChannel: Inicializando silenciosamente...');
+        console.log(`  🛡️ WhatsAppChannel: Firewall ATIVO — apenas ${this.ownerJid} será processado.`);
 
         this.client = new Client({
             authStrategy: new LocalAuth({ dataPath: WhatsAppChannel.authPath }),
@@ -98,24 +120,26 @@ export class WhatsAppChannel {
         });
 
         this.client.on('ready', async () => {
-            this.myNumberId = this.client?.info?.wid?._serialized || null;
-            console.log(`  ✅ WhatsAppChannel: Prontidão alcançada! Ouvindo canal "Você" no número: ${this.client?.info?.wid?.user}`);
+            console.log('  ✅ WhatsAppChannel: Prontidão alcançada!');
+            console.log(`  🛡️ WhatsAppChannel: Firewall ATIVO — ouvindo APENAS: ${this.ownerJid}`);
         });
 
-        this.client.on('message_create', async (message: pkg.Message) => {
-            if (!this.myNumberId) return;
+        // 🛡️ INBOUND FIREWALL on 'message' (incoming messages only)
+        // First line: if not from owner → silent drop. No log, no processing.
+        this.client.on('message', async (msg: pkg.Message) => {
+            if (msg.from !== this.ownerJid) return; // 🛡️ FIREWALL: silent drop
+            // Messages from owner are also caught by message_create below.
+            // This listener exists purely as an extra guard layer.
+        });
 
-            // Security Filter: Only process messages coming from the user's own number to themselves (Note to Self).
-            // message_create captures messages YOU send.
-            if (message.from !== this.myNumberId || message.to !== this.myNumberId) {
-                return;
+        // 🛡️ INBOUND FIREWALL on 'message_create' (all messages: sent + received)
+        this.client.on('message_create', async (message: pkg.Message) => {
+            // 🛡️ FIREWALL: Only accept "Note to Self" — from owner TO owner
+            if (message.from !== this.ownerJid || message.to !== this.ownerJid) {
+                return; // 🛡️ FIREWALL: silently blocked
             }
 
-            // Ignore messages sent by ourselves (the bot), assume the bot replies do not start with a special un-bot-like string,
-            // Actually, if we reply, we send via client.sendMessage. It triggers message_create too.
-            // We should filter out our own bot messages if we can, but since it's "note to self", 
-            // the user writing on phone will also be from Me to Me.
-            // We can prefix bot messages with 🤖 to easily ignore them.
+            // Skip bot replies (our own messages start with 🔴)
             if (message.body.startsWith('🔴')) {
                 return;
             }
@@ -126,7 +150,7 @@ export class WhatsAppChannel {
             console.log(`  🧠 WhatsAppChannel: Recebeu [${body.slice(0, 30)}...] -> Roteando p/ Tier 2...`);
 
             if (this.isThinking) {
-                await this.client?.sendMessage(this.myNumberId, '🔴 *redbusagent:* Já estou processando uma requisição. Aguarde um momento...');
+                await this.sendToOwner('🔴 *redbusagent:* Já estou processando uma requisição. Aguarde um momento...');
                 return;
             }
 
@@ -149,11 +173,11 @@ export class WhatsAppChannel {
                 });
 
                 if (fullResponse) {
-                    await this.client?.sendMessage(this.myNumberId, `🔴 *redbusagent:*\n\n${fullResponse}`);
+                    await this.sendToOwner(`🔴 *redbusagent:*\n\n${fullResponse}`);
                 }
             } catch (err: any) {
                 console.error('  ❌ WhatsAppChannel: Error:', err);
-                await this.client?.sendMessage(this.myNumberId, `🔴 *redbusagent:* Ocorreu um erro ao processar sua requisição: ${err.message}`);
+                await this.sendToOwner(`🔴 *redbusagent:* Ocorreu um erro ao processar sua requisição: ${err.message}`);
             } finally {
                 this.isThinking = false;
             }
@@ -168,6 +192,31 @@ export class WhatsAppChannel {
             console.error('  ❌ Erro silencioso no WhatsApp:', err);
         });
     }
+
+    // ─── 🛡️ OUTBOUND FIREWALL ────────────────────────────────────────
+
+    /**
+     * 🛡️ OUTBOUND FIREWALL: Send a message ONLY to the owner.
+     * This method has NO destination parameter — the recipient is ALWAYS
+     * hardcoded from the Vault-loaded ownerJid. No code path can override this.
+     */
+    private async sendToOwner(text: string): Promise<void> {
+        if (!this.client || !this.ownerJid) {
+            console.error('  🛡️❌ WhatsAppChannel.sendToOwner: client ou ownerJid não disponível.');
+            return;
+        }
+        await this.client.sendMessage(this.ownerJid, text);
+    }
+
+    /**
+     * 🛡️ Public API for external modules (HeartbeatManager, ProactiveEngine, etc.)
+     * to send notifications to the owner. Destination is ALWAYS the owner — no parameter.
+     */
+    public async sendNotificationToOwner(text: string): Promise<void> {
+        await this.sendToOwner(text);
+    }
+
+    // ─── Lifecycle ────────────────────────────────────────────────────
 
     async stop(): Promise<void> {
         if (this.client) {

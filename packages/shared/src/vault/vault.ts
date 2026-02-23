@@ -42,6 +42,13 @@ export interface VaultConfig {
     readonly version: number;
     readonly tier2: VaultTier2Config;
     readonly tier1: VaultTier1Config;
+    /**
+     * 🛡️ Owner Firewall: Phone number of the sole owner.
+     * Only this number (as ${number}@c.us) is allowed to interact
+     * with the WhatsApp channel. Digits only, with country+area code.
+     * Example: "5511999999999"
+     */
+    readonly owner_phone_number?: string;
 }
 
 // ─── Constants ────────────────────────────────────────────────────
@@ -129,6 +136,16 @@ export class Vault {
     /** Get the current schema version */
     static get schemaVersion(): number {
         return CURRENT_VERSION;
+    }
+
+    /**
+     * 🛡️ Owner Firewall: Returns the owner's WhatsApp JID (e.g. "5511999999999@c.us")
+     * or null if not configured. This is the ONLY allowed recipient/sender.
+     */
+    static getOwnerWhatsAppJid(): string | null {
+        const config = this.read();
+        if (!config?.owner_phone_number) return null;
+        return `${config.owner_phone_number}@c.us`;
     }
 
     /** Create a default config object */
