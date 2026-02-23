@@ -115,7 +115,6 @@ export function Dashboard(): React.ReactElement {
             payload: {
                 requestId,
                 content: text,
-                tier: defaultTier === 1 ? 'tier1' : 'tier2',
                 isOnboarding,
             },
         };
@@ -126,7 +125,7 @@ export function Dashboard(): React.ReactElement {
 
         clientRef.current.send(chatRequest);
         addLog(`Enviado para Tier ${defaultTier}: "${text.slice(0, 50)}${text.length > 50 ? '...' : ''}"`, 'cyan');
-    }, [isStreaming, addLog, isOnboarding]);
+    }, [isStreaming, addLog, isOnboarding, defaultTier]);
 
     useInput((input, key) => {
         if (isSlashMenuOpen) {
