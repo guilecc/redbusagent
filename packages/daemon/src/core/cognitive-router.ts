@@ -25,15 +25,8 @@ import {
 import { SYSTEM_PROMPT_TIER1, getSystemPromptTier2 } from './system-prompt.js';
 import { PersonaManager } from '@redbusagent/shared';
 import { MemoryManager } from './memory-manager.js';
-import { createAndRunTool } from './tools/create-and-run.js';
-import { memorizeTool } from './tools/memorize.js';
-import { searchMemoryTool } from './tools/search-memory.js';
-import { scheduleAlertTool } from './tools/schedule-alert.js';
-import { webSearchTool } from './tools/web-search.js';
-import { webReadPageTool } from './tools/web-read-page.js';
-import { webInteractTool } from './tools/web-interact.js';
-import { updatePersonaTool } from './tools/update-persona.js';
 import { ToolRegistry } from './tool-registry.js';
+import { CapabilityRegistry } from './registry.js';
 
 // ─── Persona Helpers ──────────────────────────────────────────────
 
@@ -87,23 +80,7 @@ function createTier2Model(): LanguageModel {
     }
 }
 
-// ─── Tool Assembly ────────────────────────────────────────────────
-
-function assembleTools() {
-    const dynamicTools = ToolRegistry.getDynamicTools();
-
-    return {
-        create_and_run_tool: createAndRunTool,
-        memorize: memorizeTool,
-        search_memory: searchMemoryTool,
-        schedule_alert: scheduleAlertTool,
-        web_search: webSearchTool,
-        web_read_page: webReadPageTool,
-        web_interact: webInteractTool,
-        update_persona: updatePersonaTool,
-        ...dynamicTools,
-    };
-}
+// ─── Stream Callbacks ─────────────────────────────────────────────
 
 // ─── Streaming Interfaces ─────────────────────────────────────────
 
@@ -130,6 +107,7 @@ export async function askTier1(
     const model = createTier1Model();
 
     let systemPromptContext = getPersonaContext() + SYSTEM_PROMPT_TIER1;
+    systemPromptContext += `\n\n${CapabilityRegistry.getCapabilityManifest()}`;
     try {
         const wisdom = await MemoryManager.searchMemory('cloud_wisdom', prompt, 3);
         if (wisdom && wisdom.length > 0) {
@@ -178,15 +156,14 @@ export async function askTier2(
 
     const config = getTier2Config()!;
     const model = createTier2Model();
-    const tools = assembleTools();
+    const tools = CapabilityRegistry.getAvailableTools();
 
-    // Enrich system prompt with forge context
-    const toolsSummary = ToolRegistry.getToolsSummary();
+    // Enrich system prompt with capability manifest and external context
     const fullSystemPrompt = [
         getPersonaContext(),
         getSystemPromptTier2(),
+        `\n\n${CapabilityRegistry.getCapabilityManifest()}`,
         context ? `\n## Contexto Adicional da Sessão\n${context}` : '',
-        `\n## Ferramentas Forjadas\n${toolsSummary}`,
     ].join('');
 
     try {
