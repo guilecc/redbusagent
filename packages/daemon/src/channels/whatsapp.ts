@@ -22,8 +22,20 @@ import { Vault } from '@redbusagent/shared';
 import { askTier2 } from '../core/cognitive-router.js';
 
 export class WhatsAppChannel {
+    private static instance: WhatsAppChannel;
     private client: pkg.Client | null = null;
     private isThinking: boolean = false;
+
+    constructor() {
+        WhatsAppChannel.instance = this;
+    }
+
+    public static getInstance(): WhatsAppChannel {
+        if (!WhatsAppChannel.instance) {
+            WhatsAppChannel.instance = new WhatsAppChannel();
+        }
+        return WhatsAppChannel.instance;
+    }
 
     /**
      * 🛡️ FIREWALL: The ONLY allowed WhatsApp JID, loaded from Vault at startup.

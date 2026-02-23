@@ -16,6 +16,7 @@ import { MemoryManager } from './memory-manager.js';
 import { ToolRegistry } from './tool-registry.js';
 import { ProactiveEngine } from './proactive-engine.js';
 import { AlertManager } from './alert-manager.js';
+import { WhatsAppChannel } from '../channels/whatsapp.js';
 
 export class HeartbeatService {
     private intervalHandle: ReturnType<typeof setInterval> | null = null;
@@ -94,6 +95,11 @@ export class HeartbeatService {
                     id: alert.id,
                     message: alert.message
                 }
+            });
+
+            // 🛡️ OUTBOUND FIREWALL: Send directly to the owner via WhatsApp. No destination needed.
+            WhatsAppChannel.getInstance().sendNotificationToOwner(`⏰ *Alerta Proativo:*\n${alert.message}`).catch((err) => {
+                console.error('  ❌ Heartbeat: Erro ao enviar notificação WhatsApp:', err);
             });
         }
     }

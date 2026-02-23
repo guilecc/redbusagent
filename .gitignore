@@ -10,7 +10,7 @@ dist/
 *.swp
 *.swo
 
-# OS
+# OSs
 .DS_Store
 Thumbs.db
 
@@ -26,3 +26,17 @@ npm-debug.log*
 # Runtime
 *.pid
 *.seed
+
+# TypeScript
+*.tsbuildinfo
+
+# WhatsApp Web
+.wwebjs_auth/
+.wwebjs_cache/
+
+# Playwright & Testing
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
+coverage/

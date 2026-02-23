@@ -19,6 +19,7 @@
         "@redbusagent/shared": "*",
         "ai": "^6.0.97",
         "dotenv": "^17.3.1",
+        "playwright": "^1.58.2",
         "qrcode-terminal": "^0.12.0",
         "whatsapp-web.js": "^1.34.6",
         "ws": "^8.18.0",

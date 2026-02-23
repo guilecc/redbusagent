@@ -116,7 +116,7 @@ if (shouldRunLocalEngine) {
 
 // ── Extensions (Channels) ─────────────────────────────────────────
 
-const whatsapp = new WhatsAppChannel();
+const whatsapp = WhatsAppChannel.getInstance();
 whatsapp.startSilent().catch(err => {
     console.error('  ❌ Failed to start WhatsApp Bridge:', err);
 });

@@ -23,10 +23,14 @@ import {
     resolveAnthropicAuth,
 } from '../infra/llm-config.js';
 import { SYSTEM_PROMPT_TIER1, getSystemPromptTier2 } from './system-prompt.js';
+import { MemoryManager } from './memory-manager.js';
 import { createAndRunTool } from './tools/create-and-run.js';
 import { memorizeTool } from './tools/memorize.js';
 import { searchMemoryTool } from './tools/search-memory.js';
 import { scheduleAlertTool } from './tools/schedule-alert.js';
+import { webSearchTool } from './tools/web-search.js';
+import { webReadPageTool } from './tools/web-read-page.js';
+import { webInteractTool } from './tools/web-interact.js';
 import { ToolRegistry } from './tool-registry.js';
 
 // ─── Provider Factory ─────────────────────────────────────────────
@@ -83,6 +87,9 @@ function assembleTools() {
         memorize: memorizeTool,
         search_memory: searchMemoryTool,
         schedule_alert: scheduleAlertTool,
+        web_search: webSearchTool,
+        web_read_page: webReadPageTool,
+        web_interact: webInteractTool,
         ...dynamicTools,
     };
 }
@@ -111,10 +118,23 @@ export async function askTier1(
     const { model: modelName } = getTier1Config();
     const model = createTier1Model();
 
+    let systemPromptContext = SYSTEM_PROMPT_TIER1;
+    try {
+        const wisdom = await MemoryManager.searchMemory('cloud_wisdom', prompt, 3);
+        if (wisdom && wisdom.length > 0) {
+            systemPromptContext += `\n\nPAST SUCCESSFUL EXAMPLES (Mimic this level of reasoning):\n`;
+            wisdom.forEach((w) => {
+                systemPromptContext += `${w}\n\n`;
+            });
+        }
+    } catch (err) {
+        console.error('  ❌ [tier1] Failed to retrieve cloud wisdom:', err);
+    }
+
     try {
         const result = streamText({
             model,
-            system: SYSTEM_PROMPT_TIER1,
+            system: systemPromptContext,
             messages: [{ role: 'user', content: prompt }],
         });
 
@@ -173,6 +193,7 @@ export async function askTier2(
 
         let fullText = '';
         let eventCount = 0;
+        let toolCalled = false;
 
         for await (const part of result.fullStream) {
             eventCount++;
@@ -183,6 +204,7 @@ export async function askTier2(
                     break;
 
                 case 'tool-call':
+                    toolCalled = true;
                     console.log(`  🔧 [tier2] Tool call: ${part.toolName}`);
                     callbacks.onToolCall?.(
                         part.toolName,
@@ -216,6 +238,14 @@ export async function askTier2(
         }
 
         console.log(`  🧠 [tier2] Stream finished: ${eventCount} events, ${fullText.length} chars of text`);
+
+        if (fullText.length > 800 || toolCalled) {
+            const wisdomText = `When asked to: "${prompt}", the optimal approach is:\n${fullText}`;
+            MemoryManager.memorize('cloud_wisdom', wisdomText).catch(err => {
+                console.error('  ❌ [tier2] Failed to memorize cloud wisdom:', err);
+            });
+        }
+
         callbacks.onDone(fullText);
         return { tier: 'tier2', model: config.model };
     } catch (err) {

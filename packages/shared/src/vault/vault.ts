@@ -17,6 +17,7 @@ import {
     readFileSync,
     writeFileSync,
 } from 'node:fs';
+import crypto from 'node:crypto';
 
 // ─── Types ────────────────────────────────────────────────────────
 
@@ -49,13 +50,31 @@ export interface VaultConfig {
      * Example: "5511999999999"
      */
     readonly owner_phone_number?: string;
+    readonly credentials?: Record<string, { username: string; encrypted: string; iv: string }>;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    readonly sessions?: Record<string, any>;
 }
 
 // ─── Constants ────────────────────────────────────────────────────
 
 const VAULT_DIR = join(homedir(), '.redbusagent');
 const CONFIG_FILE = join(VAULT_DIR, 'config.json');
+const MASTER_KEY_FILE = join(VAULT_DIR, '.masterkey');
 const CURRENT_VERSION = 1;
+
+// ─── Helpers ──────────────────────────────────────────────────────
+
+function getMasterKey(): Buffer {
+    if (existsSync(MASTER_KEY_FILE)) {
+        return readFileSync(MASTER_KEY_FILE);
+    }
+    const key = crypto.randomBytes(32);
+    if (!existsSync(VAULT_DIR)) {
+        mkdirSync(VAULT_DIR, { recursive: true, mode: 0o700 });
+    }
+    writeFileSync(MASTER_KEY_FILE, key, { mode: 0o600 });
+    return key;
+}
 
 // ─── Vault Class ──────────────────────────────────────────────────
 
@@ -163,6 +182,65 @@ export class Vault {
                 model: 'llama3',
                 ...overrides?.tier1,
             },
+            credentials: {},
+            sessions: {},
         };
+    }
+
+    /** Store an encrypted credential for a domain */
+    static storeCredential(domain: string, username: string, passwordPlain: string): void {
+        const config = this.read() || this.createDefault();
+        const masterKey = getMasterKey();
+        const iv = crypto.randomBytes(16);
+        const cipher = crypto.createCipheriv('aes-256-cbc', masterKey, iv);
+        let encrypted = cipher.update(passwordPlain, 'utf8', 'hex');
+        encrypted += cipher.final('hex');
+
+        const updated: VaultConfig = {
+            ...config,
+            credentials: {
+                ...(config.credentials || {}),
+                [domain]: { username, encrypted, iv: iv.toString('hex') }
+            }
+        };
+        this.write(updated);
+    }
+
+    /** Retrieve and decrypt a credential for a domain */
+    static getCredential(domain: string): { username: string; passwordPlain: string } | null {
+        const config = this.read();
+        const cred = config?.credentials?.[domain];
+        if (!cred) return null;
+
+        try {
+            const masterKey = getMasterKey();
+            const decipher = crypto.createDecipheriv('aes-256-cbc', masterKey, Buffer.from(cred.iv, 'hex'));
+            let decrypted = decipher.update(cred.encrypted, 'hex', 'utf8');
+            decrypted += decipher.final('utf8');
+            return { username: cred.username, passwordPlain: decrypted };
+        } catch {
+            return null;
+        }
+    }
+
+    /** Store browser session state (e.g. Playwright storageState) */
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    static storeBrowserSession(domain: string, stateJson: any): void {
+        const config = this.read() || this.createDefault();
+        const updated: VaultConfig = {
+            ...config,
+            sessions: {
+                ...(config.sessions || {}),
+                [domain]: stateJson
+            }
+        };
+        this.write(updated);
+    }
+
+    /** Retrieve browser session state */
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    static getBrowserSession(domain: string): any | null {
+        const config = this.read();
+        return config?.sessions?.[domain] || null;
     }
 }
