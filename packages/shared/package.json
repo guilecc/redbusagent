@@ -1,7 +1,7 @@
 {
     "name": "@redbusagent/shared",
     "version": "0.1.0",
-    "private": true,
+    "private": false,
     "description": "Shared types, interfaces, and constants for redbusagent",
     "type": "module",
     "main": "./dist/index.js",
@@ -15,5 +15,9 @@
     "scripts": {
         "build": "tsc --project tsconfig.json",
         "dev": "tsc --project tsconfig.json --watch"
-    }
+    },
+    "engines": {
+        "node": ">= 18.0.0"
+    },
+    "license": "MIT"
 }

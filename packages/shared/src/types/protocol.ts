@@ -129,6 +129,18 @@ export interface ChatRequestMessage extends BaseMessage {
         readonly content: string;
         /** Optional: force a specific tier */
         readonly tier?: 'tier1' | 'tier2';
+        /** Optional: flag for persona onboarding */
+        readonly isOnboarding?: boolean;
+    };
+}
+
+
+/** User selects a command from the slash palette */
+export interface SystemCommandMessage extends BaseMessage {
+    readonly type: 'system:command';
+    readonly payload: {
+        readonly command: 'force-local' | 'auto-route' | 'switch-cloud' | 'status' | 'set-default-tier';
+        readonly args?: Record<string, unknown>;
     };
 }
 
@@ -148,7 +160,8 @@ export type DaemonMessage =
 
 export type ClientMessage =
     | PingMessage
-    | ChatRequestMessage;
+    | ChatRequestMessage
+    | SystemCommandMessage;
 
 /** All possible message types flowing through the WebSocket */
 export type ProtocolMessage = DaemonMessage | ClientMessage;

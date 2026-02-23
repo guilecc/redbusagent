@@ -1,7 +1,7 @@
 {
     "name": "@redbusagent/tui",
     "version": "0.1.0",
-    "private": true,
+    "private": false,
     "description": "Interactive terminal UI for redbusagent — connects to the daemon via WebSocket",
     "type": "module",
     "main": "./dist/main.js",
@@ -10,9 +10,14 @@
         "dev": "tsx src/main.tsx",
         "start": "node dist/main.js"
     },
+    "engines": {
+        "node": ">= 18.0.0"
+    },
+    "license": "MIT",
     "dependencies": {
         "@redbusagent/shared": "*",
         "ink": "^5.1.0",
+        "ink-select-input": "^6.2.0",
         "react": "^18.3.1",
         "ws": "^8.18.0"
     },

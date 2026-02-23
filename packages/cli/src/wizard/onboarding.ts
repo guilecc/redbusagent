@@ -16,7 +16,7 @@ import { WhatsAppChannel } from '@redbusagent/daemon/dist/channels/whatsapp.js';
 
 // ─── Wizard ───────────────────────────────────────────────────────
 
-export async function runOnboardingWizard(): Promise<boolean> {
+export async function runOnboardingWizard(options: { reconfigureOnly?: boolean } = {}): Promise<boolean> {
     p.intro(pc.bgRed(pc.white(' 🔴 redbusagent — Assistente de Configuração ')));
 
     const existingConfig = Vault.read();
@@ -123,10 +123,26 @@ export async function runOnboardingWizard(): Promise<boolean> {
         tier1Config = { enabled: false, url: 'http://127.0.0.1:11434', model: 'llama3.2:1b' };
     }
 
+    // ── Step 5.5: Default Chat Tier ───────────────────────────
+
+    const defaultTierRaw = await p.select({
+        message: 'Qual motor deve ser o padrão para comunicação diária no chat?',
+        options: [
+            { value: 1, label: '🟢 Tier 1 (Local / Free) - Usa seu modelo local Ollama. 100% gratuito e privado, mas pode ter dificuldade com tarefas de codificação complexas.' },
+            { value: 2, label: '☁️ Tier 2 (Cloud / Premium) - Usa sua API configurada (Anthropic/Gemini/OpenAI). Altamente capaz, mas incorre em custos de API por mensagem.' },
+        ],
+        initialValue: existingConfig?.default_chat_tier ?? 2,
+    });
+    if (p.isCancel(defaultTierRaw)) return false;
+
+    const default_chat_tier = defaultTierRaw as 1 | 2;
+
     // ── Step 6: Save to Vault (initial — before WhatsApp) ─────
 
-    // Preserve existing owner_phone_number if re-running config
+    // Preserve existing fields if re-running config
     let ownerPhoneNumber: string | undefined = existingConfig?.owner_phone_number;
+    const credentials = existingConfig?.credentials || {};
+    const sessions = existingConfig?.sessions || {};
 
     const saveSpinner = p.spinner();
     saveSpinner.start('Salvando configuração no Cofre...');
@@ -135,11 +151,21 @@ export async function runOnboardingWizard(): Promise<boolean> {
         version: Vault.schemaVersion,
         tier2: tier2Config,
         tier1: tier1Config,
-        ...(ownerPhoneNumber ? { owner_phone_number: ownerPhoneNumber } : {}),
+        default_chat_tier,
+        owner_phone_number: ownerPhoneNumber,
+        credentials,
+        sessions,
     });
 
     await new Promise(r => setTimeout(r, 500));
     saveSpinner.stop('Configuração salva!');
+
+    // ── Skip Remaining if reconfigureOnly ──────────────────────
+
+    if (options.reconfigureOnly) {
+        p.outro(pc.green('Reconfiguração concluída! Rode: ') + pc.bold(pc.cyan('redbus start')));
+        return true;
+    }
 
     // ── Step 7: WhatsApp Integration (Channel Extension) ───────
 
@@ -179,7 +205,10 @@ export async function runOnboardingWizard(): Promise<boolean> {
             version: Vault.schemaVersion,
             tier2: tier2Config,
             tier1: tier1Config,
+            default_chat_tier,
             owner_phone_number: ownerPhoneNumber,
+            credentials,
+            sessions,
         });
 
         p.log.success(`🛡️  Firewall ativado para: ${pc.bold(ownerPhoneNumber)}@c.us`);
@@ -196,6 +225,7 @@ export async function runOnboardingWizard(): Promise<boolean> {
         `Provedor: ${pc.bold(tier2Config.provider)}/${pc.bold(tier2Config.model)}\n` +
         `Auth: ${pc.bold(tier2Config.authToken ? 'OAuth token' : 'API key')}\n` +
         `Ollama: ${pc.bold(tier1Config.enabled ? `${tier1Config.model} @ ${tier1Config.url}` : 'desativado')}\n` +
+        `Padrão: ${pc.bold(default_chat_tier === 1 ? 'Tier 1 (Local)' : 'Tier 2 (Nuvem)')}\n` +
         `WhatsApp: ${pc.bold(WhatsAppChannel.hasSession() ? 'Conectado ✅' : 'Não conectado')}\n` +
         (ownerPhoneNumber
             ? `Firewall: ${pc.bold(pc.green(`🛡️  ATIVO — ${ownerPhoneNumber}@c.us`))}\n`

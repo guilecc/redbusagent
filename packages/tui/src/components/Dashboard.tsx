@@ -11,6 +11,7 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Box, Text, useInput } from 'ink';
+import SelectInput from 'ink-select-input';
 import type {
     DaemonMessage,
     HeartbeatMessage,
@@ -22,6 +23,8 @@ import {
     APP_VERSION,
     DEFAULT_HOST,
     DEFAULT_PORT,
+    PersonaManager,
+    Vault,
 } from '@redbusagent/shared';
 import { TuiWsClient } from '../infra/ws-client.js';
 
@@ -62,6 +65,14 @@ export function Dashboard(): React.ReactElement {
     const [inputValue, setInputValue] = useState('');
     const [currentModel, setCurrentModel] = useState<string | null>(null);
     const [proactiveThought, setProactiveThought] = useState<{ text: string; status: 'thinking' | 'action' | 'done' } | null>(null);
+    const [isSlashMenuOpen, setIsSlashMenuOpen] = useState(false);
+    const [activeMenu, setActiveMenu] = useState<'main' | 'cloud'>('main');
+    const [isOnboarding, setIsOnboarding] = useState(!PersonaManager.exists());
+
+    const [defaultTier, setDefaultTier] = useState<1 | 2>(() => {
+        const config = Vault.read();
+        return config?.default_chat_tier ?? 2;
+    });
 
     const clientRef = useRef<TuiWsClient | null>(null);
     const currentRequestIdRef = useRef<string | null>(null);
@@ -85,7 +96,7 @@ export function Dashboard(): React.ReactElement {
         setChatLines((prev) => [
             ...prev.slice(-(MAX_CHAT_LINES - 2)),
             '',
-            `🧑 Guile: ${text}`,
+            `🧑 Usuário: ${text}`,
         ]);
 
         // Reset streaming state
@@ -99,17 +110,33 @@ export function Dashboard(): React.ReactElement {
             payload: {
                 requestId,
                 content: text,
-                tier: 'tier2',
+                tier: defaultTier === 1 ? 'tier1' : 'tier2',
+                isOnboarding,
             },
         };
 
-        clientRef.current.send(chatRequest);
-        addLog(`Enviado para Tier 2: "${text.slice(0, 50)}${text.length > 50 ? '...' : ''}"`, 'cyan');
-    }, [isStreaming, addLog]);
+        if (isOnboarding) {
+            setIsOnboarding(false);
+        }
 
-    // ── Keyboard Input ────────────────────────────────────────
+        clientRef.current.send(chatRequest);
+        addLog(`Enviado para Tier ${defaultTier}: "${text.slice(0, 50)}${text.length > 50 ? '...' : ''}"`, 'cyan');
+    }, [isStreaming, addLog, isOnboarding]);
 
     useInput((input, key) => {
+        if (isSlashMenuOpen) {
+            if (key.escape) {
+                setIsSlashMenuOpen(false);
+            }
+            return;
+        }
+
+        if (input === '/' && inputValue === '' && !isStreaming) {
+            setIsSlashMenuOpen(true);
+            setActiveMenu('main');
+            return;
+        }
+
         if (key.return) {
             submitMessage(inputValue);
             setInputValue('');
@@ -140,7 +167,16 @@ export function Dashboard(): React.ReactElement {
             onConnected: () => {
                 setConnected(true);
                 addLog('Conectado ao Daemon', 'green');
+
+                if (!PersonaManager.exists()) {
+                    setChatLines((prev) => [
+                        ...prev,
+                        '',
+                        "🔴 redbusagent: Hi there! I'm your new autonomous agent, but I'm currently a blank slate. Before we start working, tell me: What should my name be? What do you do, and how do you want me to behave (e.g., formal, sarcastic, concise)?",
+                    ]);
+                }
             },
+
             onDisconnected: () => {
                 setConnected(false);
                 addLog('Desconectado. Tentando reconectar...', 'yellow');
@@ -350,8 +386,90 @@ export function Dashboard(): React.ReactElement {
                 </Text>
                 <Text>
                     {inputValue}
-                    {!isStreaming && <Text color="green" bold>▊</Text>}
+                    {!isStreaming && !isSlashMenuOpen && <Text color="green" bold>▊</Text>}
                 </Text>
+
+                {isSlashMenuOpen && (
+                    <Box
+                        flexDirection="column"
+                        position="absolute"
+                        marginTop={-10}
+                        marginLeft={2}
+                        borderStyle="bold"
+                        borderColor="yellow"
+                        paddingX={1}
+                    >
+                        <Text bold color="yellow">
+                            {activeMenu === 'main' ? '🚀 COMMAND PALETTE' : '☁️ SELECT CLOUD TIER 2'}
+                        </Text>
+
+                        {activeMenu === 'main' ? (
+                            <SelectInput
+                                items={[
+                                    { label: `🔄 /toggle-tier    - Current: Tier ${defaultTier} (${defaultTier === 1 ? 'Local' : 'Cloud'})`, value: 'toggle-tier' },
+                                    { label: '🤖 /auto-route     - Restore Cognitive Routing', value: 'auto-route' },
+                                    { label: '☁️  /switch-cloud  - Change Tier 2 Provider', value: 'switch-cloud' },
+                                    { label: '📊 /status        - Daemon & Model Status', value: 'status' },
+                                    { label: '❌ Close Menu', value: 'close' },
+                                ]}
+                                onSelect={(item) => {
+                                    if (item.value === 'close') {
+                                        setIsSlashMenuOpen(false);
+                                    } else if (item.value === 'switch-cloud') {
+                                        setActiveMenu('cloud');
+                                    } else if (item.value === 'toggle-tier') {
+                                        const nextTier = defaultTier === 1 ? 2 : 1;
+                                        setDefaultTier(nextTier);
+                                        const modeText = nextTier === 1 ? 'Tier 1 (Local)' : 'Tier 2 (Cloud)';
+                                        const warning = nextTier === 2 ? ' Warning: API costs will now apply.' : '';
+                                        setChatLines((prev) => [
+                                            ...prev.slice(-(MAX_CHAT_LINES - 1)),
+                                            `🔄 Default routing switched to ${modeText}.${warning}`
+                                        ]);
+                                        clientRef.current?.send({
+                                            type: 'system:command',
+                                            timestamp: new Date().toISOString(),
+                                            payload: { command: 'set-default-tier', args: { value: nextTier } }
+                                        });
+                                        setIsSlashMenuOpen(false);
+                                    } else {
+                                        clientRef.current?.send({
+                                            type: 'system:command',
+                                            timestamp: new Date().toISOString(),
+                                            payload: { command: item.value as any }
+                                        });
+                                        setIsSlashMenuOpen(false);
+                                    }
+                                }}
+                            />
+                        ) : (
+                            <SelectInput
+                                items={[
+                                    { label: '🟣 Anthropic (Claude 3.5 Sonnet)', value: 'anthropic' },
+                                    { label: '🔵 Google (Gemini 1.5 Pro)', value: 'google' },
+                                    { label: '⚪ OpenAI (GPT-4o)', value: 'openai' },
+                                    { label: '⬅️ Back', value: 'back' },
+                                ]}
+                                onSelect={(item) => {
+                                    if (item.value === 'back') {
+                                        setActiveMenu('main');
+                                    } else {
+                                        clientRef.current?.send({
+                                            type: 'system:command',
+                                            timestamp: new Date().toISOString(),
+                                            payload: {
+                                                command: 'switch-cloud',
+                                                args: { provider: item.value }
+                                            }
+                                        });
+                                        setIsSlashMenuOpen(false);
+                                    }
+                                }}
+                            />
+                        )}
+                        <Text dimColor color="gray"> Esc: cancerlar </Text>
+                    </Box>
+                )}
             </Box>
 
             {/* ── System Log (compact) ────────────────────────────── */}

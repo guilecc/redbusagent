@@ -44,6 +44,10 @@ export interface VaultConfig {
     readonly tier2: VaultTier2Config;
     readonly tier1: VaultTier1Config;
     /**
+     * The default engine tier for chat communication (1 for local, 2 for cloud).
+     */
+    readonly default_chat_tier?: 1 | 2;
+    /**
      * 🛡️ Owner Firewall: Phone number of the sole owner.
      * Only this number (as ${number}@c.us) is allowed to interact
      * with the WhatsApp channel. Digits only, with country+area code.
@@ -182,6 +186,7 @@ export class Vault {
                 model: 'llama3',
                 ...overrides?.tier1,
             },
+            default_chat_tier: overrides?.default_chat_tier ?? 2,
             credentials: {},
             sessions: {},
         };

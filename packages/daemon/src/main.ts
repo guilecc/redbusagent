@@ -77,6 +77,73 @@ const wsServer = new DaemonWsServer({
             case 'chat:request':
                 void chatHandler.handleChatRequest(clientId, message);
                 break;
+            case 'system:command': {
+                const { command, args } = message.payload;
+                console.log(`  🔌 Command from ${clientId}: ${command}`);
+
+                if (command === 'force-local') {
+                    chatHandler.setForceTier1(true);
+                    wsServer.sendTo(clientId, {
+                        type: 'log',
+                        timestamp: new Date().toISOString(),
+                        payload: { level: 'info', source: 'System', message: 'Próxima mensagem forçada para Tier 1 (Local)' }
+                    });
+                } else if (command === 'auto-route') {
+                    chatHandler.setForceTier1(false);
+                    wsServer.sendTo(clientId, {
+                        type: 'log',
+                        timestamp: new Date().toISOString(),
+                        payload: { level: 'info', source: 'System', message: 'Roteamento automático restaurado' }
+                    });
+                } else if (command === 'status') {
+                    const status = getRouterStatus();
+                    const mem = process.memoryUsage();
+                    const ramUsage = `${(mem.rss / 1024 / 1024).toFixed(1)} MB`;
+
+                    wsServer.sendTo(clientId, {
+                        type: 'log',
+                        timestamp: new Date().toISOString(),
+                        payload: {
+                            level: 'info',
+                            source: 'Status',
+                            message: `Models: T1:${status.tier1.model}, T2:${status.tier2?.provider}/${status.tier2?.model} | RAM: ${ramUsage} | Heartbeat: OK`
+                        }
+                    });
+                } else if (command === 'switch-cloud') {
+                    const provider = args?.['provider'] as any;
+                    if (provider) {
+                        const config = Vault.read();
+                        if (config) {
+                            const newModel = provider === 'anthropic' ? 'claude-3-5-sonnet-20240620' :
+                                provider === 'google' ? 'gemini-1.5-pro' : 'gpt-4o';
+
+                            Vault.write({
+                                ...config,
+                                tier2: { ...config.tier2, provider, model: newModel }
+                            });
+                            wsServer.sendTo(clientId, {
+                                type: 'log',
+                                timestamp: new Date().toISOString(),
+                                payload: { level: 'info', source: 'System', message: `Provedor alterado para ${provider} (${newModel})` }
+                            });
+                        }
+                    }
+                } else if (command === 'set-default-tier') {
+                    const value = args?.['value'] as number;
+                    if (value === 1 || value === 2) {
+                        const config = Vault.read();
+                        if (config) {
+                            Vault.write({ ...config, default_chat_tier: value });
+                            wsServer.sendTo(clientId, {
+                                type: 'log',
+                                timestamp: new Date().toISOString(),
+                                payload: { level: 'info', source: 'System', message: `Tier padrão alterado para Tier ${value}` }
+                            });
+                        }
+                    }
+                }
+                break;
+            }
             case 'ping':
                 console.log(`  📡 Ping from ${clientId}`);
                 break;
