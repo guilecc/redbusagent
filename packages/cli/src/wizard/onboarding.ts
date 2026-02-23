@@ -10,8 +10,7 @@
 
 import * as p from '@clack/prompts';
 import pc from 'picocolors';
-import { Vault, type VaultTier2Config, type VaultTier1Config, type Tier2Provider } from '@redbusagent/shared';
-import { fetchTier2Models } from './model-fetcher.js';
+import { Vault, type VaultTier2Config, type VaultTier1Config, type Tier2Provider, fetchTier2Models } from '@redbusagent/shared';
 import { WhatsAppChannel } from '@redbusagent/daemon/dist/channels/whatsapp.js';
 
 // ─── Wizard ───────────────────────────────────────────────────────

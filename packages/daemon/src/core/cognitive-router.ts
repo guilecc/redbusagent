@@ -6,8 +6,11 @@
  *  • Tier 1 (Local/Fast)  → Ollama via OpenAI-compatible API
  *  • Tier 2 (Cloud/Deep)  → Anthropic / Google / OpenAI
  *
- * Tier 2 includes the Forge tools (create_and_run_tool + dynamic registry tools)
- * for autonomous code generation and execution via Function Calling.
+ * MemGPT Architecture Integration:
+ *  • Auto-RAG: Every user message is silently enriched with top 3
+ *    relevant chunks from Archival Memory before reaching the LLM.
+ *  • Core Working Memory: Injected via system prompt (system-prompt.ts).
+ *  • Tools include core_memory_replace and core_memory_append.
  */
 
 import { streamText, stepCountIs, type LanguageModel } from 'ai';
@@ -22,11 +25,12 @@ import {
     validateTier2Config,
     resolveAnthropicAuth,
 } from '../infra/llm-config.js';
-import { SYSTEM_PROMPT_TIER1, getSystemPromptTier2 } from './system-prompt.js';
+import { getSystemPromptTier1, getSystemPromptTier2 } from './system-prompt.js';
 import { PersonaManager } from '@redbusagent/shared';
 import { MemoryManager } from './memory-manager.js';
 import { ToolRegistry } from './tool-registry.js';
 import { CapabilityRegistry } from './registry.js';
+import { AutoRAG } from './auto-rag.js';
 
 // ─── Persona Helpers ──────────────────────────────────────────────
 
@@ -106,7 +110,11 @@ export async function askTier1(
     const { model: modelName } = getTier1Config();
     const model = createTier1Model();
 
-    let systemPromptContext = getPersonaContext() + SYSTEM_PROMPT_TIER1;
+    // ──── Auto-RAG Pre-flight Injection ────
+    const ragResult = await AutoRAG.enrich(prompt);
+    const enrichedPrompt = ragResult.enrichedPrompt;
+
+    let systemPromptContext = getPersonaContext() + getSystemPromptTier1();
     systemPromptContext += `\n\n${CapabilityRegistry.getCapabilityManifest()}`;
     try {
         const wisdom = await MemoryManager.searchMemory('cloud_wisdom', prompt, 3);
@@ -124,7 +132,7 @@ export async function askTier1(
         const result = streamText({
             model,
             system: systemPromptContext,
-            messages: [{ role: 'user', content: prompt }],
+            messages: [{ role: 'user', content: enrichedPrompt }],
         });
 
         let fullText = '';
@@ -154,6 +162,10 @@ export async function askTier2(
         return { tier: 'tier2', model: config?.model ?? 'unknown' };
     }
 
+    // ──── Auto-RAG Pre-flight Injection ────
+    const ragResult = await AutoRAG.enrich(prompt);
+    const enrichedPrompt = ragResult.enrichedPrompt;
+
     const config = getTier2Config()!;
     const model = createTier2Model();
     const tools = CapabilityRegistry.getAvailableTools();
@@ -167,12 +179,12 @@ export async function askTier2(
     ].join('');
 
     try {
-        console.log(`  🧠 [tier2] Calling ${config.provider}/${config.model} with ${Object.keys(tools).length} tools`);
+        console.log(`  🧠 [tier2] Calling ${config.provider}/${config.model} with ${Object.keys(tools).length} tools (AutoRAG: ${ragResult.chunksFound} chunks)`);
 
         const result = streamText({
             model,
             system: fullSystemPrompt,
-            messages: [{ role: 'user', content: prompt }],
+            messages: [{ role: 'user', content: enrichedPrompt }],
             tools,
             stopWhen: stepCountIs(5),
             onError: ({ error }) => {

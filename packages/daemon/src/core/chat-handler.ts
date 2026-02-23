@@ -9,6 +9,8 @@ import type { DaemonWsServer } from '../infra/ws-server.js';
 import type { ChatRequestMessage } from '@redbusagent/shared';
 import { PersonaManager, Vault } from '@redbusagent/shared';
 import { askTier1, askTier2 } from './cognitive-router.js';
+import { HeartbeatService } from './heartbeat.js';
+import { CoreMemory } from './core-memory.js';
 
 export class ChatHandler {
     private forceTier1 = false;
@@ -137,6 +139,11 @@ Return ONLY the JSON object. Do not explain.`;
                 if (targetTier === 'tier1' &&
                     fullText.includes('Do you want me to escalate this coding task to Tier 2?')) {
                     this.pendingCodingEscalation.set(clientId, { active: true, originalPrompt: message.payload.content });
+                }
+
+                // MemGPT: Record exchange for the Core Memory Compressor
+                if (fullText) {
+                    HeartbeatService.recordChatExchange(content, fullText);
                 }
             },
             onError: (error) => {

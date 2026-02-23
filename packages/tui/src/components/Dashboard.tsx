@@ -25,6 +25,8 @@ import {
     DEFAULT_PORT,
     PersonaManager,
     Vault,
+    fetchTier2Models,
+    Tier2Provider
 } from '@redbusagent/shared';
 import { TuiWsClient } from '../infra/ws-client.js';
 
@@ -66,7 +68,10 @@ export function Dashboard(): React.ReactElement {
     const [currentModel, setCurrentModel] = useState<string | null>(null);
     const [proactiveThought, setProactiveThought] = useState<{ text: string; status: 'thinking' | 'action' | 'done' } | null>(null);
     const [isSlashMenuOpen, setIsSlashMenuOpen] = useState(false);
-    const [activeMenu, setActiveMenu] = useState<'main' | 'cloud'>('main');
+    const [activeMenu, setActiveMenu] = useState<'main' | 'cloud' | 'cloud-models'>('main');
+    const [isFetchingModels, setIsFetchingModels] = useState(false);
+    const [cloudModels, setCloudModels] = useState<{ label: string, value: string, hint?: string, id: string }[]>([]);
+    const [selectedProvider, setSelectedProvider] = useState<Tier2Provider | null>(null);
     const [isOnboarding, setIsOnboarding] = useState(!PersonaManager.exists());
 
     const [defaultTier, setDefaultTier] = useState<1 | 2>(() => {
@@ -403,7 +408,7 @@ export function Dashboard(): React.ReactElement {
                             {activeMenu === 'main' ? '🚀 COMMAND PALETTE' : '☁️ SELECT CLOUD TIER 2'}
                         </Text>
 
-                        {activeMenu === 'main' ? (
+                        {activeMenu === 'main' && (
                             <SelectInput
                                 items={[
                                     { label: `🔄 /toggle-tier    - Current: Tier ${defaultTier} (${defaultTier === 1 ? 'Local' : 'Cloud'})`, value: 'toggle-tier' },
@@ -442,32 +447,68 @@ export function Dashboard(): React.ReactElement {
                                     }
                                 }}
                             />
-                        ) : (
+                        )}
+                        {activeMenu === 'cloud' && (
                             <SelectInput
                                 items={[
-                                    { label: '🟣 Anthropic (Claude 3.5 Sonnet)', value: 'anthropic' },
-                                    { label: '🔵 Google (Gemini 1.5 Pro)', value: 'google' },
-                                    { label: '⚪ OpenAI (GPT-4o)', value: 'openai' },
+                                    { label: '🟣 Anthropic', value: 'anthropic' },
+                                    { label: '🔵 Google (Gemini)', value: 'google' },
+                                    { label: '⚪ OpenAI', value: 'openai' },
                                     { label: '⬅️ Back', value: 'back' },
                                 ]}
-                                onSelect={(item) => {
+                                onSelect={async (item) => {
                                     if (item.value === 'back') {
                                         setActiveMenu('main');
                                     } else {
-                                        clientRef.current?.send({
-                                            type: 'system:command',
-                                            timestamp: new Date().toISOString(),
-                                            payload: {
-                                                command: 'switch-cloud',
-                                                args: { provider: item.value }
-                                            }
-                                        });
-                                        setIsSlashMenuOpen(false);
+                                        const provider = item.value as Tier2Provider;
+                                        setSelectedProvider(provider);
+                                        setActiveMenu('cloud-models');
+                                        setIsFetchingModels(true);
+
+                                        try {
+                                            const config = Vault.read();
+                                            const result = await fetchTier2Models(provider, {
+                                                apiKey: config?.tier2?.apiKey,
+                                                authToken: config?.tier2?.authToken
+                                            });
+                                            setCloudModels(result.models as any);
+                                        } catch (e) {
+                                            setCloudModels([]);
+                                        } finally {
+                                            setIsFetchingModels(false);
+                                        }
                                     }
                                 }}
                             />
                         )}
-                        <Text dimColor color="gray"> Esc: cancerlar </Text>
+                        {activeMenu === 'cloud-models' && (
+                            isFetchingModels ? (
+                                <Text color="yellow">⏳ Buscando modelos disponíveis...</Text>
+                            ) : (
+                                <SelectInput
+                                    items={[
+                                        ...cloudModels.map(m => ({ label: m.label + (m.hint ? ` (${m.hint})` : ''), value: m.id })),
+                                        { label: '⬅️ Back', value: 'back' }
+                                    ]}
+                                    onSelect={(item) => {
+                                        if (item.value === 'back') {
+                                            setActiveMenu('cloud');
+                                        } else {
+                                            clientRef.current?.send({
+                                                type: 'system:command',
+                                                timestamp: new Date().toISOString(),
+                                                payload: {
+                                                    command: 'switch-cloud',
+                                                    args: { provider: selectedProvider, model: item.value }
+                                                }
+                                            });
+                                            setIsSlashMenuOpen(false);
+                                        }
+                                    }}
+                                />
+                            )
+                        )}
+                        <Text dimColor color="gray"> Esc: cancelar </Text>
                     </Box>
                 )}
             </Box>

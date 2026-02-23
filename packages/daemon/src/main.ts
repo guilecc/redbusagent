@@ -24,6 +24,7 @@ import { Forge } from './core/forge.js';
 import { ToolRegistry } from './core/tool-registry.js';
 import { OllamaManager } from './core/ollama-manager.js';
 import { WhatsAppChannel } from './channels/whatsapp.js';
+import { CoreMemory } from './core/core-memory.js';
 
 // ── Configuration ─────────────────────────────────────────────────
 
@@ -36,9 +37,10 @@ console.log(`\n🔴 ${APP_NAME} daemon v${APP_VERSION}`);
 console.log(`   PID: ${process.pid}`);
 console.log(`   Listening on ws://${HOST}:${PORT}\n`);
 
-// Initialize Forge & Registry
+// Initialize Forge & Registry & Core Memory
 Forge.ensureWorkspace();
 ToolRegistry.ensureFile();
+CoreMemory.ensureFile();
 
 // Display vault status
 if (Vault.isConfigured()) {
@@ -61,6 +63,8 @@ if (routerStatus.tier2) {
     console.log('     Tier 2 (Cloud):  ⚠️  não configurado');
 }
 console.log(`  🔨 Forge: ${Forge.dir} (${routerStatus.forgedTools} ferramentas registradas)`);
+const coreMemStats = CoreMemory.getStats();
+console.log(`  🧠 Core Memory: ${coreMemStats.exists ? `${coreMemStats.charCount} chars (${coreMemStats.percentFull}% full)` : 'initialized'}`);
 console.log('');
 
 const wsServer = new DaemonWsServer({
@@ -111,11 +115,12 @@ const wsServer = new DaemonWsServer({
                     });
                 } else if (command === 'switch-cloud') {
                     const provider = args?.['provider'] as any;
+                    const model = args?.['model'] as string;
                     if (provider) {
                         const config = Vault.read();
                         if (config) {
-                            const newModel = provider === 'anthropic' ? 'claude-3-5-sonnet-20240620' :
-                                provider === 'google' ? 'gemini-1.5-pro' : 'gpt-4o';
+                            const newModel = model || (provider === 'anthropic' ? 'claude-3-5-sonnet-20240620' :
+                                provider === 'google' ? 'gemini-1.5-pro' : 'gpt-4o');
 
                             Vault.write({
                                 ...config,

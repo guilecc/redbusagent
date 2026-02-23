@@ -11,9 +11,7 @@
  *  - Google:     GET /v1beta/models
  *  - Ollama:     GET /api/tags (local, no auth)
  */
-
-import type { Tier2Provider } from '@redbusagent/shared';
-
+import type { Tier2Provider } from '../vault/vault.js';
 // ─── Types ────────────────────────────────────────────────────────
 
 export interface ModelInfo {
