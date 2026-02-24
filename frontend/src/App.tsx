@@ -6,8 +6,9 @@ function App() {
     const [copiedMac, setCopiedMac] = useState(false);
     const [copiedWin, setCopiedWin] = useState(false);
 
-    const macCommand = `curl -fsSL https://redbus.pages.dev/install.sh | bash`;
-    const winCommand = `irm https://redbus.pages.dev/install.ps1 | iex`;
+    const baseUrl = import.meta.env.VITE_INSTALL_BASE_URL || 'https://redbus.pages.dev';
+    const macCommand = `curl -fsSL ${baseUrl}/install.sh | bash`;
+    const winCommand = `irm ${baseUrl}/install.ps1 | iex`;
 
     const copyToClipboard = async (text: string, isMac: boolean) => {
         try {
