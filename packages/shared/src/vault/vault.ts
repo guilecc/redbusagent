@@ -57,6 +57,12 @@ export interface VaultConfig {
     readonly credentials?: Record<string, { username: string; encrypted: string; iv: string }>;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     readonly sessions?: Record<string, any>;
+    /**
+     * MCP Servers installed by the user.
+     * key: MCP ID (e.g. "scrapling", "custom-1")
+     * value: command, args, and required environment variables mapped.
+     */
+    readonly mcps?: Record<string, { command: string, args: string[], env: Record<string, string> }>;
 }
 
 // ─── Constants ────────────────────────────────────────────────────
@@ -189,6 +195,7 @@ export class Vault {
             default_chat_tier: overrides?.default_chat_tier ?? 2,
             credentials: {},
             sessions: {},
+            mcps: {},
         };
     }
 

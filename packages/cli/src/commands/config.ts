@@ -20,8 +20,10 @@ export async function configCommand(): Promise<void> {
         message: 'Notei que o redbusagent já está configurado. O que você gostaria de fazer?',
         options: [
             { value: 'reconfigure', label: '🔄 Reconfigurar Provedores de IA (Manter Memória e Ferramentas)', hint: 'Apenas chaves' },
-            { value: 'wipe_brain', label: '🧠 Limpar Cérebro (Apagar Memória e Ferramentas Forjadas)', hint: 'Resetar progresso' },
-            { value: 'factory_reset', label: '🔥 Factory Reset (Apagar TUDO e Reconfigurar)', hint: 'Cuidado!' },
+            { value: 'install_mcp', label: '🔌 Instalar Extensões MCP (Model Context Protocol)', hint: 'GitHub, Scrapling, etc.' },
+            { value: 'remove_mcp', label: '🗑️ Remover Extensões MCP', hint: 'Desinstalar MCPs ativos' },
+            { value: 'wipe_brain', label: '🧠 Limpar Cérebro (Apagar Memória, MCPs e Ferramentas Forjadas)', hint: 'Resetar progresso' },
+            { value: 'factory_reset', label: '🔥 Factory Reset (Apagar TUDO, incluindo MCPs)', hint: 'Cuidado!' },
             { value: 'exit', label: '🚪 Cancelar / Sair' },
         ],
     });
@@ -38,9 +40,49 @@ export async function configCommand(): Promise<void> {
             break;
         }
 
+        case 'install_mcp': {
+            const { runMcpInstallWizard } = await import('../wizard/mcp.js');
+            await runMcpInstallWizard();
+            process.exit(0);
+            break;
+        }
+
+        case 'remove_mcp': {
+            const config = Vault.read();
+            const installedMcps = config?.mcps ? Object.keys(config.mcps) : [];
+
+            if (installedMcps.length === 0) {
+                p.log.warn('Nenhum MCP está instalado no momento.');
+                process.exit(0);
+            }
+
+            const mcpsToRemove = await p.multiselect({
+                message: 'Selecione quais MCPs você deseja remover:',
+                options: installedMcps.map(id => ({ value: id, label: id })),
+                required: false,
+            });
+
+            if (p.isCancel(mcpsToRemove) || mcpsToRemove.length === 0) {
+                p.log.info('Nenhum MCP removido.');
+                process.exit(0);
+            }
+
+            const updatedConfig = { ...config! };
+            let count = 0;
+            for (const id of mcpsToRemove as string[]) {
+                delete updatedConfig.mcps![id];
+                count++;
+            }
+            Vault.write(updatedConfig);
+
+            p.log.success(`${count} extensão(ões) MCP removida(s) com sucesso. Pressione Ctrl+C para voltar ao terminal.`);
+            process.exit(0);
+            break;
+        }
+
         case 'wipe_brain': {
             const confirm = await p.confirm({
-                message: 'Tem certeza que deseja apagar toda a memória e ferramentas forjadas? Esta ação é irreversível.',
+                message: 'Tem certeza que deseja apagar toda a memória, MCPs e ferramentas forjadas? Esta ação é irreversível.',
                 initialValue: false,
             });
             if (!confirm || p.isCancel(confirm)) {
@@ -65,8 +107,14 @@ export async function configCommand(): Promise<void> {
             writeFileSync(registryPath, JSON.stringify({ version: 1, tools: [] }, null, 2));
             writeFileSync(cognitiveMapPath, JSON.stringify([], null, 2));
 
+            // Remove installed MCPs from the Vault config
+            const config = Vault.read();
+            if (config) {
+                Vault.write({ ...config, mcps: {} });
+            }
+
             s.stop('Cérebro limpo com sucesso!');
-            p.log.success('Cérebro apagado. O agente começará do zero na próxima inicialização.');
+            p.log.success('Cérebro apagado. Extensões MCP desinstaladas. O agente começará do zero na próxima inicialização.');
             process.exit(0);
             break;
         }

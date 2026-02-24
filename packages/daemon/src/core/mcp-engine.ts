@@ -1,0 +1,164 @@
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { Vault } from '@redbusagent/shared';
+
+export interface MCPToolInfo {
+    mcpId: string;
+    serverName: string;
+    toolName: string;
+    description: string;
+    inputSchema: any;
+}
+
+export class MCPEngine {
+    private static instance: MCPEngine;
+    private clients: Map<string, Client> = new Map();
+    private toolsCache: MCPToolInfo[] = [];
+    private isInitializing = false;
+
+    private constructor() { }
+
+    static getInstance(): MCPEngine {
+        if (!MCPEngine.instance) {
+            MCPEngine.instance = new MCPEngine();
+        }
+        return MCPEngine.instance;
+    }
+
+    /**
+     * Spawns all MCPs configured in the Vault, connects to them via stdio,
+     * and fetches their capabilities (tools).
+     */
+    async initialize(): Promise<void> {
+        if (this.isInitializing) return;
+        this.isInitializing = true;
+        this.toolsCache = [];
+
+        try {
+            const config = Vault.read();
+            if (!config || !config.mcps) return;
+
+            for (const [mcpId, mcpConfig] of Object.entries(config.mcps)) {
+                await this.spawnMCP(mcpId, mcpConfig.command, mcpConfig.args, mcpConfig.env);
+            }
+        } finally {
+            this.isInitializing = false;
+        }
+    }
+
+    private async spawnMCP(mcpId: string, command: string, args: string[], env: Record<string, string>): Promise<void> {
+        try {
+            console.log(`[MCPEngine] Spawning MCP ${mcpId} with command: ${command} ${args.join(' ')}`);
+
+            // Because StdioClientTransport explicitly sets shell: false, we must
+            // manually wrap commands in a shell so that global tools like `uvx`
+            // and `npx` resolve correctly from the system PATH/environment.
+            const isWin = process.platform === "win32";
+            const shellCommand = isWin ? "cmd.exe" : "sh";
+
+            // Safely join the arguments. If an argument has spaces, this simple join
+            // might fail. A robust implementation would escape quotes.
+            // For now, most MCP commands are simple: "uvx", ["mcp-server-scrapling"]
+            const fullCommand = [command, ...args].map(arg => arg.includes(' ') ? `"${arg}"` : arg).join(' ');
+            const shellArgs = isWin ? ["/c", fullCommand] : ["-c", fullCommand];
+
+            // Ensure PATH contains common locations where `uvx`, `npx` and Homebrew binaries live.
+            // This is crucial in daemon environments or macOS UI wrappers that don't load full bash profiles.
+            const basePath = process.env['PATH'] || '';
+            const home = process.env['HOME'] || process.env['USERPROFILE'] || '';
+            const extendedPath = basePath
+                + (isWin ? ';' : ':') + '/opt/homebrew/bin'
+                + (isWin ? ';' : ':') + '/usr/local/bin'
+                + (home ? (isWin ? ';' : ':') + `${home}/.local/bin` : '');
+
+            const transport = new StdioClientTransport({
+                command: shellCommand,
+                args: shellArgs,
+                stderr: 'ignore', // Prevent MCP debug/info logs from spamming the daemon output
+                env: {
+                    ...(process.env as Record<string, string>),
+                    PATH: extendedPath,
+                    ...env, // Overwrite with Vault envs
+                },
+            });
+
+            // The client name could be 'redbusagent'
+            const client = new Client(
+                {
+                    name: "redbusagent",
+                    version: "1.0.0",
+                },
+                {
+                    capabilities: {},
+                }
+            );
+
+            await client.connect(transport);
+            this.clients.set(mcpId, client);
+
+            // Fetch tools from the MCP server
+            const toolsResponse = await client.listTools();
+            if (toolsResponse && toolsResponse.tools) {
+                for (const tool of toolsResponse.tools) {
+                    this.toolsCache.push({
+                        mcpId,
+                        serverName: command,
+                        toolName: tool.name,
+                        description: tool.description || `Tool ${tool.name} from ${mcpId}`,
+                        inputSchema: tool.inputSchema,
+                    });
+                }
+            }
+        } catch (error) {
+            console.error(`[MCPEngine] Failed to spawn MCP ${mcpId}:`, error);
+        }
+    }
+
+    /**
+     * Retrieves all discovered tools from connected MCP servers.
+     */
+    getTools(): MCPToolInfo[] {
+        return this.toolsCache;
+    }
+
+    /**
+     * Executes a tool dynamically on the corresponding MCP server.
+     */
+    async callTool(mcpId: string, toolName: string, args: Record<string, unknown>): Promise<any> {
+        const client = this.clients.get(mcpId);
+        if (!client) {
+            throw new Error(`MCP client ${mcpId} not found or not connected.`);
+        }
+
+        const result = await client.callTool({
+            name: toolName,
+            arguments: args,
+        });
+
+        // The result format from callTool is typically { content: [{ type: 'text', text: '...' }] }
+        // We can stringify the content to return it to the LLM
+        return result.content;
+    }
+
+    /**
+     * Retrieves the IDs of all currently connected MCP servers.
+     */
+    getConnectedMCPs(): string[] {
+        return Array.from(this.clients.keys());
+    }
+
+    /**
+     * Stops all running MCP servers.
+     */
+    async stop(): Promise<void> {
+        for (const [mcpId, client] of this.clients.entries()) {
+            try {
+                await client.close();
+            } catch (err) {
+                console.error(`[MCPEngine] Error closing MCP ${mcpId}:`, err);
+            }
+        }
+        this.clients.clear();
+        this.toolsCache = [];
+    }
+}

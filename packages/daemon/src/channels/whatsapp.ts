@@ -201,7 +201,11 @@ export class WhatsAppChannel {
         });
 
         this.client.initialize().catch((err: any) => {
-            console.error('  ❌ Erro silencioso no WhatsApp:', err);
+            if (err.message && err.message.includes('already running')) {
+                console.error('  ⚠️  WhatsAppChannel: O navegador do WhatsApp já está rodando em outro processo (ou travou). Ignorando inicialização silenciosa.');
+            } else {
+                console.error('  ❌ Erro silencioso no WhatsApp:', err);
+            }
         });
     }
 

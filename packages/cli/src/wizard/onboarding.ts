@@ -10,7 +10,7 @@
 
 import * as p from '@clack/prompts';
 import pc from 'picocolors';
-import { Vault, type VaultTier2Config, type VaultTier1Config, type Tier2Provider, fetchTier2Models } from '@redbusagent/shared';
+import { Vault, type VaultTier2Config, type VaultTier1Config, type Tier2Provider, fetchTier2Models, SUGGESTED_MCPS, getMCPSuggestion } from '@redbusagent/shared';
 import { WhatsAppChannel } from '@redbusagent/daemon/dist/channels/whatsapp.js';
 
 // ─── Wizard ───────────────────────────────────────────────────────
@@ -220,6 +220,62 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
         }
     }
 
+    // ── Step 8: Suggested MCPs ────────────────────────────────
+
+    const installMcp = await p.confirm({
+        message: 'Deseja instalar extensões MCP (Model Context Protocol) sugeridas para dar super-poderes ao agente?',
+        initialValue: true,
+    });
+
+    if (installMcp && !p.isCancel(installMcp)) {
+        const selectedMcps = await p.multiselect({
+            message: 'Selecione os MCPs que deseja instalar (Espaço seleciona, Enter confirma):',
+            options: SUGGESTED_MCPS.map(mcp => ({
+                value: mcp.id,
+                label: mcp.name,
+                hint: mcp.description,
+            })),
+            required: false,
+        });
+
+        if (!p.isCancel(selectedMcps) && Array.isArray(selectedMcps) && selectedMcps.length > 0) {
+            const config = Vault.read();
+            const updatedMcps = config?.mcps || {};
+
+            for (const mcpId of selectedMcps) {
+                const suggestion = getMCPSuggestion(mcpId as string);
+                if (!suggestion) continue;
+
+                const env: Record<string, string> = {};
+                if (suggestion.requiredEnvVars && suggestion.requiredEnvVars.length > 0) {
+                    p.note(`O MCP ${pc.bold(suggestion.name)} requer variáveis de ambiente.`, 'Configuração de MCP');
+                    for (const envVar of suggestion.requiredEnvVars) {
+                        const value = await p.text({
+                            message: `Digite o valor para ${pc.cyan(envVar)}:`,
+                            validate: (v) => !v ? 'Obrigatório' : undefined
+                        });
+                        if (!p.isCancel(value)) {
+                            env[envVar] = value as string;
+                        }
+                    }
+                }
+
+                updatedMcps[suggestion.id] = {
+                    command: suggestion.command,
+                    args: suggestion.args,
+                    env
+                };
+            }
+
+            // re-save vault
+            Vault.write({
+                ...Vault.read()!,
+                mcps: updatedMcps
+            });
+            p.log.success('✅ MCPs instalados com sucesso no Cofre.');
+        }
+    }
+
     p.note(
         `Provedor: ${pc.bold(tier2Config.provider)}/${pc.bold(tier2Config.model)}\n` +
         `Auth: ${pc.bold(tier2Config.authToken ? 'OAuth token' : 'API key')}\n` +
@@ -229,6 +285,7 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
         (ownerPhoneNumber
             ? `Firewall: ${pc.bold(pc.green(`🛡️  ATIVO — ${ownerPhoneNumber}@c.us`))}\n`
             : `Firewall: ${pc.bold(pc.dim('não configurado'))}\n`) +
+        `MCPs: ${pc.bold(Object.keys(Vault.read()?.mcps || {}).length)} instalados\n` +
         `Vault: ${pc.dim(Vault.configPath)}`,
         '✅ Resumo da configuração',
     );

@@ -1,4 +1,7 @@
 import { ToolRegistry } from './tool-registry.js';
+import { MCPEngine } from './mcp-engine.js';
+import { tool } from 'ai';
+import { z } from 'zod';
 import { createAndRunTool } from './tools/create-and-run.js';
 import { memorizeTool } from './tools/memorize.js';
 import { searchMemoryTool } from './tools/search-memory.js';
@@ -17,6 +20,20 @@ export class CapabilityRegistry {
      */
     static getAvailableTools() {
         const dynamicTools = ToolRegistry.getDynamicTools();
+        const mcpTools = MCPEngine.getInstance().getTools();
+        const mcpSdkTools: Record<string, any> = {};
+
+        for (const t of mcpTools) {
+            const safeName = t.toolName.replace(/[^a-zA-Z0-9_-]/g, '_');
+            // @ts-ignore - Vercel AI SDK expects strict static Zod schemas, but we are binding dynamic JSON Schemas
+            mcpSdkTools[`mcp_x_${safeName}`] = tool(({
+                description: `[MCP: ${t.mcpId}] ${t.description}\nIMPORTANT: Ignore inputSchema if missing, just pass arguments based on this schema: ${JSON.stringify(t.inputSchema)}`,
+                parameters: z.object({}).catchall(z.any()),
+                execute: async (args: any) => {
+                    return await MCPEngine.getInstance().callTool(t.mcpId, t.toolName, args);
+                }
+            }) as any);
+        }
 
         return {
             create_and_run_tool: createAndRunTool,
@@ -31,6 +48,7 @@ export class CapabilityRegistry {
             core_memory_replace: coreMemoryReplaceTool,
             core_memory_append: coreMemoryAppendTool,
             ...dynamicTools,
+            ...mcpSdkTools,
         };
     }
 
@@ -41,6 +59,7 @@ export class CapabilityRegistry {
     static getCapabilityManifest(): string {
         const forgedTools = ToolRegistry.getAll();
         const forgedNames = forgedTools.map(t => t.name).join(', ');
+        const mcpCount = MCPEngine.getInstance().getTools().length;
 
         return `You are redbusagent. You have a physical body and capabilities in the real world. Here is your current capability manifest:
 - 🧠 Memory (Two-Tier MemGPT Architecture):
@@ -49,7 +68,8 @@ export class CapabilityRegistry {
   - Distilled Wisdom: Cloud wisdom from past Tier 2 interactions is auto-injected.
 - 📱 WhatsApp: You are connected to the user's WhatsApp. You can proactively send them messages using the send_whatsapp_message tool.
 - 🌐 Web: You can browse the internet headless using web_search, web_read_page, and web_interact.
-- 🔨 Forge: You can write and execute Node.js tools. You currently have ${forgedTools.length} custom tools forged${forgedTools.length > 0 ? `: ${forgedNames}` : '.'}`;
+- 🔨 Forge: You can write and execute Node.js tools. You currently have ${forgedTools.length} custom tools forged${forgedTools.length > 0 ? `: ${forgedNames}` : '.'}
+- 🔌 MCP (Model Context Protocol): You are connected to MCP servers exposing ${mcpCount} external tools dynamically.`;
     }
 }
 

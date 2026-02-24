@@ -56,6 +56,12 @@ export async function main(args: string[]): Promise<void> {
             break;
         }
 
+        case 'mcp': {
+            const { mcpCommand } = await import('./commands/mcp.js');
+            await mcpCommand(args.slice(1));
+            break;
+        }
+
         case 'help':
         case '--help':
         case '-h':

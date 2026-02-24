@@ -13,6 +13,7 @@ Redbusagent is a next-generation AI agent framework designed to run independentl
 
 * **Zero-Config Embedded Ollama (Tier 1)**: Native integration for local, privacy-first inference without cloud costs.
 * **Smart Cloud Escalation (Tier 2)**: Dynamically routes complex queries to powerful cloud models (Claude, Gemini, OpenAI) based on cognitive load.
+* **Universal MCP Client**: Turn the agent into an AI Operating System by connecting dynamically to any standard Model Context Protocol (MCP) server.
 * **Encrypted Vault**: AES-256 encrypted local storage for API keys, user credentials, and WhatsApp session tokens.
 * **WhatsApp Bridge (Owner-Only Firewall)**: Remote control your agent from your phone via WhatsApp, protected by strict owner-only authentication.
 * **Playwright Headless Browsing**: Persistent browsing capabilities with session state, capable of navigating, scraping, searching, and engaging with dynamic web apps.
@@ -61,9 +62,16 @@ To chat with the agent locally via your terminal, simply open the TUI:
 redbus
 ```
 
+### 4. Install MCP Extensions
+To empower the agent with specialized external tools (e.g. GitHub, Postgres, specific Web Scrapers), you can install MCP servers:
+```bash
+redbus mcp install <name-or-cmd>
+```
+
 Within the TUI, you have access to **Slash Commands** for quick overrides. Type `/` in the input to explore options like:
 * `/force-local` — Route the next message exclusively to the local Tier 1 model.
 * `/switch-cloud` — Escalate to the Tier 2 provider.
+* `/mcp install` — Interactively install new MCP servers directly from the chat.
 * `/status` — View health, WhatsApp connection status, and active models.
 
 ---

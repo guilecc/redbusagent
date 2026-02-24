@@ -18,6 +18,7 @@
         "@redbusagent/shared": "*",
         "ink": "^5.1.0",
         "ink-select-input": "^6.2.0",
+        "ink-text-input": "^6.0.0",
         "react": "^18.3.1",
         "ws": "^8.18.0"
     },

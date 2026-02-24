@@ -25,6 +25,7 @@ import { ToolRegistry } from './core/tool-registry.js';
 import { OllamaManager } from './core/ollama-manager.js';
 import { WhatsAppChannel } from './channels/whatsapp.js';
 import { CoreMemory } from './core/core-memory.js';
+import { MCPEngine } from './core/mcp-engine.js';
 
 // ── Configuration ─────────────────────────────────────────────────
 
@@ -37,10 +38,11 @@ console.log(`\n🔴 ${APP_NAME} daemon v${APP_VERSION}`);
 console.log(`   PID: ${process.pid}`);
 console.log(`   Listening on ws://${HOST}:${PORT}\n`);
 
-// Initialize Forge & Registry & Core Memory
+// Initialize Forge & Registry & Core Memory & MCP
 Forge.ensureWorkspace();
 ToolRegistry.ensureFile();
 CoreMemory.ensureFile();
+await MCPEngine.getInstance().initialize();
 
 // Display vault status
 if (Vault.isConfigured()) {
@@ -65,6 +67,25 @@ if (routerStatus.tier2) {
 console.log(`  🔨 Forge: ${Forge.dir} (${routerStatus.forgedTools} ferramentas registradas)`);
 const coreMemStats = CoreMemory.getStats();
 console.log(`  🧠 Core Memory: ${coreMemStats.exists ? `${coreMemStats.charCount} chars (${coreMemStats.percentFull}% full)` : 'initialized'}`);
+
+const connectedMCPs = MCPEngine.getInstance().getConnectedMCPs();
+const mcpConfig = Vault.read()?.mcps || {};
+const totalConfiguredMCPs = Object.keys(mcpConfig).length;
+
+if (totalConfiguredMCPs > 0) {
+    const successRatio = `${connectedMCPs.length}/${totalConfiguredMCPs}`;
+    const allGood = connectedMCPs.length === totalConfiguredMCPs;
+    const mcpList = connectedMCPs.length > 0 ? `(${connectedMCPs.join(', ')})` : '';
+    const totalToolsFromMcp = MCPEngine.getInstance().getTools().length;
+
+    console.log(`  🔌 MCP Engine: ${successRatio} extensões ativas ${mcpList} [${allGood ? '✅' : '⚠️ '}]`);
+    if (connectedMCPs.length > 0) {
+        console.log(`     -> Provendo ${totalToolsFromMcp} de ferramentas dinâmicas`);
+    }
+} else {
+    console.log(`  🔌 MCP Engine: nenhuma extensão conectada`);
+}
+
 console.log('');
 
 const wsServer = new DaemonWsServer({
@@ -198,6 +219,7 @@ whatsapp.startSilent().catch(err => {
 async function shutdown(signal: string): Promise<void> {
     console.log(`\n  🛑 Received ${signal}. Shutting down gracefully...`);
     OllamaManager.shutdown();
+    await MCPEngine.getInstance().stop();
     await whatsapp.stop();
     heartbeat.stop();
     await wsServer.shutdown();

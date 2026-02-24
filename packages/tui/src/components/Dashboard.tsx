@@ -12,6 +12,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Box, Text, useInput } from 'ink';
 import SelectInput from 'ink-select-input';
+import TextInput from 'ink-text-input';
 import type {
     DaemonMessage,
     HeartbeatMessage,
@@ -26,7 +27,8 @@ import {
     PersonaManager,
     Vault,
     fetchTier2Models,
-    Tier2Provider
+    Tier2Provider,
+    getMCPSuggestion
 } from '@redbusagent/shared';
 import { TuiWsClient } from '../infra/ws-client.js';
 
@@ -68,7 +70,15 @@ export function Dashboard(): React.ReactElement {
     const [currentModel, setCurrentModel] = useState<string | null>(null);
     const [proactiveThought, setProactiveThought] = useState<{ text: string; status: 'thinking' | 'action' | 'done' } | null>(null);
     const [isSlashMenuOpen, setIsSlashMenuOpen] = useState(false);
-    const [activeMenu, setActiveMenu] = useState<'main' | 'cloud' | 'cloud-models'>('main');
+    const [activeMenu, setActiveMenu] = useState<'main' | 'cloud' | 'cloud-models' | 'mcp-install-id' | 'mcp-install-env'>('main');
+
+    // MCP Installation State
+    const [mcpInputStr, setMcpInputStr] = useState('');
+    const [mcpTargetId, setMcpTargetId] = useState('');
+    const [mcpEnvQueue, setMcpEnvQueue] = useState<string[]>([]);
+    const [mcpCurrentEnvKey, setMcpCurrentEnvKey] = useState('');
+    const [mcpCollectedEnv, setMcpCollectedEnv] = useState<Record<string, string>>({});
+
     const [isFetchingModels, setIsFetchingModels] = useState(false);
     const [cloudModels, setCloudModels] = useState<{ label: string, value: string, hint?: string, id: string }[]>([]);
     const [selectedProvider, setSelectedProvider] = useState<Tier2Provider | null>(null);
@@ -404,7 +414,9 @@ export function Dashboard(): React.ReactElement {
                         paddingX={1}
                     >
                         <Text bold color="yellow">
-                            {activeMenu === 'main' ? '🚀 COMMAND PALETTE' : '☁️ SELECT CLOUD TIER 2'}
+                            {activeMenu === 'main' ? '🚀 COMMAND PALETTE' :
+                                activeMenu === 'cloud' ? '☁️ SELECT CLOUD TIER 2' :
+                                    activeMenu.startsWith('mcp') ? '🔌 INSTALL MCP SERVER' : ''}
                         </Text>
 
                         {activeMenu === 'main' && (
@@ -413,12 +425,16 @@ export function Dashboard(): React.ReactElement {
                                     { label: `🔄 /toggle-tier    - Current: Tier ${defaultTier} (${defaultTier === 1 ? 'Local' : 'Cloud'})`, value: 'toggle-tier' },
                                     { label: '🤖 /auto-route     - Restore Cognitive Routing', value: 'auto-route' },
                                     { label: '☁️  /switch-cloud  - Change Tier 2 Provider', value: 'switch-cloud' },
+                                    { label: '🔌 /mcp install    - Install new MCP Server', value: 'mcp-install' },
                                     { label: '📊 /status        - Daemon & Model Status', value: 'status' },
                                     { label: '❌ Close Menu', value: 'close' },
                                 ]}
                                 onSelect={(item) => {
                                     if (item.value === 'close') {
                                         setIsSlashMenuOpen(false);
+                                    } else if (item.value === 'mcp-install') {
+                                        setActiveMenu('mcp-install-id');
+                                        setMcpInputStr('');
                                     } else if (item.value === 'switch-cloud') {
                                         setActiveMenu('cloud');
                                     } else if (item.value === 'toggle-tier') {
@@ -446,6 +462,81 @@ export function Dashboard(): React.ReactElement {
                                     }
                                 }}
                             />
+                        )}
+
+                        {activeMenu === 'mcp-install-id' && (
+                            <Box flexDirection="column">
+                                <Text>Enter MCP Name (from catalog) or Command (e.g. npx -y ...):</Text>
+                                <TextInput
+                                    value={mcpInputStr}
+                                    onChange={setMcpInputStr}
+                                    onSubmit={(val) => {
+                                        const trimmed = val.trim();
+                                        if (!trimmed) return;
+
+                                        const suggestion = getMCPSuggestion(trimmed);
+                                        setMcpTargetId(trimmed);
+                                        setMcpCollectedEnv({});
+
+                                        if (suggestion && suggestion.requiredEnvVars && suggestion.requiredEnvVars.length > 0) {
+                                            setMcpEnvQueue([...suggestion.requiredEnvVars]);
+                                            setMcpCurrentEnvKey(suggestion.requiredEnvVars[0]!);
+                                            setMcpInputStr('');
+                                            setActiveMenu('mcp-install-env');
+                                        } else {
+                                            let command = '';
+                                            let args: string[] = [];
+                                            let mcpId = trimmed;
+
+                                            if (suggestion) {
+                                                command = suggestion.command;
+                                                args = suggestion.args;
+                                                mcpId = suggestion.id;
+                                            } else {
+                                                const parts = trimmed.split(' ');
+                                                command = parts[0]!;
+                                                args = parts.slice(1);
+                                                mcpId = `custom-${Math.random().toString(36).substring(2, 8)}`;
+                                            }
+
+                                            const config = Vault.read();
+                                            Vault.write({ ...config!, mcps: { ...(config?.mcps || {}), [mcpId]: { command, args, env: {} } } });
+
+                                            setChatLines(prev => [...prev.slice(-(MAX_CHAT_LINES - 1)), `✅ MCP ${mcpId} installed to Vault. Restart daemon to apply.`]);
+                                            setIsSlashMenuOpen(false);
+                                        }
+                                    }}
+                                />
+                                <Text dimColor color="gray">Press Enter to submit</Text>
+                            </Box>
+                        )}
+
+                        {activeMenu === 'mcp-install-env' && (
+                            <Box flexDirection="column">
+                                <Text>Enter value for environment variable <Text color="cyan">{mcpCurrentEnvKey}</Text>:</Text>
+                                <TextInput
+                                    value={mcpInputStr}
+                                    onChange={setMcpInputStr}
+                                    onSubmit={(val) => {
+                                        const newCollected = { ...mcpCollectedEnv, [mcpCurrentEnvKey]: val.trim() };
+                                        setMcpCollectedEnv(newCollected);
+
+                                        const nextQueue = mcpEnvQueue.slice(1);
+                                        if (nextQueue.length > 0) {
+                                            setMcpEnvQueue(nextQueue);
+                                            setMcpCurrentEnvKey(nextQueue[0]!);
+                                            setMcpInputStr('');
+                                        } else {
+                                            const suggestion = getMCPSuggestion(mcpTargetId)!;
+                                            const config = Vault.read();
+                                            Vault.write({ ...config!, mcps: { ...(config?.mcps || {}), [suggestion.id]: { command: suggestion.command, args: suggestion.args, env: newCollected } } });
+
+                                            setChatLines(prev => [...prev.slice(-(MAX_CHAT_LINES - 1)), `✅ Suggested MCP ${suggestion.id} installed to Vault. Restart daemon to apply.`]);
+                                            setIsSlashMenuOpen(false);
+                                        }
+                                    }}
+                                />
+                            </Box>
                         )}
                         {activeMenu === 'cloud' && (
                             <SelectInput
