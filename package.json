@@ -11,7 +11,8 @@
     "packages/shared",
     "packages/daemon",
     "packages/tui",
-    "packages/cli"
+    "packages/cli",
+    "frontend"
   ],
   "scripts": {
     "start": "bin/redbus",

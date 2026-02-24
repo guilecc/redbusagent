@@ -25,6 +25,7 @@ ${pc.bold('Comandos:')}
   ${pc.yellow('start')}    Inicia o Daemon + TUI interativa
   ${pc.yellow('config')}   Abre o assistente de configuração
   ${pc.yellow('channel')}  Gerencia Canais Extras (ex: whatsapp)
+  ${pc.yellow('update')}   Baixa e instala a última versão do Redbus
   ${pc.yellow('help')}     Mostra esta mensagem
 
 ${pc.bold('Começando:')}
@@ -59,6 +60,12 @@ export async function main(args: string[]): Promise<void> {
         case 'mcp': {
             const { mcpCommand } = await import('./commands/mcp.js');
             await mcpCommand(args.slice(1));
+            break;
+        }
+
+        case 'update': {
+            const { updateCommand } = await import('./commands/update.js');
+            await updateCommand();
             break;
         }
 

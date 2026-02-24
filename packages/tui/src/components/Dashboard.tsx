@@ -28,7 +28,9 @@ import {
     Vault,
     fetchTier2Models,
     Tier2Provider,
-    getMCPSuggestion
+    getMCPSuggestion,
+    checkForUpdates,
+    performUpdate
 } from '@redbusagent/shared';
 import { TuiWsClient } from '../infra/ws-client.js';
 
@@ -83,6 +85,8 @@ export function Dashboard(): React.ReactElement {
     const [cloudModels, setCloudModels] = useState<{ label: string, value: string, hint?: string, id: string }[]>([]);
     const [selectedProvider, setSelectedProvider] = useState<Tier2Provider | null>(null);
     const [isOnboarding, setIsOnboarding] = useState(!PersonaManager.exists());
+    const [updateAvailable, setUpdateAvailable] = useState<string | null>(null);
+    const [isUpdating, setIsUpdating] = useState(false);
 
     const [defaultTier, setDefaultTier] = useState<1 | 2>(() => {
         const config = Vault.read();
@@ -213,6 +217,19 @@ export function Dashboard(): React.ReactElement {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
+    // ── Update Checker ─────────────────────────────────────────
+
+    useEffect(() => {
+        checkForUpdates().then((info) => {
+            if (info.updateAvailable) {
+                setUpdateAvailable(info.latestVersion);
+                addLog(`Update missing: v${info.latestVersion} is available. Use /update to install.`, 'yellow');
+            }
+        }).catch(() => {
+            // Silently ignore update checks failing
+        });
+    }, [addLog]);
+
     // ── Message Handler ───────────────────────────────────────
 
     const handleDaemonMessage = useCallback((message: DaemonMessage) => {
@@ -319,6 +336,9 @@ export function Dashboard(): React.ReactElement {
                         🔴 {APP_NAME}
                     </Text>
                     <Text color="gray"> v{APP_VERSION}</Text>
+                    {updateAvailable && (
+                        <Text color="yellow" bold> [UPDATE v{updateAvailable} AVAIL]</Text>
+                    )}
                 </Box>
                 <Box gap={2}>
                     <Text color={connected ? 'green' : 'yellow'}>
@@ -386,6 +406,11 @@ export function Dashboard(): React.ReactElement {
                         ⏳ Pensando...
                     </Text>
                 )}
+                {isUpdating && (
+                    <Text color="cyan" italic>
+                        🔄 Atualizando o sistema... Aguarde.
+                    </Text>
+                )}
             </Box>
 
             {/* ── Input ───────────────────────────────────────────── */}
@@ -426,6 +451,7 @@ export function Dashboard(): React.ReactElement {
                                     { label: '🤖 /auto-route     - Restore Cognitive Routing', value: 'auto-route' },
                                     { label: '☁️  /switch-cloud  - Change Tier 2 Provider', value: 'switch-cloud' },
                                     { label: '🔌 /mcp install    - Install new MCP Server', value: 'mcp-install' },
+                                    { label: '🔄 /update          - Install New Version', value: 'update' },
                                     { label: '📊 /status        - Daemon & Model Status', value: 'status' },
                                     { label: '❌ Close Menu', value: 'close' },
                                 ]}
@@ -452,6 +478,27 @@ export function Dashboard(): React.ReactElement {
                                             payload: { command: 'set-default-tier', args: { value: nextTier } }
                                         });
                                         setIsSlashMenuOpen(false);
+                                    } else if (item.value === 'update') {
+                                        setIsSlashMenuOpen(false);
+                                        setIsUpdating(true);
+                                        setChatLines((prev) => [
+                                            ...prev.slice(-(MAX_CHAT_LINES - 1)),
+                                            `🔄 Baixando e instalando nova versão... Isso pode demorar.`
+                                        ]);
+                                        performUpdate().then(() => {
+                                            setChatLines((prev) => [
+                                                ...prev.slice(-(MAX_CHAT_LINES - 1)),
+                                                `✅ Atualização concluída com sucesso! Por favor, reinicie o Redbus Agent pressionando Ctrl+C e iniciando novamente.`
+                                            ]);
+                                            setIsUpdating(false);
+                                            setUpdateAvailable(null);
+                                        }).catch((err) => {
+                                            setChatLines((prev) => [
+                                                ...prev.slice(-(MAX_CHAT_LINES - 1)),
+                                                `❌ Falha na atualização: ${err.message}`
+                                            ]);
+                                            setIsUpdating(false);
+                                        });
                                     } else {
                                         clientRef.current?.send({
                                             type: 'system:command',
