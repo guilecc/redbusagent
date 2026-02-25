@@ -5,6 +5,8 @@ import { z } from 'zod';
 import { createAndRunTool } from './tools/create-and-run.js';
 import { memorizeTool } from './tools/memorize.js';
 import { searchMemoryTool } from './tools/search-memory.js';
+import { forgetMemoryTool } from './tools/forget-memory.js';
+import { searchMemoryAllTool } from './tools/search-memory-all.js';
 import { scheduleTaskTool } from './tools/schedule-task.js';
 import { listScheduledTasksTool } from './tools/list-scheduled-tasks.js';
 import { deleteScheduledTaskTool } from './tools/delete-scheduled-task.js';
@@ -58,6 +60,8 @@ export class CapabilityRegistry {
             create_and_run_tool: createAndRunTool,
             memorize: memorizeTool,
             search_memory: searchMemoryTool,
+            forget_memory: forgetMemoryTool,
+            search_memory_all: searchMemoryAllTool,
             schedule_task: scheduleTaskTool,
             list_scheduled_tasks: listScheduledTasksTool,
             delete_scheduled_task: deleteScheduledTaskTool,

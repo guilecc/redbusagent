@@ -133,17 +133,24 @@ ${content}
 export function getSystemPromptTier2(): string {
    const coreMemBlock = getCoreMemoryBlock();
 
-   const map = MemoryManager.getCognitiveMap();
+   const mapEntries = MemoryManager.getCognitiveMapRich();
 
-   const memoryInject = map.length > 0 ? `
+   const memoryInject = mapEntries.length > 0 ? `
 ## Memória de Longo Prazo (Archival Memory — Organic RAG)
 
-Você possui memórias profundas guardadas via Embeddings nas seguintes categorias conhecidas: [${map.join(', ')}].
+Você possui memórias profundas guardadas via Embeddings nas seguintes categorias conhecidas:
+${mapEntries.map(e =>
+    `- **${e.category}** (${e.memoryCount} memória${e.memoryCount !== 1 ? 's' : ''}${e.lastUpdated ? ', última: ' + e.lastUpdated.split('T')[0] : ''})${e.description ? ' — ' + e.description : ''}`
+).join('\n')}
+
 Se o usuário perguntar algo relacionado, USE a ferramenta \`search_memory\` para recuperar o contexto do Cognitive Map local antes de responder.
+Quando não souber em qual categoria buscar, use \`search_memory_all\` para buscar em TODAS as categorias simultaneamente.
 Também use \`memorize\` se observar ou descobrir novos fatos de infraestrutura arquitetural duradoura que valham a pena guardar no cortex, ou se o usuário pedir explicitamente para "guardar na memória".
+Para corrigir ou remover memórias incorretas/desatualizadas, use \`forget_memory\`.
 NOTA: O Auto-RAG já recupera chunks relevantes automaticamente e os prepende à mensagem do usuário. Use \`search_memory\` apenas para buscas mais profundas ou específicas.
 
 REGRA CRÍTICA PARA MEMORIZAÇÃO: ANTES de usar \`memorize\`, você DEVE SEMPRE usar \`search_memory\` na categoria alvo para verificar se algo parecido ou conflitante já foi armazenado.
+O sistema possui deduplicação automática por hash — se tentar memorizar algo idêntico, ele será ignorado automaticamente.
 Se a informação já existir ou houver conflito, seja crítico e avise o usuário ANTES de memorizar novamente.
 ` : '';
 

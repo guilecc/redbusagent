@@ -10,8 +10,11 @@ export const memorizeTool = tool({
     }),
     execute: async (params: { category: string; content: string }) => {
         try {
-            await MemoryManager.memorize(params.category, params.content);
-            return { success: true, message: `Memorized chunk under category "${params.category}".` };
+            const result = await MemoryManager.memorize(params.category, params.content);
+            if (result.duplicate) {
+                return { success: true, message: `This content already exists in category "${params.category}" — skipped duplicate storage.`, duplicate: true };
+            }
+            return { success: true, message: `Memorized chunk under category "${params.category}".`, duplicate: false };
         } catch (error) {
             return { success: false, error: (error as Error).message };
         }
