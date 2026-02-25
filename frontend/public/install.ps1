@@ -5,21 +5,21 @@ $InstallDir = "$env:USERPROFILE\.redbusagent"
 $Branch = "main"
 
 Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "🚌 Bem-vindo ao instalador do Redbus Agent!" -ForegroundColor Green
+Write-Host "🚌 Welcome to the Redbus Agent Installer!" -ForegroundColor Green
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
-# 1. Verifica pré-requisitos
-Write-Host ">> Verificando dependências do sistema..." -ForegroundColor Yellow
+# 1. Check prerequisites
+Write-Host ">> Checking system dependencies..." -ForegroundColor Yellow
 
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
-    Write-Host "Instalando git via winget..." -ForegroundColor Yellow
+    Write-Host "Installing git via winget..." -ForegroundColor Yellow
     winget install --id Git.Git -e --source winget --accept-package-agreements --accept-source-agreements
     $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
 }
 
 if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
-    Write-Host "Instalando Node.js via winget..." -ForegroundColor Yellow
+    Write-Host "Installing Node.js via winget..." -ForegroundColor Yellow
     winget install --id OpenJS.NodeJS -e --source winget --accept-package-agreements --accept-source-agreements
     $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
 }
@@ -29,52 +29,53 @@ $NodeVersion = $NodeVersionOutput -replace 'v', ''
 $NodeMajor = [int]($NodeVersion.Split('.')[0])
 
 if ($NodeMajor -lt 18) {
-    Write-Host "Versão do Node.js ($NodeVersionOutput) é menor que 18. Atualizando..." -ForegroundColor Yellow
+    Write-Host "Node.js version ($NodeVersionOutput) is lower than 18. Updating..." -ForegroundColor Yellow
     winget install --id OpenJS.NodeJS -e --source winget --accept-package-agreements --accept-source-agreements
     $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
 }
 
 if (-not (Get-Command ollama -ErrorAction SilentlyContinue)) {
-    Write-Host "Instalando Ollama via winget..." -ForegroundColor Yellow
+    Write-Host "Installing Ollama via winget..." -ForegroundColor Yellow
     winget install --id Ollama.Ollama -e --source winget --accept-package-agreements --accept-source-agreements
     $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
 }
 
 $NodeVersionCheck = node -v
-Write-Host "✔️ Dependências OK ($NodeVersionCheck, git, npm, ollama)" -ForegroundColor Green
+Write-Host "✔️ Dependencies OK ($NodeVersionCheck, git, npm, ollama)" -ForegroundColor Green
 
-# 2. Clonar ou atualizar repositório
-Write-Host ">> Baixando o Redbus Agent..." -ForegroundColor Yellow
+# 2. Clone or update repository
+Write-Host ">> Downloading Redbus Agent..." -ForegroundColor Yellow
 
 if (Test-Path $InstallDir) {
-    Write-Host "Diretório $InstallDir já existe. Atualizando para a versão mais recente..."
+    Write-Host "Directory $InstallDir already exists. Updating to the latest version..."
     Set-Location $InstallDir
     git fetch origin
     git reset --hard origin/$Branch
 } else {
-    Write-Host "Clonando o repositório para $InstallDir..."
+    Write-Host "Cloning repository to $InstallDir..."
     git clone -b $Branch $RepoUrl $InstallDir
     Set-Location $InstallDir
 }
 
-# 3. Instalando pacotes npm
+# 3. Install npm packages
 Write-Host ""
-Write-Host ">> Instalando pacotes npm e compilando dependências..." -ForegroundColor Yellow
+Write-Host ">> Installing npm packages and building dependencies..." -ForegroundColor Yellow
 npm install --no-audit --no-fund
+npm run build
 
-# 4. Cria o link global para o CLI
+# 4. Create global link for the CLI
 Write-Host ""
-Write-Host ">> Configurando o binário global 'redbus'..." -ForegroundColor Yellow
+Write-Host ">> Configuring global 'redbus' binary..." -ForegroundColor Yellow
 npm link
 
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "✅ Redbus Agent instalado com sucesso!" -ForegroundColor Green
+Write-Host "✅ Redbus Agent installed successfully!" -ForegroundColor Green
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "Para iniciar o Redbus Agent, digite no seu terminal:"
+Write-Host "To start the Redbus Agent, type in your terminal:"
 Write-Host "  redbus" -ForegroundColor Yellow
 Write-Host ""
-Write-Host "Para configurar os provedores de IA, digite:"
+Write-Host "To configure AI providers, type:"
 Write-Host "  redbus config" -ForegroundColor Yellow
 Write-Host ""
