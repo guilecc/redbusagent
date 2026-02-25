@@ -14,7 +14,7 @@ export function calculateComplexityScore(prompt: string, recentHistory: any[] = 
     score += lengthScore;
 
     // Coding & Infrastructure Keywords (+40)
-    const codingRegex = /\b(code|script|function|api|regex|docker|bash|shell|schedule|cron|bug|error|refactor|deploy|compile|database|sql|query|optimize|git|commit|merge|architecture|endpoint|json|yaml|forge|build|fix|crie|código|codar|função|erro|banco de dados|refatore|refatorar|otimizar|compilar|servidor|infraestrutura|terminal|comando|agendar|automatizar|conserte|integrar|integração|task|tasks|timer|alarme|aviso|lembrar|lembre|registre|minutos|horas)\b/i;
+    const codingRegex = /\b(edit|change line|replace|modify|editar|modificar|trocar|substituir|code|script|function|api|regex|docker|bash|shell|schedule|cron|bug|error|refactor|deploy|compile|database|sql|query|optimize|git|commit|merge|architecture|endpoint|json|yaml|forge|build|fix|crie|código|codar|função|erro|banco de dados|refatore|refatorar|otimizar|compilar|servidor|infraestrutura|terminal|comando|agendar|automatizar|conserte|integrar|integração|task|tasks|timer|alarme|aviso|lembrar|lembre|registre|minutos|horas)\b/i;
     if (codingRegex.test(lowerPrompt)) {
         score += 40;
     }

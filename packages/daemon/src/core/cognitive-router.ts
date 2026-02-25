@@ -55,7 +55,7 @@ function createTier1Model(): LanguageModel {
     return ollama(targetModel);
 }
 
-function createTier2Model(): LanguageModel {
+export function createTier2Model(): LanguageModel {
     const config = getTier2Config();
     if (!config) throw new Error('Tier 2 não configurado. Rode: redbus config');
 

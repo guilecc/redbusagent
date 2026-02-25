@@ -46,4 +46,36 @@ export class BrowserManager {
         const stateJson = await context.storageState();
         Vault.storeBrowserSession(domain, stateJson);
     }
+
+    /**
+     * Navigates to a URL, optionally injecting auth state, waits for network idle,
+     * and returns a base64 encoded JPEG screenshot.
+     */
+    static async captureWebpageScreenshot(url: string): Promise<string> {
+        let domain = 'unknown';
+        try {
+            domain = new URL(url).hostname;
+        } catch { }
+
+        const { page, context } = await this.getPageForDomain(domain);
+
+        try {
+            // waitUntil: 'networkidle' ensures images and fonts are loaded for vision
+            await page.goto(url, { waitUntil: 'networkidle', timeout: 30000 });
+
+            // Take a slightly compressed JPEG to optimize LLM payload size
+            const buffer = await page.screenshot({
+                fullPage: true,
+                type: 'jpeg',
+                quality: 80
+            });
+
+            // Convert to Base64
+            const base64 = Buffer.from(buffer).toString('base64');
+            return base64;
+        } finally {
+            // Always clean up resources immediately for one-off screenshots
+            await context.close();
+        }
+    }
 }

@@ -15,6 +15,12 @@ import { updatePersonaTool } from './tools/update-persona.js';
 import { sendWhatsappMessageTool } from './tools/send-whatsapp-message.js';
 import { coreMemoryReplaceTool, coreMemoryAppendTool } from './tools/core-memory-replace.js';
 import { executeShellCommandTool } from './shell-executor.js';
+import { readFileChunkTool } from './tools/read-file-chunk.js';
+import { searchCodePatternTool } from './tools/search-code-pattern.js';
+import { editFileBlocksTool } from './tools/edit-file-blocks.js';
+import { getGitStatusTool, getGitDiffTool, gitCommitChangesTool } from './tools/git-manager.js';
+import { startBackgroundProcessTool, getProcessLogsTool, killBackgroundProcessTool } from './tools/process-manager.js';
+import { visualInspectPageTool } from './tools/visual-inspect-page.js';
 import { Forge } from './forge.js';
 import { Vault } from '@redbusagent/shared';
 import { WhatsAppChannel } from '../channels/whatsapp.js';
@@ -62,6 +68,16 @@ export class CapabilityRegistry {
             ...(hasWhatsapp ? { send_whatsapp_message: sendWhatsappMessageTool } : {}),
             core_memory_replace: coreMemoryReplaceTool,
             core_memory_append: coreMemoryAppendTool,
+            read_file_chunk: readFileChunkTool,
+            search_code_pattern: searchCodePatternTool,
+            edit_file_blocks: editFileBlocksTool,
+            get_git_status: getGitStatusTool,
+            get_git_diff: getGitDiffTool,
+            git_commit_changes: gitCommitChangesTool,
+            start_background_process: startBackgroundProcessTool,
+            get_process_logs: getProcessLogsTool,
+            kill_background_process: killBackgroundProcessTool,
+            visual_inspect_page: visualInspectPageTool,
             ...dynamicTools,
             ...mcpSdkTools,
         };
@@ -84,7 +100,12 @@ export class CapabilityRegistry {
   - Distilled Wisdom: Cloud wisdom from past Tier 2 interactions is auto-injected.
 ${hasWhatsapp ? `- 📱 WhatsApp: You are connected to the user's WhatsApp. You can proactively send them messages using the send_whatsapp_message tool.` : ''}
 - ⏱️ Task Scheduler: You can schedule, list, and delete recurring jobs using schedule_task, list_scheduled_tasks, delete_scheduled_task.
+- 🔄 Background Processes: You can start long-running commands (like servers) using start_background_process. The system will watch the logs and notify you if it crashes so you can fix it automatically. Use kill_background_process to stop them.
+- 👁️ Visual UI Debugging: You have access to a headless browser with vision capabilities. If a user asks you to check a layout, verify a visual bug, or "look" at a UI, use visual_inspect_page. DO NOT rely on text DOM scraping for visual issues.
 - 🌐 Web: You can browse the internet headless using web_search, web_read_page, and web_interact.
+- 🐙 Version Control (Git): You have full Git awareness. Use get_git_status to orient yourself, get_git_diff to review your code edits, and git_commit_changes to save milestones. When writing or modifying code, you are working inside a Git repository. ALWAYS use get_git_diff after modifying a file with edit_file_blocks to review your own work. If the diff looks wrong, fix it before communicating with the user. If the user asks you to save or finalize the work, use git_commit_changes.
+- 🔍 Code Navigation: You can search the codebase using search_code_pattern and read specific parts of files using read_file_chunk. NEVER guess code structure; always search and read the exact lines before forging or modifying files.
+- 🛠️ Surgical Code Editing: When you need to modify an existing file, DO NOT recreate the whole file. Use the edit_file_blocks tool. Provide the EXACT existing lines in the search_block, and your new lines in the replace_block. Always read the file first to get the exact indentation before attempting an edit.
 - 💻 System Shell: You have direct terminal access. You can execute OS commands via the execute_shell_command tool.
 - 🔨 Forge: You can write and execute Node.js tools. Your tools and workspace are physically located at: \`${Forge.dir}\`. You currently have ${forgedTools.length} custom tools forged${forgedTools.length > 0 ? `: ${forgedNames}` : '.'}
 - 🔌 MCP (Model Context Protocol): You are connected to MCP servers exposing ${mcpCount} external tools dynamically.`;

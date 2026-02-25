@@ -12,6 +12,7 @@ import { askTier1, askTier2 } from './cognitive-router.js';
 import { calculateComplexityScore } from './heuristic-router.js';
 import { CoreMemory } from './core-memory.js';
 import { shellApproval } from './shell-executor.js';
+import { processMonitorEmitter } from './tools/process-manager.js';
 
 export class ChatHandler {
     private forceTier1 = false;
@@ -28,6 +29,32 @@ export class ChatHandler {
                 type: 'chat:stream:done',
                 timestamp: new Date().toISOString(),
                 payload: { requestId: id, fullText: '', tier: 'tier1', model: 'system' }
+            });
+        });
+
+        // The Watcher: Autonomous Reaction Loop
+        processMonitorEmitter.on('process_crashed', async ({ alias, logSnippet }) => {
+            console.log(`  🚨 [The Watcher] Process crashed: ${alias}. Triggering autonomous reaction.`);
+
+            const requestId = `sys-${Date.now()}`;
+            const alertPrompt = `⚠️ [SYSTEM ALERT]: The background process '${alias}' just crashed or threw an error. Last logs:\n\`\`\`\n${logSnippet}\n\`\`\`\n\nPlease analyze this error, use edit_file_blocks or execute_shell_command to fix the code/environment if necessary, and restart the process safely.`;
+
+            // Notify User visually that the system intervened
+            this.wsServer.broadcast({
+                type: 'log',
+                timestamp: new Date().toISOString(),
+                payload: { level: 'error', source: 'The Watcher', message: `Background loop '${alias}' crashed. Engaging auto-recovery (Tier 2)...` }
+            });
+
+            // Feed the synthetic prompt silently back into the router
+            // Note: Since score for "error" and "edit_file_blocks" is +40, it will naturally hit Tier 2.
+            await this.handleChatRequest('system', {
+                type: 'chat:request',
+                timestamp: new Date().toISOString(),
+                payload: {
+                    requestId,
+                    content: alertPrompt
+                }
             });
         });
     }
