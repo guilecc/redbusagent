@@ -60,6 +60,7 @@ if (Test-Path $InstallDir) {
 # 3. Install npm packages
 Write-Host ""
 Write-Host ">> Installing npm packages and building dependencies..." -ForegroundColor Yellow
+npm run clean -ErrorAction SilentlyContinue
 npm install --no-audit --no-fund
 npm run build
 

@@ -91,6 +91,7 @@ fi
 # 3. Install npm packages
 echo ""
 echo -e "${YELLOW}>> Installing npm packages and building dependencies...${NC}"
+npm run clean || true
 npm install --no-audit --no-fund
 npm run build
 

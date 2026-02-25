@@ -13,6 +13,13 @@
         "noImplicitOverride": true,
         "noPropertyAccessFromIndexSignature": true,
         "forceConsistentCasingInFileNames": true,
+        /* Paths resolving for workspaces natively */
+        "baseUrl": ".",
+        "paths": {
+            "@redbusagent/shared": [
+                "./packages/shared/src/index.ts"
+            ]
+        },
         /* Emit */
         "declaration": true,
         "declarationMap": true,
