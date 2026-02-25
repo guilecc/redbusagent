@@ -103,14 +103,32 @@ echo ""
 echo -e "${YELLOW}>> Configuring global 'redbus' binary...${NC}"
 npm link
 
+# Ensure redbus is accessible: create a symlink in /usr/local/bin if npm global bin is not in PATH
+NPM_BIN="$(npm prefix -g)/bin"
+if ! command -v redbus &> /dev/null; then
+    if [ -f "$NPM_BIN/redbus" ] || [ -L "$NPM_BIN/redbus" ]; then
+        echo -e "${YELLOW}>> Adding redbus to /usr/local/bin...${NC}"
+        sudo ln -sf "$NPM_BIN/redbus" /usr/local/bin/redbus 2>/dev/null || ln -sf "$NPM_BIN/redbus" "$HOME/.local/bin/redbus" 2>/dev/null || true
+    fi
+fi
+
 echo ""
 echo -e "${BLUE}========================================${NC}"
 echo -e "${GREEN}✅ Redbus Agent installed successfully!${NC}"
 echo -e "${BLUE}========================================${NC}"
 echo -e ""
-echo -e "To start the Redbus Agent, type in your terminal:"
-echo -e "  ${YELLOW}redbus${NC}"
-echo -e ""
-echo -e "To configure AI providers, type:"
-echo -e "  ${YELLOW}redbus config${NC}"
+if command -v redbus &> /dev/null; then
+    echo -e "To start the Redbus Agent, type in your terminal:"
+    echo -e "  ${YELLOW}redbus${NC}"
+    echo -e ""
+    echo -e "To configure AI providers, type:"
+    echo -e "  ${YELLOW}redbus config${NC}"
+else
+    echo -e "To start the Redbus Agent, ${YELLOW}open a new terminal${NC} and type:"
+    echo -e "  ${YELLOW}redbus${NC}"
+    echo -e ""
+    echo -e "If 'redbus' is still not found, run:"
+    echo -e "  ${YELLOW}export PATH=\"$NPM_BIN:\$PATH\"${NC}"
+    echo -e "  ${YELLOW}redbus${NC}"
+fi
 echo -e ""
