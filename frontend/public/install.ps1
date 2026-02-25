@@ -51,6 +51,11 @@ if (Test-Path $InstallDir) {
     Set-Location $InstallDir
     git fetch origin
     git reset --hard origin/$Branch
+    # Always clean build artifacts on update to avoid stale cache issues
+    Write-Host ">> Cleaning previous build artifacts..." -ForegroundColor Yellow
+    Get-ChildItem -Path "packages" -Recurse -Include "dist","*.tsbuildinfo" -Directory -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+    Get-ChildItem -Path "packages" -Recurse -Include "*.tsbuildinfo" -File -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+    if (Test-Path "frontend\dist") { Remove-Item -Recurse -Force "frontend\dist" -ErrorAction SilentlyContinue }
 } else {
     Write-Host "Cloning repository to $InstallDir..."
     git clone -b $Branch $RepoUrl $InstallDir
@@ -59,16 +64,6 @@ if (Test-Path $InstallDir) {
 
 # 3. Install npm packages
 Write-Host ""
-
-# Ask if user wants to clean before installing
-if ((Test-Path "$InstallDir\node_modules") -or (Test-Path "$InstallDir\packages\shared\dist")) {
-    Write-Host ">> A previous installation was detected." -ForegroundColor Yellow
-    $DoClean = Read-Host "Do you want to clean before reinstalling? (removes node_modules, dist and cache) [y/N]"
-    if ($DoClean -match '^[Yy]$') {
-        Write-Host ">> Cleaning previous build artifacts..." -ForegroundColor Yellow
-        npm run clean 2>$null
-    }
-}
 
 Write-Host ">> Installing npm packages and building dependencies..." -ForegroundColor Yellow
 npm install --no-audit --no-fund

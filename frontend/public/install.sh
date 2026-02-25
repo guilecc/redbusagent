@@ -82,6 +82,9 @@ if [ -d "$INSTALL_DIR" ]; then
     cd "$INSTALL_DIR"
     git fetch origin
     git reset --hard origin/$BRANCH
+    # Always clean build artifacts on update to avoid stale cache issues
+    echo -e "${YELLOW}>> Cleaning previous build artifacts...${NC}"
+    rm -rf packages/*/dist packages/*/*.tsbuildinfo frontend/dist 2>/dev/null || true
 else
     echo -e "Cloning repository to $INSTALL_DIR..."
     git clone -b $BRANCH "$REPO_URL" "$INSTALL_DIR"
@@ -90,16 +93,6 @@ fi
 
 # 3. Install npm packages
 echo ""
-
-# Ask if user wants to clean before installing
-if [ -d "$INSTALL_DIR/node_modules" ] || [ -d "$INSTALL_DIR/packages/shared/dist" ]; then
-    echo -e "${YELLOW}>> A previous installation was detected.${NC}"
-    read -p "Do you want to clean before reinstalling? (removes node_modules, dist and cache) [y/N]: " DO_CLEAN
-    if [[ "$DO_CLEAN" =~ ^[Yy]$ ]]; then
-        echo -e "${YELLOW}>> Cleaning previous build artifacts...${NC}"
-        npm run clean || true
-    fi
-fi
 
 echo -e "${YELLOW}>> Installing npm packages and building dependencies...${NC}"
 npm install --no-audit --no-fund
