@@ -17,5 +17,5 @@ export PATH="$PROJECT_ROOT/node_modules/.bin:$PATH"
 export NODE_PATH="$PROJECT_ROOT/node_modules"
 export NODE_OPTIONS="${NODE_OPTIONS:-} --no-deprecation"
 
-# Run node with tsx loader
-exec node --import tsx "$PROJECT_ROOT/packages/cli/src/main.ts" "$@"
+# Run the cli using the local tsx executable
+exec "$PROJECT_ROOT/node_modules/.bin/tsx" "$PROJECT_ROOT/packages/cli/src/main.ts" "$@"
