@@ -1,4 +1,4 @@
-import cron from 'node-cron';
+import cron, { type ScheduledTask } from 'node-cron';
 import { DaemonWsServer } from '../infra/ws-server.js';
 import { ChatHandler } from './chat-handler.js';
 import { v4 as uuidv4 } from 'uuid';
@@ -9,7 +9,7 @@ import { join } from 'node:path';
 export class TaskScheduler {
     private static wsServer: DaemonWsServer;
     private static chatHandler: ChatHandler;
-    private static jobs: Map<string, { job: cron.ScheduledTask, expression: string, prompt: string }> = new Map();
+    private static jobs: Map<string, { job: ScheduledTask, expression: string, prompt: string }> = new Map();
 
     private static get storagePath(): string {
         return join(Vault.dir, 'scheduler.json');
