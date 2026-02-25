@@ -14,22 +14,22 @@ export async function configCommand(): Promise<void> {
     }
 
     // Step 2: The Maintenance Menu
-    p.intro(pc.bgRed(pc.white(' 🔴 redbusagent — Menu de Manutenção ')));
+    p.intro(pc.bgRed(pc.white(' 🔴 redbusagent — Maintenance Menu ')));
 
     const choice = await p.select({
-        message: 'Notei que o redbusagent já está configurado. O que você gostaria de fazer?',
+        message: 'I noticed redbusagent is already configured. What would you like to do?',
         options: [
-            { value: 'reconfigure', label: '🔄 Reconfigurar Provedores de IA (Manter Memória e Ferramentas)', hint: 'Apenas chaves' },
-            { value: 'install_mcp', label: '🔌 Instalar Extensões MCP (Model Context Protocol)', hint: 'GitHub, Scrapling, etc.' },
-            { value: 'remove_mcp', label: '🗑️ Remover Extensões MCP', hint: 'Desinstalar MCPs ativos' },
-            { value: 'wipe_brain', label: '🧠 Limpar Cérebro (Apagar Memória, MCPs e Ferramentas Forjadas)', hint: 'Resetar progresso' },
-            { value: 'factory_reset', label: '🔥 Factory Reset (Apagar TUDO, incluindo MCPs)', hint: 'Cuidado!' },
-            { value: 'exit', label: '🚪 Cancelar / Sair' },
+            { value: 'reconfigure', label: '🔄 Reconfigure AI Providers (Keep Memory and Tools)', hint: 'Keys only' },
+            { value: 'install_mcp', label: '🔌 Install MCP Extensions (Model Context Protocol)', hint: 'GitHub, Scrapling, etc.' },
+            { value: 'remove_mcp', label: '🗑️ Remove MCP Extensions', hint: 'Uninstall active MCPs' },
+            { value: 'wipe_brain', label: '🧠 Wipe Brain (Delete Memory, MCPs and Forged Tools)', hint: 'Reset progress' },
+            { value: 'factory_reset', label: '🔥 Factory Reset (Delete EVERYTHING, including MCPs)', hint: 'Careful!' },
+            { value: 'exit', label: '🚪 Cancel / Exit' },
         ],
     });
 
     if (p.isCancel(choice) || choice === 'exit') {
-        p.log.info('Operação cancelada.');
+        p.log.info('Operation cancelled.');
         process.exit(0);
     }
 
@@ -52,18 +52,18 @@ export async function configCommand(): Promise<void> {
             const installedMcps = config?.mcps ? Object.keys(config.mcps) : [];
 
             if (installedMcps.length === 0) {
-                p.log.warn('Nenhum MCP está instalado no momento.');
+                p.log.warn('No MCP is currently installed.');
                 process.exit(0);
             }
 
             const mcpsToRemove = await p.multiselect({
-                message: 'Selecione quais MCPs você deseja remover:',
+                message: 'Select which MCPs you want to remove:',
                 options: installedMcps.map(id => ({ value: id, label: id })),
                 required: false,
             });
 
             if (p.isCancel(mcpsToRemove) || mcpsToRemove.length === 0) {
-                p.log.info('Nenhum MCP removido.');
+                p.log.info('No MCP removed.');
                 process.exit(0);
             }
 
@@ -75,23 +75,23 @@ export async function configCommand(): Promise<void> {
             }
             Vault.write(updatedConfig);
 
-            p.log.success(`${count} extensão(ões) MCP removida(s) com sucesso. Pressione Ctrl+C para voltar ao terminal.`);
+            p.log.success(`${count} MCP extension(s) successfully removed. Press Ctrl+C to return to terminal.`);
             process.exit(0);
             break;
         }
 
         case 'wipe_brain': {
             const confirm = await p.confirm({
-                message: 'Tem certeza que deseja apagar toda a memória, MCPs e ferramentas forjadas? Esta ação é irreversível.',
+                message: 'Are you sure you want to delete all memory, MCPs and forged tools? This action is irreversible.',
                 initialValue: false,
             });
             if (!confirm || p.isCancel(confirm)) {
-                p.log.info('Operação cancelada.');
+                p.log.info('Operation cancelled.');
                 process.exit(0);
             }
 
             const s = p.spinner();
-            s.start('Limpando cérebro (memória e ferramentas)...');
+            s.start('Wiping brain (memory and tools)...');
 
             // Delete memory/ and forge/
             const memoryDir = join(Vault.dir, 'memory');
@@ -113,24 +113,24 @@ export async function configCommand(): Promise<void> {
                 Vault.write({ ...config, mcps: {} });
             }
 
-            s.stop('Cérebro limpo com sucesso!');
-            p.log.success('Cérebro apagado. Extensões MCP desinstaladas. O agente começará do zero na próxima inicialização.');
+            s.stop('Brain successfully wiped!');
+            p.log.success('Brain wiped. MCP extensions uninstalled. The agent will start from scratch on the next boot.');
             process.exit(0);
             break;
         }
 
         case 'factory_reset': {
             const confirm = await p.confirm({
-                message: 'AVISO: Isso apagará TODA a configuração, chaves e memória. Continuar?',
+                message: 'WARNING: This will delete ALL configuration, keys and memory. Continue?',
                 initialValue: false,
             });
             if (!confirm || p.isCancel(confirm)) {
-                p.log.info('Operação cancelada.');
+                p.log.info('Operation cancelled.');
                 process.exit(0);
             }
 
             const s = p.spinner();
-            s.start('Iniciando Factory Reset...');
+            s.start('Starting Factory Reset...');
 
             // Delete entire ~/.redbusagent directory (except bin/ to save bandwidth for Ollama)
             if (existsSync(Vault.dir)) {
@@ -141,8 +141,8 @@ export async function configCommand(): Promise<void> {
                 }
             }
 
-            s.stop('Factory Reset concluído.');
-            p.log.success('Tudo limpo! Vamos configurar novamente do zero.');
+            s.stop('Factory Reset complete.');
+            p.log.success('Everything clean! Let\'s configure again from scratch.');
 
             const success = await runOnboardingWizard();
             process.exit(success ? 0 : 1);

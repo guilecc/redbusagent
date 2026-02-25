@@ -11,7 +11,7 @@ export async function channelCommand(args: string[]): Promise<void> {
     }
 
     console.log(`
-${pc.bold('Uso do Canal:')}
+${pc.bold('Channel Usage:')}
   ${pc.cyan('redbus channel login whatsapp')}
 `);
     process.exit(1);

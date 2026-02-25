@@ -57,7 +57,7 @@ function App() {
                     </h1>
                     <div className="space-y-4">
                         <p className="text-2xl md:text-3xl font-medium tracking-tight text-white/80 max-w-3xl mx-auto">
-                            Just the stuff I actually like, prioritizing local free models so you don't burn all your cash.
+                            Just the stuff I actually like, powered by a smart heuristic router that balances local and cloud models so you don't burn all your cash.
                         </p>
                         <p className="text-lg md:text-xl font-medium tracking-tight text-white/50 max-w-2xl mx-auto">
                             Yeah, it's an imitation, but I built this shit from absolute scratch.
@@ -105,8 +105,8 @@ function App() {
                     <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-8">
                         <FeatureCard
                             icon={<Terminal size={28} strokeWidth={2.5} />}
-                            title="Full System Access"
-                            desc="Reads, writes, executes. Bash or PowerShell. It asks you before doing anything stupid. 100% safe."
+                            title="Full System Shell"
+                            desc="Reads, writes, executes. Bash or PowerShell. A built-in security gate intercepts sensitive system commands and explicitly asks your authorization."
                         />
                         <FeatureCard
                             icon={<MessageSquare size={28} strokeWidth={2.5} />}
@@ -115,13 +115,13 @@ function App() {
                         />
                         <FeatureCard
                             icon={<Globe size={28} strokeWidth={2.5} />}
-                            title="Browser Control"
-                            desc="Headless Playwright interaction out of the box. It clicks, extracts, and actually browses the web."
+                            title="Browser & MCP"
+                            desc="Headless Playwright interaction out of the box, plus full native support for Universal Model Context Protocol (MCP) servers like Scrapling."
                         />
                         <FeatureCard
                             icon={<Database size={28} strokeWidth={2.5} />}
-                            title="Persistent Memory"
-                            desc="Integrated LanceDB on-disk. It actually remembers what the fuck you did yesterday."
+                            title="MemGPT-Style Engine"
+                            desc="Integrated LanceDB on-disk vector DB with dynamic core memory management. It actually remembers what the fuck you did yesterday."
                         />
                         <FeatureCard
                             icon={<Shield size={28} strokeWidth={2.5} />}
@@ -130,8 +130,8 @@ function App() {
                         />
                         <FeatureCard
                             icon={<Play size={28} strokeWidth={2.5} />}
-                            title="Zero-Cost Local First"
-                            desc="Defaults to Tier 1 local Ollama so you stop burning OpenAI credits like an idiot. Switch to Tier 2 (Claude/GPT) only when you actually need it."
+                            title="Cognitive Router"
+                            desc="Don't burn Anthropic tokens on stupid questions. The heuristic router analyzes complexity in real-time: simple tasks run free on local models, complex coding drops to the Cloud."
                         />
                     </div>
                 </div>

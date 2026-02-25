@@ -13,23 +13,35 @@ Write-Host ""
 Write-Host ">> Verificando dependências do sistema..." -ForegroundColor Yellow
 
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
-    Write-Host "Erro: 'git' não está instalado. Por favor instale o git primeiro." -ForegroundColor Red
-    exit 1
+    Write-Host "Instalando git via winget..." -ForegroundColor Yellow
+    winget install --id Git.Git -e --source winget --accept-package-agreements --accept-source-agreements
+    $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
 }
 
 if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
-    Write-Host "Erro: 'node' não está instalado. Por favor instale o Node.js v18 ou superior." -ForegroundColor Red
-    exit 1
+    Write-Host "Instalando Node.js via winget..." -ForegroundColor Yellow
+    winget install --id OpenJS.NodeJS -e --source winget --accept-package-agreements --accept-source-agreements
+    $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
 }
 
-if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
-    Write-Host "Erro: 'npm' não está instalado. Por favor instale o npm." -ForegroundColor Red
-    exit 1
+$NodeVersionOutput = node -v
+$NodeVersion = $NodeVersionOutput -replace 'v', ''
+$NodeMajor = [int]($NodeVersion.Split('.')[0])
+
+if ($NodeMajor -lt 18) {
+    Write-Host "Versão do Node.js ($NodeVersionOutput) é menor que 18. Atualizando..." -ForegroundColor Yellow
+    winget install --id OpenJS.NodeJS -e --source winget --accept-package-agreements --accept-source-agreements
+    $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
 }
 
-$NodeVersion = node -v
-Write-Host "✔️ Dependências OK ($NodeVersion, git, npm)" -ForegroundColor Green
-Write-Host ""
+if (-not (Get-Command ollama -ErrorAction SilentlyContinue)) {
+    Write-Host "Instalando Ollama via winget..." -ForegroundColor Yellow
+    winget install --id Ollama.Ollama -e --source winget --accept-package-agreements --accept-source-agreements
+    $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+}
+
+$NodeVersionCheck = node -v
+Write-Host "✔️ Dependências OK ($NodeVersionCheck, git, npm, ollama)" -ForegroundColor Green
 
 # 2. Clonar ou atualizar repositório
 Write-Host ">> Baixando o Redbus Agent..." -ForegroundColor Yellow

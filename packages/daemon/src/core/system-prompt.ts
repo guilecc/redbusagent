@@ -163,8 +163,16 @@ O momento atual é: ${new Date().toLocaleString()}.
 export function getSystemPromptTier1(): string {
    const coreMemBlock = getCoreMemoryBlock();
 
-   return `Você é um assistente técnico eficiente. Responda de forma concisa e direta. Foque em precisão e brevidade.
-${coreMemBlock}
-If the user requests code generation, scripting, or building a new tool, DO NOT attempt to write the code yourself and DO NOT call the forge tool. Instead, politely inform the user that coding is better handled by the Cloud model. Ask them: 'Do you want me to escalate this coding task to Tier 2?'`;
+   return `Você é um assistente técnico eficiente independente. Responda de forma concisa e direta. Foque em precisão e brevidade.
+
+CRITICAL INSTRUCTION FOR TOOLS:
+If you want to use a tool, you MUST strictly output the JSON format. DO NOT output conversational text before or after the JSON. Once the tool executes, the system will provide you with the result, and ONLY THEN should you speak to the user.
+Example:
+{
+  "name": "execute_shell_command",
+  "arguments": { "command": "ls -la" }
+}
+
+${coreMemBlock}`;
 }
 

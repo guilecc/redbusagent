@@ -25,14 +25,18 @@
         "ai": "^6.0.97",
         "apache-arrow": "^18.1.0",
         "dotenv": "^17.3.1",
+        "node-cron": "^4.2.1",
         "playwright": "^1.58.2",
         "qrcode-terminal": "^0.12.0",
+        "uuid": "^13.0.0",
         "whatsapp-web.js": "^1.34.6",
         "ws": "^8.18.0",
         "zod": "^4.3.6"
     },
     "devDependencies": {
+        "@types/node-cron": "^3.0.11",
         "@types/qrcode-terminal": "^0.12.2",
+        "@types/uuid": "^10.0.0",
         "@types/ws": "^8.5.14"
     }
 }

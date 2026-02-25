@@ -23,28 +23,55 @@ echo ""
 echo -e "${YELLOW}>> Verificando dependências do sistema...${NC}"
 
 if ! command -v git &> /dev/null; then
-    echo -e "${RED}Erro: 'git' não está instalado. Por favor instale o git primeiro.${NC}"
-    exit 1
+    echo -e "${YELLOW}Instalando Git...${NC}"
+    if [ "$(uname)" == "Darwin" ]; then
+        xcode-select --install || true
+    elif command -v apt-get &> /dev/null; then
+        sudo apt-get update && sudo apt-get install -y git
+    else
+        echo -e "${RED}Erro: Não foi possível instalar o git automaticamente. Instale manualmente.${NC}"
+        exit 1
+    fi
 fi
 
-if ! command -v node &> /dev/null; then
-    echo -e "${RED}Erro: 'node' não está instalado. Por favor instale o Node.js v18 ou superior.${NC}"
-    exit 1
-fi
-
-if ! command -v npm &> /dev/null; then
-    echo -e "${RED}Erro: 'npm' não está instalado. Por favor instale o npm.${NC}"
-    exit 1
+if ! command -v node &> /dev/null || ! command -v npm &> /dev/null; then
+    echo -e "${YELLOW}Instalando Node.js e npm via NVM...${NC}"
+    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
+    export NVM_DIR="$HOME/.nvm"
+    [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+    nvm install 22
+    nvm use 22
 fi
 
 # Verifica a versão do Node (> 18)
 NODE_VERSION=$(node -v | cut -d 'v' -f 2)
 NODE_MAJOR=$(echo "$NODE_VERSION" | cut -d '.' -f 1)
 if [ "$NODE_MAJOR" -lt 18 ]; then
-    echo -e "${RED}Erro: A versão do Node.js deve ser 18 ou superior. Sua versão atual é $NODE_VERSION.${NC}"
-    exit 1
+    echo -e "${YELLOW}Versão do Node.js ($NODE_VERSION) é menor que 18. Atualizando via NVM...${NC}"
+    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
+    export NVM_DIR="$HOME/.nvm"
+    [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+    nvm install 22
+    nvm use 22
+    NODE_VERSION=$(node -v | cut -d 'v' -f 2)
 fi
-echo -e "✔️ Dependências OK (Node v$NODE_VERSION, git, npm)"
+
+if ! command -v ollama &> /dev/null; then
+    echo -e "${YELLOW}Instalando Ollama...${NC}"
+    if [ "$(uname)" == "Darwin" ]; then
+        if command -v brew &> /dev/null; then
+            brew install ollama
+            brew services start ollama
+        else
+            echo -e "${RED}Homebrew não encontrado. Visite https://ollama.com/download para baixar para o Mac.${NC}"
+            # Não falha, só avisa
+        fi
+    else
+        curl -fsSL https://ollama.com/install.sh | sh
+    fi
+fi
+
+echo -e "✔️ Dependências OK (Node v$NODE_VERSION, git, npm, ollama)"
 
 # 2. Clonar ou atualizar repositório
 echo ""

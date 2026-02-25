@@ -24,14 +24,14 @@ function resolveTsx(): string {
 export async function startCommand(): Promise<void> {
     // ── Auto-intercept: run wizard if vault is empty ──────────
     if (!Vault.isConfigured()) {
-        console.log(pc.yellow('\n⚙️  Nenhuma configuração encontrada.'));
-        console.log(pc.dim('   Iniciando assistente de configuração...\n'));
+        console.log(pc.yellow('\n⚙️  No configuration found.'));
+        console.log(pc.dim('   Starting configuration wizard...\n'));
 
         const success = await runOnboardingWizard();
 
         if (!success || !Vault.isConfigured()) {
-            console.log(pc.red('\n❌ Configuração cancelada.'));
-            console.log(pc.dim('   Use "redbus config" para configurar mais tarde.\n'));
+            console.log(pc.red('\n❌ Configuration cancelled.'));
+            console.log(pc.dim('   Use "redbus config" to configure later.\n'));
             process.exit(1);
         }
 
@@ -43,7 +43,7 @@ export async function startCommand(): Promise<void> {
     const tuiEntry = resolve(PROJECT_ROOT, 'packages/tui/src/main.tsx');
 
     // ── Start Daemon in background ────────────────────────────
-    console.log(pc.dim('  🔄 Iniciando daemon...'));
+    console.log(pc.dim('  🔄 Starting daemon...'));
 
     const daemonProcess = spawn(tsx, [daemonEntry], {
         stdio: ['ignore', 'pipe', 'pipe'],
@@ -89,7 +89,7 @@ export async function startCommand(): Promise<void> {
     daemonProcess.stdout?.removeAllListeners('data');
     daemonProcess.stderr?.removeAllListeners('data');
 
-    console.log(pc.dim('  🖥️  Iniciando TUI...\n'));
+    console.log(pc.dim('  🖥️  Starting TUI...\n'));
 
     // ── Start TUI in foreground ───────────────────────────────
     const tuiProcess = spawn(tsx, [tuiEntry], {
@@ -107,7 +107,7 @@ export async function startCommand(): Promise<void> {
     // If daemon crashes, notify and exit
     daemonProcess.on('exit', (code) => {
         if (code !== null && code !== 0) {
-            console.error(pc.red(`\n❌ Daemon encerrou com código ${code}`));
+            console.error(pc.red(`\n❌ Daemon exited with code ${code}`));
             tuiProcess.kill();
             process.exit(code);
         }

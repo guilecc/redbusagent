@@ -116,8 +116,7 @@ export class WhatsAppChannel {
         // 🛡️ FIREWALL: Load owner JID from Vault — refuse to start without it
         this.ownerJid = Vault.getOwnerWhatsAppJid();
         if (!this.ownerJid) {
-            console.error('  🛡️❌ WhatsAppChannel: FIREWALL BLOQUEOU INICIALIZAÇÃO — owner_phone_number não configurado no Vault.');
-            console.error('  🛡️   Rode "redbus config" e configure seu número de telefone.');
+            // Silently return if owner is not configured, instead of throwing a scary error for users who bypassed WhatsApp
             return;
         }
 

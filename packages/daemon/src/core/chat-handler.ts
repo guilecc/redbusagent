@@ -9,14 +9,28 @@ import type { DaemonWsServer } from '../infra/ws-server.js';
 import type { ChatRequestMessage } from '@redbusagent/shared';
 import { PersonaManager, Vault } from '@redbusagent/shared';
 import { askTier1, askTier2 } from './cognitive-router.js';
-import { HeartbeatService } from './heartbeat.js';
+import { calculateComplexityScore } from './heuristic-router.js';
 import { CoreMemory } from './core-memory.js';
+import { shellApproval } from './shell-executor.js';
 
 export class ChatHandler {
     private forceTier1 = false;
-    private pendingCodingEscalation = new Map<string, { active: boolean, originalPrompt: string | null }>();
 
-    constructor(private readonly wsServer: DaemonWsServer) { }
+    constructor(private readonly wsServer: DaemonWsServer) {
+        shellApproval.on('approval_requested', ({ id, command }) => {
+            console.log(`  [ChatHandler] Relaying shell approval to TUI: ${command}`);
+            this.wsServer.broadcast({
+                type: 'chat:stream:chunk',
+                timestamp: new Date().toISOString(),
+                payload: { requestId: id, delta: `⚠️ SECURITY ALERT: The agent wants to execute a system command:\n\`${command}\`\n\nAllow execution? (Y/N)` }
+            });
+            this.wsServer.broadcast({
+                type: 'chat:stream:done',
+                timestamp: new Date().toISOString(),
+                payload: { requestId: id, fullText: '', tier: 'tier1', model: 'system' }
+            });
+        });
+    }
 
     setForceTier1(enabled: boolean): void {
         this.forceTier1 = enabled;
@@ -27,32 +41,30 @@ export class ChatHandler {
         message: ChatRequestMessage,
     ): Promise<void> {
         const { requestId } = message.payload;
-        let { content, tier, isOnboarding } = message.payload;
+        let { content, tier, isOnboarding, messages } = message.payload;
 
-        // Priority: 1. Manual flag from Slash Command, 2. Explicit tier in payload, 3. Vault default
         const vaultConfig = Vault.read();
-        const defaultTier = vaultConfig?.default_chat_tier === 1 ? 'tier1' : 'tier2';
-        let targetTier = this.forceTier1 ? 'tier1' : (tier ?? defaultTier);
+        let targetTier = this.forceTier1 ? 'tier1' : tier;
 
-        // Smart Escalation Interception
-        const escalationState = this.pendingCodingEscalation.get(clientId);
-        if (escalationState?.active && escalationState.originalPrompt) {
+        // Security Gate Interception for Shell Executor
+        if (shellApproval.hasPendingRequests()) {
             const isAffirmative = /^(yes|y|sure|manda bala|pode|sim|claro|please|yeah|yep)\b/i.test(content.trim());
+            const id = shellApproval.getFirstPendingId()!;
+            shellApproval.resolveApproval(id, isAffirmative);
 
-            this.pendingCodingEscalation.set(clientId, { active: false, originalPrompt: null });
+            this.wsServer.broadcast({
+                type: 'log',
+                timestamp: new Date().toISOString(),
+                payload: { level: 'info', source: 'System', message: isAffirmative ? '✅ Shell command approved.' : '❌ Shell command denied.' }
+            });
 
-            if (isAffirmative) {
-                targetTier = 'tier2';
-                content = escalationState.originalPrompt;
-
-                this.wsServer.sendTo(clientId, {
-                    type: 'log',
-                    timestamp: new Date().toISOString(),
-                    payload: { level: 'info', source: 'System', message: '🚀 Escalating task to Tier 2 Cloud...' }
-                });
-            } else {
-                targetTier = 'tier1';
-            }
+            // We do not continue here as this was a response to an ongoing tool call
+            this.wsServer.broadcast({
+                type: 'chat:stream:done',
+                timestamp: new Date().toISOString(),
+                payload: { requestId, fullText: '', tier: 'tier1', model: 'system' }
+            });
+            return;
         }
 
         // Reset flag after use
@@ -61,6 +73,7 @@ export class ChatHandler {
         // Special handling for onboarding
         if (isOnboarding) {
             console.log(`  👤 [onboarding] Parsing persona from user input...`);
+            const askFnOnboarding = targetTier === 'tier1' ? askTier1 : askTier2;
             const onboardingPrompt = `The user is describing their desired agent persona. 
 User response: "${content}"
 
@@ -72,7 +85,7 @@ Extract the following information into a JSON object:
 }
 Return ONLY the JSON object. Do not explain.`;
 
-            const result = await askTier2(onboardingPrompt, {
+            const result = await askFnOnboarding(onboardingPrompt, {
                 onChunk: (delta) => {
                     // We don't stream the raw JSON parsing to the user
                 },
@@ -123,30 +136,49 @@ Return ONLY the JSON object. Do not explain.`;
             content = content.replace(/^\/local\s*/i, '');
         }
 
+        // ─── Intent Classifier Pre-flight ─────────────────────────────────────
+        if (!isOnboarding && content.trim() !== '' && !this.forceTier1 && !tier) {
+            const vaultTier1 = vaultConfig?.tier1;
+            const powerClass = (vaultTier1 as any)?.power_class || 'bronze';
+
+            console.log(`  🕵️‍♂️ [pre-router] Calculating heuristic complexity score...`);
+            const score = calculateComplexityScore(content, messages || []);
+
+            if (score >= 40) {
+                targetTier = 'tier2';
+            } else {
+                if (powerClass === 'bronze' || powerClass === 'silver') {
+                    // Even if score is low, if the hardware is very weak, maybe we still route to Tier 2?
+                    // Actually, the user asked: "If score >= 40: Route to askTier2. If score < 40: Route to askTier1."
+                    // Let's stick strictly to threshold logic.
+                }
+                targetTier = 'tier1';
+            }
+
+            this.wsServer.broadcast({
+                type: 'log',
+                timestamp: new Date().toISOString(),
+                payload: { level: 'info', source: 'Router', message: `🧠 [Router]: Complexity Score ${score}/100 -> Routing to ${targetTier === 'tier1' ? 'Tier 1 (Local)' : 'Tier 2 (Cloud)'}` }
+            });
+        }
+
+        // Fallback targetTier to tier1 just in case somehow it is undefined
+        targetTier = targetTier || 'tier1';
+
         console.log(`  🧠 [${targetTier}] Processing request ${requestId.slice(0, 8)}... from ${clientId}`);
 
-        const askFn = targetTier === 'tier1' ? askTier1 : askTier2;
-
-        const result = await askFn(content, {
-            onChunk: (delta) => {
+        let result;
+        const callbacks = {
+            onChunk: (delta: string) => {
                 this.wsServer.broadcast({
                     type: 'chat:stream:chunk',
                     timestamp: new Date().toISOString(),
                     payload: { requestId, delta },
                 });
             },
-            onDone: (fullText) => {
-                if (targetTier === 'tier1' &&
-                    fullText.includes('Do you want me to escalate this coding task to Tier 2?')) {
-                    this.pendingCodingEscalation.set(clientId, { active: true, originalPrompt: message.payload.content });
-                }
-
-                // MemGPT: Record exchange for the Core Memory Compressor
-                if (fullText) {
-                    HeartbeatService.recordChatExchange(content, fullText);
-                }
+            onDone: (fullText: string) => {
             },
-            onError: (error) => {
+            onError: (error: Error) => {
                 console.error(`  ❌ [${targetTier}] Error:`, error.message);
                 this.wsServer.broadcast({
                     type: 'chat:error',
@@ -154,7 +186,7 @@ Return ONLY the JSON object. Do not explain.`;
                     payload: { requestId, error: error.message },
                 });
             },
-            onToolCall: (toolName, args) => {
+            onToolCall: (toolName: string, args: Record<string, unknown>) => {
                 console.log(`  🔧 [${targetTier}] Tool call: ${toolName}`);
                 this.wsServer.broadcast({
                     type: 'chat:tool:call',
@@ -162,7 +194,7 @@ Return ONLY the JSON object. Do not explain.`;
                     payload: { requestId, toolName, args },
                 });
             },
-            onToolResult: (toolName, success, toolResult) => {
+            onToolResult: (toolName: string, success: boolean, toolResult: string) => {
                 console.log(`  ${success ? '✅' : '❌'} [${targetTier}] Tool result: ${toolName} — ${success ? 'success' : 'failed'}`);
                 this.wsServer.broadcast({
                     type: 'chat:tool:result',
@@ -170,7 +202,13 @@ Return ONLY the JSON object. Do not explain.`;
                     payload: { requestId, toolName, success, result: toolResult },
                 });
             },
-        });
+        };
+
+        if (targetTier === 'tier1') {
+            result = await askTier1(content, callbacks, messages);
+        } else {
+            result = await askTier2(content, callbacks, undefined, messages);
+        }
 
         this.wsServer.broadcast({
             type: 'chat:stream:done',

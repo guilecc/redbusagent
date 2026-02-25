@@ -131,6 +131,8 @@ export interface ChatRequestMessage extends BaseMessage {
         readonly tier?: 'tier1' | 'tier2';
         /** Optional: flag for persona onboarding */
         readonly isOnboarding?: boolean;
+        /** Unified conversational history array from the frontend */
+        readonly messages?: any[];
     };
 }
 

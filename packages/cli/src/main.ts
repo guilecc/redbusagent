@@ -16,21 +16,21 @@ import { APP_NAME, APP_VERSION } from '@redbusagent/shared';
 function showHelp(): void {
     console.log(`
 ${pc.bold(pc.red(`🔴 ${APP_NAME}`))} ${pc.dim(`v${APP_VERSION}`)}
-${pc.dim('Agente autônomo de terminal com roteamento cognitivo')}
+${pc.dim('Autonomous terminal agent with cognitive routing')}
 
-${pc.bold('Uso:')}
-  ${pc.cyan('redbus')} ${pc.yellow('<comando>')}
+${pc.bold('Usage:')}
+  ${pc.cyan('redbus')} ${pc.yellow('<command>')}
 
-${pc.bold('Comandos:')}
-  ${pc.yellow('start')}    Inicia o Daemon + TUI interativa
-  ${pc.yellow('config')}   Abre o assistente de configuração
-  ${pc.yellow('channel')}  Gerencia Canais Extras (ex: whatsapp)
-  ${pc.yellow('update')}   Baixa e instala a última versão do Redbus
-  ${pc.yellow('help')}     Mostra esta mensagem
+${pc.bold('Commands:')}
+  ${pc.yellow('start')}    Starts the Daemon + interactive TUI
+  ${pc.yellow('config')}   Opens the configuration wizard
+  ${pc.yellow('channel')}  Manages Extra Channels (e.g. whatsapp)
+  ${pc.yellow('update')}   Downloads and installs the latest Redbus version
+  ${pc.yellow('help')}     Shows this message
 
-${pc.bold('Começando:')}
-  ${pc.dim('1.')} ${pc.cyan('redbus config')}   ${pc.dim('— Configure suas chaves de API')}
-  ${pc.dim('2.')} ${pc.cyan('redbus start')}    ${pc.dim('— Inicie o agente')}
+${pc.bold('Getting Started:')}
+  ${pc.dim('1.')} ${pc.cyan('redbus config')}   ${pc.dim('— Configure your API keys')}
+  ${pc.dim('2.')} ${pc.cyan('redbus start')}    ${pc.dim('— Start the agent')}
   `);
 }
 
@@ -78,7 +78,7 @@ export async function main(args: string[]): Promise<void> {
         }
 
         default: {
-            console.log(pc.red(`\n❌ Comando desconhecido: ${command}`));
+            console.log(pc.red(`\n❌ Unknown command: ${command}`));
             showHelp();
             process.exit(1);
         }

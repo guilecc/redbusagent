@@ -17,7 +17,7 @@ import {
 } from '@redbusagent/shared';
 import type { ClientMessage } from '@redbusagent/shared';
 import { DaemonWsServer } from './infra/ws-server.js';
-import { HeartbeatService } from './core/heartbeat.js';
+import { TaskScheduler } from './core/scheduler.js';
 import { ChatHandler } from './core/chat-handler.js';
 import { getRouterStatus } from './core/cognitive-router.js';
 import { Forge } from './core/forge.js';
@@ -131,7 +131,7 @@ const wsServer = new DaemonWsServer({
                         payload: {
                             level: 'info',
                             source: 'Status',
-                            message: `Models: T1:${status.tier1.model}, T2:${status.tier2?.provider}/${status.tier2?.model} | RAM: ${ramUsage} | Heartbeat: OK`
+                            message: `Models: T1:${status.tier1.model}, T2:${status.tier2?.provider}/${status.tier2?.model} | RAM: ${ramUsage} | Scheduler: OK`
                         }
                     });
                 } else if (command === 'switch-cloud') {
@@ -150,7 +150,7 @@ const wsServer = new DaemonWsServer({
                             wsServer.sendTo(clientId, {
                                 type: 'log',
                                 timestamp: new Date().toISOString(),
-                                payload: { level: 'info', source: 'System', message: `Provedor alterado para ${provider} (${newModel})` }
+                                payload: { level: 'info', source: 'System', message: `Provider changed to ${provider} (${newModel})` }
                             });
                         }
                     }
@@ -159,11 +159,19 @@ const wsServer = new DaemonWsServer({
                     if (value === 1 || value === 2) {
                         const config = Vault.read();
                         if (config) {
+                            if (value === 2 && config.tier2_enabled === false) {
+                                wsServer.sendTo(clientId, {
+                                    type: 'chat:error',
+                                    timestamp: new Date().toISOString(),
+                                    payload: { requestId: 'sys', error: 'Tier 2 Cloud is disabled. Run redbus config to configure an API key, or continue using Tier 1.' }
+                                });
+                                return;
+                            }
                             Vault.write({ ...config, default_chat_tier: value });
                             wsServer.sendTo(clientId, {
                                 type: 'log',
                                 timestamp: new Date().toISOString(),
-                                payload: { level: 'info', source: 'System', message: `Tier padrão alterado para Tier ${value}` }
+                                payload: { level: 'info', source: 'System', message: `Default tier changed to Tier ${value}` }
                             });
                         }
                     }
@@ -179,12 +187,11 @@ const wsServer = new DaemonWsServer({
     },
 });
 
-const heartbeat = new HeartbeatService(wsServer, PORT);
-heartbeat.start();
-
 const chatHandler = new ChatHandler(wsServer);
 
-console.log('  💓 Heartbeat service started');
+TaskScheduler.init(wsServer, chatHandler);
+
+console.log('  ⏱️  Task Scheduler started (deterministic cron engine)');
 console.log('  💬 Chat handler initialized');
 console.log('  ✅ Daemon is ready. Waiting for TUI connections...\n');
 
@@ -221,7 +228,7 @@ async function shutdown(signal: string): Promise<void> {
     OllamaManager.shutdown();
     await MCPEngine.getInstance().stop();
     await whatsapp.stop();
-    heartbeat.stop();
+    TaskScheduler.stopAll();
     await wsServer.shutdown();
     console.log('  👋 Daemon stopped.\n');
     process.exit(0);

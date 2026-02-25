@@ -32,15 +32,19 @@ export interface VaultTier2Config {
     readonly authToken?: string;
 }
 
+export type Tier1PowerClass = 'bronze' | 'silver' | 'gold';
+
 export interface VaultTier1Config {
     readonly enabled: boolean;
     readonly url: string;
     readonly model: string;
+    readonly power_class?: Tier1PowerClass;
 }
 
 export interface VaultConfig {
     /** Schema version for future migrations */
     readonly version: number;
+    readonly tier2_enabled?: boolean;
     readonly tier2: VaultTier2Config;
     readonly tier1: VaultTier1Config;
     /**
@@ -63,7 +67,12 @@ export interface VaultConfig {
      * value: command, args, and required environment variables mapped.
      */
     readonly mcps?: Record<string, { command: string, args: string[], env: Record<string, string> }>;
+    /**
+     * GOD MODE: Allows agent to execute OS terminal commands without user supervision.
+     */
+    readonly shell_god_mode?: boolean;
 }
+
 
 // ─── Constants ────────────────────────────────────────────────────
 
@@ -144,6 +153,10 @@ export class Vault {
     /** Check if vault has valid Tier 2 credentials */
     static isConfigured(): boolean {
         const config = this.read();
+
+        // If entirely skipped, it's configured for local mode
+        if (config?.tier2_enabled === false) return true;
+
         if (!config?.tier2) return false;
 
         switch (config.tier2.provider) {
@@ -181,6 +194,7 @@ export class Vault {
     static createDefault(overrides?: Partial<VaultConfig>): VaultConfig {
         return {
             version: CURRENT_VERSION,
+            tier2_enabled: overrides?.tier2_enabled ?? true,
             tier2: {
                 provider: 'anthropic',
                 model: 'claude-sonnet-4-20250514',
@@ -189,7 +203,8 @@ export class Vault {
             tier1: {
                 enabled: true,
                 url: 'http://127.0.0.1:11434',
-                model: 'llama3',
+                model: 'llama3.2:1b',
+                power_class: 'bronze',
                 ...overrides?.tier1,
             },
             default_chat_tier: overrides?.default_chat_tier ?? 2,

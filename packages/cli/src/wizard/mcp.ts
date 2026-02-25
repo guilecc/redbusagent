@@ -4,7 +4,7 @@ import { Vault, SUGGESTED_MCPS, getMCPSuggestion } from '@redbusagent/shared';
 
 export async function runMcpInstallWizard(): Promise<void> {
     const selectedMcps = await p.multiselect({
-        message: 'Selecione os MCPs que deseja instalar (Espaço seleciona, Enter confirma):',
+        message: 'Select the MCPs you want to install (Space to select, Enter to confirm):',
         options: SUGGESTED_MCPS.map(mcp => ({
             value: mcp.id,
             label: mcp.name,
@@ -23,11 +23,11 @@ export async function runMcpInstallWizard(): Promise<void> {
 
             const env: Record<string, string> = {};
             if (suggestion.requiredEnvVars && suggestion.requiredEnvVars.length > 0) {
-                p.note(`O MCP ${pc.bold(suggestion.name)} requer variáveis de ambiente.`, 'Configuração de MCP');
+                p.note(`The MCP ${pc.bold(suggestion.name)} requires environment variables.`, 'MCP Configuration');
                 for (const envVar of suggestion.requiredEnvVars) {
                     const value = await p.text({
-                        message: `Digite o valor para ${pc.cyan(envVar)}:`,
-                        validate: (v) => !v ? 'Obrigatório' : undefined
+                        message: `Enter the value for ${pc.cyan(envVar)}:`,
+                        validate: (v) => !v ? 'Required' : undefined
                     });
                     if (!p.isCancel(value)) {
                         env[envVar] = value as string;
@@ -46,8 +46,8 @@ export async function runMcpInstallWizard(): Promise<void> {
             ...Vault.read()!,
             mcps: updatedMcps
         });
-        p.log.success('✅ MCPs instalados com sucesso no Cofre.');
+        p.log.success('✅ MCPs successfully installed in the Vault.');
     } else {
-        p.log.info('Nenhum MCP selecionado ou operação cancelada.');
+        p.log.info('No MCP selected or operation cancelled.');
     }
 }

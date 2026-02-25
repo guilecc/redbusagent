@@ -115,7 +115,7 @@ export function Dashboard(): React.ReactElement {
         setChatLines((prev) => [
             ...prev.slice(-(MAX_CHAT_LINES - 2)),
             '',
-            `🧑 Usuário: ${text}`,
+            `🧑 User: ${text}`,
         ]);
 
         // Reset streaming state
@@ -138,7 +138,7 @@ export function Dashboard(): React.ReactElement {
         }
 
         clientRef.current.send(chatRequest);
-        addLog(`Enviado para Tier ${defaultTier}: "${text.slice(0, 50)}${text.length > 50 ? '...' : ''}"`, 'cyan');
+        addLog(`Sent to Tier ${defaultTier}: "${text.slice(0, 50)}${text.length > 50 ? '...' : ''}"`, 'cyan');
     }, [isStreaming, addLog, isOnboarding, defaultTier]);
 
     useInput((input, key) => {
@@ -184,7 +184,7 @@ export function Dashboard(): React.ReactElement {
             url,
             onConnected: () => {
                 setConnected(true);
-                addLog('Conectado ao Daemon', 'green');
+                addLog('Connected to Daemon', 'green');
 
                 if (!PersonaManager.exists()) {
                     setChatLines((prev) => [
@@ -197,10 +197,10 @@ export function Dashboard(): React.ReactElement {
 
             onDisconnected: () => {
                 setConnected(false);
-                addLog('Desconectado. Tentando reconectar...', 'yellow');
+                addLog('Disconnected. Trying to reconnect...', 'yellow');
             },
             onError: (err) => {
-                addLog(`Erro: ${err.message}`, 'red');
+                addLog(`Error: ${err.message}`, 'red');
             },
             onMessage: (message: DaemonMessage) => {
                 handleDaemonMessage(message);
@@ -209,7 +209,7 @@ export function Dashboard(): React.ReactElement {
 
         clientRef.current = client;
         client.connect();
-        addLog(`Conectando a ${url}...`, 'gray');
+        addLog(`Connecting to ${url}...`, 'gray');
 
         return () => {
             client.disconnect();
@@ -246,16 +246,16 @@ export function Dashboard(): React.ReactElement {
                 break;
 
             case 'system:status':
-                addLog(`Sistema: ${message.payload.status}`, 'blue');
+                addLog(`System: ${message.payload.status}`, 'blue');
                 break;
 
             case 'system:alert':
                 setChatLines((prev) => [
                     ...prev.slice(-(MAX_CHAT_LINES - 2)),
                     '',
-                    `⏰ ALERTA AGENDADO: ${message.payload.message}`,
+                    `⏰ SCHEDULED ALERT: ${message.payload.message}`,
                 ]);
-                addLog(`Alerta disparado: ${message.payload.id}`, 'yellow');
+                addLog(`Alert triggered: ${message.payload.id}`, 'yellow');
                 break;
 
             case 'proactive:thought':
@@ -284,7 +284,7 @@ export function Dashboard(): React.ReactElement {
                     }
                     return '';
                 });
-                addLog(`Resposta completa via ${message.payload.tier}/${message.payload.model}`, 'green');
+                addLog(`Full response via ${message.payload.tier}/${message.payload.model}`, 'green');
                 break;
             }
 
@@ -292,22 +292,22 @@ export function Dashboard(): React.ReactElement {
                 setIsStreaming(false);
                 setChatLines((prev) => [
                     ...prev.slice(-(MAX_CHAT_LINES - 1)),
-                    `❌ Erro: ${message.payload.error}`,
+                    `❌ Error: ${message.payload.error}`,
                 ]);
-                addLog(`Erro do LLM: ${message.payload.error}`, 'red');
+                addLog(`LLM Error: ${message.payload.error}`, 'red');
                 break;
 
             case 'chat:tool:call':
                 setChatLines((prev) => [
                     ...prev.slice(-(MAX_CHAT_LINES - 1)),
-                    `🔧 Forjando: ${message.payload.toolName}...`,
+                    `🔧 Using tool: ${message.payload.toolName}...`,
                 ]);
                 addLog(`Tool call: ${message.payload.toolName}`, 'magenta');
                 break;
 
             case 'chat:tool:result': {
                 const icon = message.payload.success ? '✅' : '❌';
-                const status = message.payload.success ? 'sucesso' : 'falhou';
+                const status = message.payload.success ? 'success' : 'failed';
 
                 // Show a preview of the result (truncated)
                 const resultPreview = message.payload.result.length > 200
@@ -316,7 +316,7 @@ export function Dashboard(): React.ReactElement {
 
                 setChatLines((prev) => [
                     ...prev.slice(-(MAX_CHAT_LINES - 2)),
-                    `${icon} Forge [${message.payload.toolName}]: ${status}`,
+                    `${icon} Tool [${message.payload.toolName}]: ${status}`,
                     resultPreview,
                 ]);
                 addLog(`Tool result: ${message.payload.toolName} — ${status}`, message.payload.success ? 'green' : 'red');
@@ -342,7 +342,7 @@ export function Dashboard(): React.ReactElement {
                 </Box>
                 <Box gap={2}>
                     <Text color={connected ? 'green' : 'yellow'}>
-                        {connected ? '● Conectado' : '○ Desconectado'}
+                        {connected ? '● Connected' : '○ Disconnected'}
                     </Text>
                     {lastHeartbeat && (
                         <Text color="gray">
@@ -372,7 +372,7 @@ export function Dashboard(): React.ReactElement {
                 </Text>
                 {chatLines.length === 0 && !streamingText ? (
                     <Text color="gray" italic>
-                        Digite uma mensagem abaixo e pressione Enter...
+                        Type a message below and press Enter...
                     </Text>
                 ) : (
                     <>
@@ -403,12 +403,12 @@ export function Dashboard(): React.ReactElement {
                 )}
                 {isStreaming && !streamingText && (
                     <Text color="yellow" italic>
-                        ⏳ Pensando...
+                        ⏳ Thinking...
                     </Text>
                 )}
                 {isUpdating && (
                     <Text color="cyan" italic>
-                        🔄 Atualizando o sistema... Aguarde.
+                        🔄 Updating system... Please wait.
                     </Text>
                 )}
             </Box>
@@ -465,6 +465,18 @@ export function Dashboard(): React.ReactElement {
                                         setActiveMenu('cloud');
                                     } else if (item.value === 'toggle-tier') {
                                         const nextTier = defaultTier === 1 ? 2 : 1;
+
+                                        const config = Vault.read();
+                                        if (nextTier === 2 && config?.tier2_enabled === false) {
+                                            // Optional constraint enforcement at TUI level too to avoid ghost states
+                                            setChatLines((prev) => [
+                                                ...prev.slice(-(MAX_CHAT_LINES - 1)),
+                                                `❌ Tier 2 Cloud is disabled. Run redbus config to configure an API key, or continue using Tier 1.`
+                                            ]);
+                                            setIsSlashMenuOpen(false);
+                                            return;
+                                        }
+
                                         setDefaultTier(nextTier);
                                         const modeText = nextTier === 1 ? 'Tier 1 (Local)' : 'Tier 2 (Cloud)';
                                         const warning = nextTier === 2 ? ' Warning: API costs will now apply.' : '';
@@ -483,19 +495,19 @@ export function Dashboard(): React.ReactElement {
                                         setIsUpdating(true);
                                         setChatLines((prev) => [
                                             ...prev.slice(-(MAX_CHAT_LINES - 1)),
-                                            `🔄 Baixando e instalando nova versão... Isso pode demorar.`
+                                            `🔄 Downloading and installing new version... This may take a while.`
                                         ]);
                                         performUpdate().then(() => {
                                             setChatLines((prev) => [
                                                 ...prev.slice(-(MAX_CHAT_LINES - 1)),
-                                                `✅ Atualização concluída com sucesso! Por favor, reinicie o Redbus Agent pressionando Ctrl+C e iniciando novamente.`
+                                                `✅ Update successfully completed! Please restart Redbus Agent by pressing Ctrl+C and starting again.`
                                             ]);
                                             setIsUpdating(false);
                                             setUpdateAvailable(null);
                                         }).catch((err) => {
                                             setChatLines((prev) => [
                                                 ...prev.slice(-(MAX_CHAT_LINES - 1)),
-                                                `❌ Falha na atualização: ${err.message}`
+                                                `❌ Update failed: ${err.message}`
                                             ]);
                                             setIsUpdating(false);
                                         });
@@ -620,7 +632,7 @@ export function Dashboard(): React.ReactElement {
                         )}
                         {activeMenu === 'cloud-models' && (
                             isFetchingModels ? (
-                                <Text color="yellow">⏳ Buscando modelos disponíveis...</Text>
+                                <Text color="yellow">⏳ Fetching available models...</Text>
                             ) : (
                                 <SelectInput
                                     items={[
@@ -645,7 +657,7 @@ export function Dashboard(): React.ReactElement {
                                 />
                             )
                         )}
-                        <Text dimColor color="gray"> Esc: cancelar </Text>
+                        <Text dimColor color="gray"> Esc: cancel </Text>
                     </Box>
                 )}
             </Box>
@@ -678,7 +690,7 @@ export function Dashboard(): React.ReactElement {
                     paddingX={1}
                 >
                     <Text bold color={proactiveThought.status === 'thinking' ? 'magenta' : 'green'}>
-                        {proactiveThought.status === 'thinking' ? '⏳ [Processo de Fundo: Pensando] ' : '⚡ [Processo de Fundo: Agindo] '}
+                        {proactiveThought.status === 'thinking' ? '⏳ [Background Process: Thinking] ' : '⚡ [Background Process: Acting] '}
                     </Text>
                     <Text italic color="gray">
                         {proactiveThought.text}
@@ -689,7 +701,7 @@ export function Dashboard(): React.ReactElement {
             {/* ── Footer ──────────────────────────────────────────── */}
             <Box marginTop={1} gap={2}>
                 <Text color="gray" italic dimColor>
-                    Enter: enviar  •  Ctrl+C: sair
+                    Enter: send  •  Ctrl+C: exit
                 </Text>
             </Box>
         </Box>

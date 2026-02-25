@@ -13,7 +13,7 @@
  *  • Tools include core_memory_replace and core_memory_append.
  */
 
-import { streamText, stepCountIs, type LanguageModel } from 'ai';
+import { streamText, generateText, stepCountIs, type LanguageModel } from 'ai';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
@@ -26,7 +26,7 @@ import {
     resolveAnthropicAuth,
 } from '../infra/llm-config.js';
 import { getSystemPromptTier1, getSystemPromptTier2 } from './system-prompt.js';
-import { PersonaManager } from '@redbusagent/shared';
+import { PersonaManager, Vault } from '@redbusagent/shared';
 import { MemoryManager } from './memory-manager.js';
 import { ToolRegistry } from './tool-registry.js';
 import { CapabilityRegistry } from './registry.js';
@@ -84,6 +84,7 @@ function createTier2Model(): LanguageModel {
     }
 }
 
+
 // ─── Stream Callbacks ─────────────────────────────────────────────
 
 // ─── Streaming Interfaces ─────────────────────────────────────────
@@ -106,6 +107,7 @@ export interface CognitiveRouterResult {
 export async function askTier1(
     prompt: string,
     callbacks: StreamCallbacks,
+    messagesFromClient?: any[],
 ): Promise<CognitiveRouterResult> {
     const { model: modelName } = getTier1Config();
     const model = createTier1Model();
@@ -114,8 +116,33 @@ export async function askTier1(
     const ragResult = await AutoRAG.enrich(prompt);
     const enrichedPrompt = ragResult.enrichedPrompt;
 
+    const PROACTIVE_DIRECTIVE = `
+AUTONOMOUS TOOL FORGING: You are a proactive software engineer. DO NOT wait for the user to explicitly tell you to "create a script" or "build a tool".
+
+DETECT PATTERNS: If the user asks you to perform a calculation, parse data, read a file system, monitor a system, or do any task that requires absolute precision or repetition, you MUST autonomously decide to use the create_and_run_tool to forge a reusable Node.js solution. Exception: If the user asks to "schedule a task", "set a timer", "remind me", or "run every X minutes", DO NOT forge a tool! You MUST use the native \`schedule_task\` tool. DO NOT use memory tools (\`core_memory_replace\`) as a substitute for scheduling timers or alarms.
+
+SILENT EXECUTION: Do not ask the user "Would you like me to write a script for this?". Just do it. Write the tool, execute it silently using your internal execution loop, analyze the stdout, and ONLY reply to the user with the final, polished result in natural language.
+
+THE LAZINESS BAN: Never attempt to do complex math, data filtering, or system analysis textually in your "head". Always forge a tool to do the heavy lifting.
+`;
+
+    const tier1Config = getTier1Config();
+    const isGold = (tier1Config as any).power_class === 'gold';
+    const tools = CapabilityRegistry.getAvailableTools();
+
+    // Prevent weak Tier 1 from forging things or messing with structural shell commands
+    if (!isGold) {
+        delete (tools as any)['create_and_run_tool'];
+        delete (tools as any)['execute_shell_command'];
+    }
+
     let systemPromptContext = getPersonaContext() + getSystemPromptTier1();
-    systemPromptContext += `\n\n${CapabilityRegistry.getCapabilityManifest()}`;
+    if (isGold) {
+        systemPromptContext += `\n\n${PROACTIVE_DIRECTIVE}\n\n${CapabilityRegistry.getCapabilityManifest()}`;
+    } else {
+        systemPromptContext += `\n\n${CapabilityRegistry.getCapabilityManifest()}`;
+    }
+
     try {
         const wisdom = await MemoryManager.searchMemory('cloud_wisdom', prompt, 3);
         if (wisdom && wisdom.length > 0) {
@@ -128,32 +155,172 @@ export async function askTier1(
         console.error('  ❌ [tier1] Failed to retrieve cloud wisdom:', err);
     }
 
-    try {
-        const result = streamText({
-            model,
-            system: systemPromptContext,
-            messages: [{ role: 'user', content: enrichedPrompt }],
-        });
 
-        let fullText = '';
-        for await (const chunk of result.textStream) {
-            fullText += chunk;
-            callbacks.onChunk(chunk);
+    let messages: any[];
+    if (messagesFromClient && messagesFromClient.length > 0) {
+        messages = [...messagesFromClient];
+        let lastIndex = -1;
+        for (let i = messages.length - 1; i >= 0; i--) {
+            if (messages[i].role === 'user') {
+                lastIndex = i;
+                break;
+            }
         }
-
-        callbacks.onDone(fullText);
-        return { tier: 'tier1', model: modelName };
-    } catch (err) {
-        const error = err instanceof Error ? err : new Error(String(err));
-        callbacks.onError(error);
-        return { tier: 'tier1', model: modelName };
+        if (lastIndex !== -1) {
+            messages[lastIndex] = { ...messages[lastIndex], content: enrichedPrompt };
+        } else {
+            messages.push({ role: 'user', content: enrichedPrompt });
+        }
+    } else {
+        messages = [{ role: 'user', content: enrichedPrompt }];
     }
+
+    let stepCount = 0;
+    const MAX_STEPS = 5;
+
+    while (stepCount < MAX_STEPS) {
+        stepCount++;
+
+        try {
+            const result = streamText({
+                model,
+                system: systemPromptContext,
+                messages,
+                tools,
+                onError: ({ error }) => {
+                    console.error('  ❌ [tier1] streamText onError:', error);
+                },
+            });
+
+            let fullText = '';
+            let rawToolCall: any = null;
+            let isJsonMode = false;
+            let isDetermining = true;
+            let hasSentThinking = false;
+            let nativeToolUsed = false;
+
+            for await (const part of result.fullStream) {
+                if (part.type === 'text-delta') {
+                    fullText += part.text;
+
+                    if (isDetermining && fullText.trim().length > 0) {
+                        const trimmed = fullText.trim();
+                        if (trimmed.startsWith('{') || trimmed.startsWith('[') || trimmed.startsWith('```')) {
+                            isJsonMode = true;
+                            isDetermining = false;
+                            if (!hasSentThinking) {
+                                callbacks.onChunk('⏳ Interceptando Tool Call (JSON)...\n');
+                                hasSentThinking = true;
+                            }
+                        } else if (trimmed.length > 15) {
+                            isDetermining = false;
+                            callbacks.onChunk(fullText); // Output standard buffer
+                        }
+                    } else if (!isDetermining && !isJsonMode) {
+                        callbacks.onChunk(part.text);
+                    }
+                } else if (part.type === 'tool-call') {
+                    nativeToolUsed = true;
+                    console.log(`  🔧 [tier1] Native Tool call: ${part.toolName}`);
+                    callbacks.onToolCall?.(part.toolName, part.input as Record<string, unknown>);
+                } else if (part.type === 'tool-result') {
+                    console.log(`  🔧 [tier1] Native Tool result: ${part.toolName}`);
+                    callbacks.onToolResult?.(
+                        part.toolName,
+                        typeof part.output === 'object' && part.output !== null && 'success' in part.output
+                            ? (part.output as { success: boolean }).success
+                            : true,
+                        typeof part.output === 'string'
+                            ? part.output
+                            : JSON.stringify(part.output, null, 2),
+                    );
+                } else if (part.type === 'error') {
+                    console.error('  ❌ [tier1] Stream error event:', part.error);
+                    callbacks.onError(part.error instanceof Error ? part.error : new Error(String(part.error)));
+                }
+            }
+
+            // 1. Raw JSON Interceptor (Fallback Parser)
+            if (!nativeToolUsed) {
+                try {
+                    let jsonStr = fullText.trim();
+                    const match = jsonStr.match(/```(?:json)?\n?([\s\S]*?)\n?```/);
+                    if (match && match[1]) {
+                        jsonStr = match[1].trim();
+                    } else {
+                        const startObj = jsonStr.indexOf('{');
+                        const endObj = jsonStr.lastIndexOf('}');
+                        if (startObj !== -1 && endObj !== -1 && endObj > startObj) {
+                            jsonStr = jsonStr.substring(startObj, endObj + 1);
+                        }
+                    }
+
+                    const parsed = JSON.parse(jsonStr);
+                    if (parsed && typeof parsed.name === 'string' && (typeof parsed.arguments === 'object' || typeof parsed.parameters === 'object')) {
+                        rawToolCall = parsed;
+                        if (!rawToolCall.arguments && rawToolCall.parameters) {
+                            rawToolCall.arguments = rawToolCall.parameters;
+                        }
+                    } else if (parsed && parsed.tool === 'call' && parsed.name) {
+                        rawToolCall = parsed;
+                    }
+                } catch (e) {
+                    console.warn('  ⚠️ [tier1] Falha ao fazer parse do JSON bruto (Interceptor):', e);
+                }
+            }
+
+            // 2. The Invisible Execution Loop
+            if (rawToolCall) {
+                console.log(`  🔧 [tier1] Raw JSON Tool Call Interceptado: ${rawToolCall.name}`);
+                callbacks.onToolCall?.(rawToolCall.name, rawToolCall.arguments || {});
+
+                const toolFn = (tools as any)[rawToolCall.name];
+                let toolOutput = '';
+                let success = false;
+
+                if (toolFn) {
+                    try {
+                        const res = await toolFn.execute(rawToolCall.arguments || {}, { toolCallId: 'raw-1', messages: [] });
+                        toolOutput = typeof res === 'string' ? res : JSON.stringify(res);
+                        success = true;
+                    } catch (e: any) {
+                        toolOutput = e.message || String(e);
+                    }
+                } else {
+                    toolOutput = `Error: Tool '${rawToolCall.name}' not found.`;
+                }
+
+                callbacks.onToolResult?.(rawToolCall.name, success, toolOutput);
+
+                messages.push({ role: 'assistant', content: fullText });
+                messages.push({ role: 'user', content: `[System Tool Execution Result]:\n${toolOutput}\n\nWhen you receive a tool execution output, formulate a natural language response to the user based on that output. DO NOT output JSON anymore unless another tool is needed.` });
+
+                continue; // Immediately loop again!
+            }
+
+            if (isJsonMode && !rawToolCall && !nativeToolUsed && fullText.trim().length > 0) {
+                callbacks.onChunk(fullText.trim());
+            }
+
+            callbacks.onDone(isJsonMode && !rawToolCall && !nativeToolUsed ? fullText.trim() : fullText);
+            return { tier: 'tier1', model: modelName };
+
+        } catch (err) {
+            const error = err instanceof Error ? err : new Error(String(err));
+            callbacks.onError(error);
+            return { tier: 'tier1', model: modelName };
+        }
+    }
+
+    callbacks.onDone("Tier 1 maximum tool execution steps limit reached.");
+    return { tier: 'tier1', model: modelName };
 }
 
 export async function askTier2(
     prompt: string,
     callbacks: StreamCallbacks,
     context?: string,
+    messagesFromClient?: any[],
 ): Promise<CognitiveRouterResult> {
     const validation = validateTier2Config();
     if (!validation.valid) {
@@ -170,10 +337,21 @@ export async function askTier2(
     const model = createTier2Model();
     const tools = CapabilityRegistry.getAvailableTools();
 
+    const PROACTIVE_DIRECTIVE = `
+AUTONOMOUS TOOL FORGING: You are a proactive software engineer. DO NOT wait for the user to explicitly tell you to "create a script" or "build a tool".
+
+DETECT PATTERNS: If the user asks you to perform a calculation, parse data, read a file system, monitor a system, or do any task that requires absolute precision or repetition, you MUST autonomously decide to use the create_and_run_tool to forge a reusable Node.js solution. Exception: If the user asks to "schedule a task", "set a timer", "remind me", or "run every X minutes", DO NOT forge a tool! You MUST use the native \`schedule_task\` tool. DO NOT use memory tools (\`core_memory_replace\`) as a substitute for scheduling timers or alarms.
+
+SILENT EXECUTION: Do not ask the user "Would you like me to write a script for this?". Just do it. Write the tool, execute it silently using your internal execution loop, analyze the stdout, and ONLY reply to the user with the final, polished result in natural language.
+
+THE LAZINESS BAN: Never attempt to do complex math, data filtering, or system analysis textually in your "head". Always forge a tool to do the heavy lifting.
+`;
+
     // Enrich system prompt with capability manifest and external context
     const fullSystemPrompt = [
         getPersonaContext(),
         getSystemPromptTier2(),
+        `\n\n${PROACTIVE_DIRECTIVE}`,
         `\n\n${CapabilityRegistry.getCapabilityManifest()}`,
         context ? `\n## Contexto Adicional da Sessão\n${context}` : '',
     ].join('');
@@ -181,10 +359,29 @@ export async function askTier2(
     try {
         console.log(`  🧠 [tier2] Calling ${config.provider}/${config.model} with ${Object.keys(tools).length} tools (AutoRAG: ${ragResult.chunksFound} chunks)`);
 
+        let messages: any[];
+        if (messagesFromClient && messagesFromClient.length > 0) {
+            messages = [...messagesFromClient];
+            let lastIndex = -1;
+            for (let i = messages.length - 1; i >= 0; i--) {
+                if (messages[i].role === 'user') {
+                    lastIndex = i;
+                    break;
+                }
+            }
+            if (lastIndex !== -1) {
+                messages[lastIndex] = { ...messages[lastIndex], content: enrichedPrompt };
+            } else {
+                messages.push({ role: 'user', content: enrichedPrompt });
+            }
+        } else {
+            messages = [{ role: 'user', content: enrichedPrompt }];
+        }
+
         const result = streamText({
             model,
             system: fullSystemPrompt,
-            messages: [{ role: 'user', content: enrichedPrompt }],
+            messages,
             tools,
             stopWhen: stepCountIs(5),
             onError: ({ error }) => {

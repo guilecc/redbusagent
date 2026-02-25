@@ -8,133 +8,252 @@
  * Flow: Provider → Credentials → Fetch Models (live) → Select Model → Ollama → Save
  */
 
+import os from 'node:os';
 import * as p from '@clack/prompts';
 import pc from 'picocolors';
-import { Vault, type VaultTier2Config, type VaultTier1Config, type Tier2Provider, fetchTier2Models, SUGGESTED_MCPS, getMCPSuggestion } from '@redbusagent/shared';
+import { Vault, type VaultTier2Config, type VaultTier1Config, type Tier1PowerClass, type Tier2Provider, fetchTier2Models, SUGGESTED_MCPS, getMCPSuggestion } from '@redbusagent/shared';
 import { WhatsAppChannel } from '@redbusagent/daemon/dist/channels/whatsapp.js';
 
 // ─── Wizard ───────────────────────────────────────────────────────
 
 export async function runOnboardingWizard(options: { reconfigureOnly?: boolean } = {}): Promise<boolean> {
-    p.intro(pc.bgRed(pc.white(' 🔴 redbusagent — Assistente de Configuração ')));
+    p.intro(pc.bgRed(pc.white(' 🔴 redbusagent — Configuration Wizard ')));
 
     const existingConfig = Vault.read();
     if (existingConfig) {
         p.note(
-            `Provedor atual: ${pc.bold(existingConfig.tier2.provider)}/${pc.bold(existingConfig.tier2.model)}\n` +
+            `Current Provider: ${pc.bold(existingConfig.tier2.provider)}/${pc.bold(existingConfig.tier2.model)}\n` +
             `Vault: ${pc.dim(Vault.configPath)}`,
-            '⚙️  Configuração existente detectada',
+            '⚙️  Existing configuration detected',
         );
     }
 
+    // ── Step 0: Hardware Detection ──────────────────────────────
+
+    const totalRAM = os.totalmem();
+    const ramGB = Math.round(totalRAM / (1024 * 1024 * 1024));
+    let powerClass: Tier1PowerClass = 'bronze';
+    let recommendedTier1Model = 'qwen2.5-coder:7b';
+
+    if (ramGB >= 32) {
+        powerClass = 'gold';
+        recommendedTier1Model = 'qwen2.5-coder:32b';
+    } else if (ramGB >= 16) {
+        powerClass = 'silver';
+        recommendedTier1Model = 'qwen2.5-coder:14b';
+    }
+
+    p.note(
+        `Detected RAM: ${pc.bold(`${ramGB} GB`)}\n` +
+        `Processing Class: ${pc.bold(pc.yellow(powerClass.toUpperCase()))}\n` +
+        `Recommended Local Model: ${pc.bold(pc.cyan(recommendedTier1Model))}`,
+        '💻 Local Hardware Analysis',
+    );
+
+    let skipTier2 = false;
+    p.note('Tier 2 (Cloud Provider) is mandatory for advanced reasoning and complex agentic tasks. Please enter your API key.', '☁️ MANDATORY CLOUD REASONING');
+
     // ── Step 1: Tier 2 Provider ───────────────────────────────
 
-    const provider = await p.select({
-        message: 'Qual LLM de nuvem (Tier 2) deseja usar?',
-        options: [
-            { value: 'anthropic' as const, label: '🟣 Anthropic (Claude)', hint: 'recomendado' },
-            { value: 'google' as const, label: '🔵 Google (Gemini)' },
-            { value: 'openai' as const, label: '🟢 OpenAI (GPT)' },
-        ],
-        initialValue: existingConfig?.tier2.provider ?? ('anthropic' as Tier2Provider),
-    });
-    if (p.isCancel(provider)) return false;
+    let provider: Tier2Provider = existingConfig?.tier2.provider ?? 'anthropic';
+    let tier2Config: VaultTier2Config;
 
-    // ── Step 2: Authentication (BEFORE model selection) ────────
-
-    let authToken: string | undefined;
-    let apiKey: string | undefined;
-
-    if (provider === 'anthropic') {
-        const key = await p.password({
-            message: 'Cole sua API key do Anthropic (sk-ant-...):',
-            validate: (v) => {
-                if (!v || !v.startsWith('sk-ant-')) return 'API key deve começar com sk-ant-';
-            },
-        });
-        if (p.isCancel(key)) return false;
-        apiKey = key.trim();
+    if (skipTier2) {
+        tier2Config = { provider: 'anthropic', model: 'skipped-cloud' };
+        p.log.info('Skipping Cloud configuration (Tier 2).');
     } else {
-        const keyLabel = provider === 'google'
-            ? 'Cole sua Google AI API key:'
-            : 'Cole sua OpenAI API key (sk-...):';
-
-        const key = await p.password({
-            message: keyLabel,
-            validate: (v) => {
-                if (!v || v.trim().length < 10) return 'Chave inválida.';
-            },
+        const selectedProvider = await p.select({
+            message: 'Which Cloud LLM (Tier 2) would you like to use?',
+            options: [
+                { value: 'anthropic' as const, label: '🟣 Anthropic (Claude)', hint: 'recommended' },
+                { value: 'google' as const, label: '🔵 Google (Gemini)' },
+                { value: 'openai' as const, label: '🟢 OpenAI (GPT)' },
+            ],
+            initialValue: provider,
         });
-        if (p.isCancel(key)) return false;
-        apiKey = key.trim();
+        if (p.isCancel(selectedProvider)) return false;
+        provider = selectedProvider as Tier2Provider;
+
+        // ── Step 2: Authentication (BEFORE model selection) ────────
+
+        let authToken: string | undefined;
+        let apiKey: string | undefined;
+
+        if (provider === 'anthropic') {
+            const key = await p.password({
+                message: 'Paste your Anthropic API key (sk-ant-...):',
+                validate: (v) => {
+                    if (!v || !v.startsWith('sk-ant-')) return 'API key must start with sk-ant-';
+                },
+            });
+            if (p.isCancel(key)) return false;
+            apiKey = key.trim();
+        } else {
+            const keyLabel = provider === 'google'
+                ? 'Paste your Google AI API key:'
+                : 'Paste your OpenAI API key (sk-...):';
+
+            const key = await p.password({
+                message: keyLabel,
+                validate: (v) => {
+                    if (!v || v.trim().length < 10) return 'Invalid key.';
+                },
+            });
+            if (p.isCancel(key)) return false;
+            apiKey = key.trim();
+        }
+
+        // ── Step 3: Fetch Models (dynamic!) ────────────────────────
+
+        const s = p.spinner();
+        s.start(`Fetching available models from ${provider}...`);
+
+        const fetchResult = await fetchTier2Models(provider, { apiKey, authToken });
+
+        if (fetchResult.usingFallback) {
+            s.stop(pc.yellow(`⚠️  Could not list models (${fetchResult.error ?? 'error'}) — using default list`));
+        } else {
+            s.stop(pc.green(`${fetchResult.models.length} models found!`));
+        }
+
+        if (fetchResult.models.length === 0) {
+            p.log.error('No models available. Check your credential.');
+            return false;
+        }
+
+        // ── Step 4: Model Selection ────────────────────────────────
+
+        const model = await p.select({
+            message: `Which model from ${provider} would you like to use?`,
+            options: fetchResult.models.map(m => ({
+                value: m.id,
+                label: m.label,
+                hint: m.hint,
+            })),
+        });
+        if (p.isCancel(model)) return false;
+
+        tier2Config = {
+            provider,
+            model: model as string,
+            ...(authToken ? { authToken } : {}),
+            ...(apiKey ? { apiKey } : {}),
+        };
     }
-
-    // ── Step 3: Fetch Models (dynamic!) ────────────────────────
-
-    const s = p.spinner();
-    s.start(`Buscando modelos disponíveis no ${provider}...`);
-
-    const fetchResult = await fetchTier2Models(provider, { apiKey, authToken });
-
-    if (fetchResult.usingFallback) {
-        s.stop(pc.yellow(`⚠️  Não foi possível listar modelos (${fetchResult.error ?? 'erro'}) — usando lista padrão`));
-    } else {
-        s.stop(pc.green(`${fetchResult.models.length} modelos encontrados!`));
-    }
-
-    if (fetchResult.models.length === 0) {
-        p.log.error('Nenhum modelo disponível. Verifique sua credencial.');
-        return false;
-    }
-
-    // ── Step 4: Model Selection ────────────────────────────────
-
-    const model = await p.select({
-        message: `Qual modelo do ${provider} deseja usar?`,
-        options: fetchResult.models.map(m => ({
-            value: m.id,
-            label: m.label,
-            hint: m.hint,
-        })),
-    });
-    if (p.isCancel(model)) return false;
-
-    const tier2Config: VaultTier2Config = {
-        provider,
-        model,
-        ...(authToken ? { authToken } : {}),
-        ...(apiKey ? { apiKey } : {}),
-    };
 
     // ── Step 5: Tier 1 (Ollama Local) ─────────────────────────
 
-    const configureTier1 = await p.confirm({
-        message: 'Deseja habilitar o motor de IA local auto-gerenciado (Tier 1)?',
-        initialValue: true,
-    });
-    if (p.isCancel(configureTier1)) return false;
+    let configureTier1 = true;
+    p.note('Tier 1 (Local AI Engine) is mandatory for offline tasks and simple reasoning. It will be configured now.', '💻 MANDATORY LOCAL ENGINE');
 
     let tier1Config: VaultTier1Config;
 
     if (configureTier1) {
-        tier1Config = { enabled: true, url: 'http://127.0.0.1:11434', model: 'llama3.2:1b' };
+        const { execSync } = await import('node:child_process');
+        try {
+            execSync('ollama --version', { stdio: 'ignore' });
+        } catch (e) {
+            const installPrompt = await p.confirm({
+                message: 'Ollama software was not detected on the system. Would you like to install it automatically now?',
+                initialValue: true,
+            });
+            if (p.isCancel(installPrompt)) return false;
+
+            if (installPrompt) {
+                const sInstall = p.spinner();
+                sInstall.start('Downloading and installing Ollama via terminal (this may take a while and ask for sudo password)...');
+                try {
+                    if (process.platform === 'win32') {
+                        execSync('winget install --id Ollama.Ollama -e --source winget --accept-package-agreements --accept-source-agreements', { stdio: 'inherit' });
+                    } else {
+                        execSync('curl -fsSL https://ollama.com/install.sh | sh', { stdio: 'inherit' });
+                    }
+                    sInstall.stop('✅ Ollama successfully installed!');
+                } catch (err) {
+                    sInstall.stop('⚠️ Auto-installation failed. Please download manually from https://ollama.com/download');
+                }
+            }
+        }
+
+        const LOCAL_MODELS = [
+            { value: 'llama3.2:1b', label: '🪶 llama3.2:1b', hint: 'General tasks, ultra-light (< 2GB RAM)' },
+            { value: 'qwen2.5-coder:7b', label: '💻 qwen2.5-coder:7b', hint: 'Excellent for code (~8GB RAM)' },
+            { value: 'llama3.1:8b', label: '🧠 llama3.1:8b', hint: 'General, great reasoning (~8GB RAM)' },
+            { value: 'qwen2.5-coder:14b', label: '💻 qwen2.5-coder:14b', hint: 'Code, high precision (~16GB RAM)' },
+            { value: 'deepseek-r1:14b', label: '🔬 deepseek-r1:14b', hint: 'Exceptional deep reasoning (~16GB RAM)' },
+            { value: 'qwen2.5-coder:32b', label: '🚀 qwen2.5-coder:32b', hint: 'Code, local GPT-4 level (~32GB RAM)' },
+            { value: 'custom', label: '✏️  Other...', hint: 'Type the model name manually' }
+        ];
+
+        const selectedModel = await p.select({
+            message: 'Which Ollama model do you want to use for Tier 1 (Local)?',
+            options: LOCAL_MODELS,
+            initialValue: recommendedTier1Model,
+        });
+        if (p.isCancel(selectedModel)) return false;
+
+        let finalModel = selectedModel as string;
+
+        if (finalModel === 'custom') {
+            const customModel = await p.text({
+                message: 'Enter the exact Ollama model name (e.g. mistral, phi3)...',
+                placeholder: recommendedTier1Model,
+            });
+            if (p.isCancel(customModel)) return false;
+            finalModel = customModel.trim();
+        }
+
+        tier1Config = { enabled: true, url: 'http://127.0.0.1:11434', model: finalModel || recommendedTier1Model, power_class: powerClass };
+
+        const pullSpinner = p.spinner();
+        try {
+            pullSpinner.start(`Checking/Downloading model '${tier1Config.model}' in Ollama via API... (0%)`);
+            const response = await fetch(`${tier1Config.url}/api/pull`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: tier1Config.model, stream: true })
+            });
+            if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+
+            if (response.body) {
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder('utf-8');
+                let done = false;
+
+                while (!done) {
+                    const { value, done: readerDone } = await reader.read();
+                    done = readerDone;
+                    if (value) {
+                        const chunk = decoder.decode(value, { stream: true });
+                        const lines = chunk.split('\n').filter(l => l.trim().length > 0);
+
+                        for (const line of lines) {
+                            try {
+                                const data = JSON.parse(line);
+                                if (data.total && data.completed) {
+                                    const percent = Math.round((data.completed / data.total) * 100);
+                                    pullSpinner.message(`Checking/Downloading model '${tier1Config.model}' in Ollama via API... (${percent}%)`);
+                                } else if (data.status) {
+                                    // Mostra fallback status if no progress is available yet e.g "pulling manifest"
+                                    pullSpinner.message(`Configuring model '${tier1Config.model}'... (${data.status})`);
+                                }
+                            } catch (e) {
+                                // Ignore parse errors
+                            }
+                        }
+                    }
+                }
+            }
+
+            pullSpinner.stop(`✅ Model '${tier1Config.model}' ready to use!`);
+        } catch (e) {
+            pullSpinner.stop(`⚠️ Could not download model via API. Run manually in terminal: ollama pull ${tier1Config.model}`);
+        }
     } else {
-        tier1Config = { enabled: false, url: 'http://127.0.0.1:11434', model: 'llama3.2:1b' };
+        tier1Config = { enabled: false, url: 'http://127.0.0.1:11434', model: recommendedTier1Model, power_class: powerClass };
     }
 
-    // ── Step 5.5: Default Chat Tier ───────────────────────────
-
-    const defaultTierRaw = await p.select({
-        message: 'Qual motor deve ser o padrão para comunicação diária no chat?',
-        options: [
-            { value: 1, label: '🟢 Tier 1 (Local / Free) - Usa seu modelo local Ollama. 100% gratuito e privado, mas pode ter dificuldade com tarefas de codificação complexas.' },
-            { value: 2, label: '☁️ Tier 2 (Cloud / Premium) - Usa sua API configurada (Anthropic/Gemini/OpenAI). Altamente capaz, mas incorre em custos de API por mensagem.' },
-        ],
-        initialValue: existingConfig?.default_chat_tier ?? 2,
-    });
-    if (p.isCancel(defaultTierRaw)) return false;
-
-    const default_chat_tier = defaultTierRaw as 1 | 2;
+    let default_chat_tier: 1 | 2 = 1;
 
     // ── Step 6: Save to Vault (initial — before WhatsApp) ─────
 
@@ -144,10 +263,11 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
     const sessions = existingConfig?.sessions || {};
 
     const saveSpinner = p.spinner();
-    saveSpinner.start('Salvando configuração no Cofre...');
+    saveSpinner.start('Saving configuration to Vault...');
 
     Vault.write({
         version: Vault.schemaVersion,
+        tier2_enabled: !skipTier2,
         tier2: tier2Config,
         tier1: tier1Config,
         default_chat_tier,
@@ -157,19 +277,19 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
     });
 
     await new Promise(r => setTimeout(r, 500));
-    saveSpinner.stop('Configuração salva!');
+    saveSpinner.stop('Configuration saved!');
 
     // ── Skip Remaining if reconfigureOnly ──────────────────────
 
     if (options.reconfigureOnly) {
-        p.outro(pc.green('Reconfiguração concluída! Rode: ') + pc.bold(pc.cyan('redbus start')));
+        p.outro(pc.green('Reconfiguration complete! Run: ') + pc.bold(pc.cyan('redbus start')));
         return true;
     }
 
     // ── Step 7: WhatsApp Integration (Channel Extension) ───────
 
     const configureWhatsApp = await p.confirm({
-        message: 'Deseja conectar o redbusagent ao seu WhatsApp para controlá-lo remotamente via celular?',
+        message: 'Would you like to connect redbusagent to your WhatsApp to control it remotely via mobile?',
         initialValue: false,
     });
     if (p.isCancel(configureWhatsApp)) return false;
@@ -177,22 +297,22 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
     if (configureWhatsApp) {
         // ── 🛡️ OWNER FIREWALL: Ask for phone number BEFORE QR ──
         p.note(
-            pc.bold(pc.red('🛡️  FIREWALL DE SEGURANÇA DO PROPRIETÁRIO')) + '\n\n' +
-            'Por segurança, o agente será ' + pc.bold('BLOQUEADO') + ' para interagir\n' +
-            pc.bold('EXCLUSIVAMENTE') + ' com o número informado abaixo.\n' +
-            'Nenhuma mensagem de grupos ou outros contatos será processada.',
-            '🔒 Segurança WhatsApp',
+            pc.bold(pc.red('🛡️  OWNER SECURITY FIREWALL')) + '\n\n' +
+            'For security, the agent will be ' + pc.bold('BLOCKED') + ' to interact\n' +
+            pc.bold('EXCLUSIVELY') + ' with the number provided below.\n' +
+            'No messages from groups or other contacts will be processed.',
+            '🔒 WhatsApp Security',
         );
 
         const phoneNumber = await p.text({
-            message: 'Qual é o seu número de WhatsApp? (Apenas números, com DDI e DDD. Ex: 5511999999999)',
+            message: 'What is your WhatsApp number? (Numbers only, with country and area code. Ex: 5511999999999)',
             placeholder: '5511999999999',
             defaultValue: ownerPhoneNumber,
             validate: (v) => {
                 const cleaned = v.replace(/\D/g, '');
-                if (cleaned.length < 10) return 'Número muito curto. Use DDI + DDD + número. Ex: 5511999999999';
-                if (cleaned.length > 15) return 'Número muito longo. Máximo 15 dígitos.';
-                if (cleaned !== v.trim()) return 'Use apenas números, sem espaços, traços ou parênteses.';
+                if (cleaned.length < 10) return 'Number too short. Use country + area code + number. Ex: 5511999999999';
+                if (cleaned.length > 15) return 'Number too long. Maximum 15 digits.';
+                if (cleaned !== v.trim()) return 'Use only numbers, no spaces, dashes, or parentheses.';
             },
         });
         if (p.isCancel(phoneNumber)) return false;
@@ -202,6 +322,7 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
         // Re-save Vault with owner_phone_number
         Vault.write({
             version: Vault.schemaVersion,
+            tier2_enabled: !skipTier2,
             tier2: tier2Config,
             tier1: tier1Config,
             default_chat_tier,
@@ -210,26 +331,58 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
             sessions,
         });
 
-        p.log.success(`🛡️  Firewall ativado para: ${pc.bold(ownerPhoneNumber)}@c.us`);
+        p.log.success(`🛡️  Firewall activated for: ${pc.bold(ownerPhoneNumber)}@c.us`);
 
         if (WhatsAppChannel.hasSession()) {
-            p.note('WhatsApp já pareado perfeitamente no Cofre.', 'WhatsApp Conectado');
+            p.note('WhatsApp already perfectly paired in the Vault.', 'WhatsApp Connected');
         } else {
             // Interactive WhatsApp Pair via terminal
             await WhatsAppChannel.loginInteractively();
+        }
+    } else {
+        const { rmSync } = await import('node:fs');
+        const { join } = await import('node:path');
+        const authDir = join(Vault.dir, 'auth_whatsapp');
+
+        let hadSession = false;
+        if (WhatsAppChannel.hasSession()) {
+            hadSession = true;
+        }
+
+        try {
+            rmSync(authDir, { recursive: true, force: true });
+        } catch (e) {
+            // Ignora caso a pasta não exista ou esteja bloqueada
+        }
+
+        ownerPhoneNumber = undefined;
+        // Re-save Vault without owner_phone_number
+        Vault.write({
+            version: Vault.schemaVersion,
+            tier2_enabled: !skipTier2,
+            tier2: tier2Config,
+            tier1: tier1Config,
+            default_chat_tier,
+            owner_phone_number: undefined,
+            credentials,
+            sessions,
+        });
+
+        if (hadSession || existingConfig?.owner_phone_number) {
+            p.log.info('🧹 Previous WhatsApp configuration successfully deleted.');
         }
     }
 
     // ── Step 8: Suggested MCPs ────────────────────────────────
 
     const installMcp = await p.confirm({
-        message: 'Deseja instalar extensões MCP (Model Context Protocol) sugeridas para dar super-poderes ao agente?',
+        message: 'Would you like to install suggested MCP (Model Context Protocol) extensions to give the agent superpowers?',
         initialValue: true,
     });
 
     if (installMcp && !p.isCancel(installMcp)) {
         const selectedMcps = await p.multiselect({
-            message: 'Selecione os MCPs que deseja instalar (Espaço seleciona, Enter confirma):',
+            message: 'Select the MCPs you want to install (Space to select, Enter to confirm):',
             options: SUGGESTED_MCPS.map(mcp => ({
                 value: mcp.id,
                 label: mcp.name,
@@ -248,11 +401,11 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
 
                 const env: Record<string, string> = {};
                 if (suggestion.requiredEnvVars && suggestion.requiredEnvVars.length > 0) {
-                    p.note(`O MCP ${pc.bold(suggestion.name)} requer variáveis de ambiente.`, 'Configuração de MCP');
+                    p.note(`The MCP ${pc.bold(suggestion.name)} requires environment variables.`, 'MCP Configuration');
                     for (const envVar of suggestion.requiredEnvVars) {
                         const value = await p.text({
-                            message: `Digite o valor para ${pc.cyan(envVar)}:`,
-                            validate: (v) => !v ? 'Obrigatório' : undefined
+                            message: `Enter the value for ${pc.cyan(envVar)}:`,
+                            validate: (v) => !v ? 'Required' : undefined
                         });
                         if (!p.isCancel(value)) {
                             env[envVar] = value as string;
@@ -272,25 +425,53 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
                 ...Vault.read()!,
                 mcps: updatedMcps
             });
-            p.log.success('✅ MCPs instalados com sucesso no Cofre.');
+            p.log.success('✅ MCPs successfully installed in the Vault.');
         }
     }
 
+    // ── Step 9: God Mode (Omni-Shell Tool) ─────────────────────
+
     p.note(
-        `Provedor: ${pc.bold(tier2Config.provider)}/${pc.bold(tier2Config.model)}\n` +
-        `Auth: ${pc.bold(tier2Config.authToken ? 'OAuth token' : 'API key')}\n` +
-        `Ollama: ${pc.bold(tier1Config.enabled ? `${tier1Config.model} @ ${tier1Config.url}` : 'desativado')}\n` +
-        `Padrão: ${pc.bold(default_chat_tier === 1 ? 'Tier 1 (Local)' : 'Tier 2 (Nuvem)')}\n` +
-        `WhatsApp: ${pc.bold(WhatsAppChannel.hasSession() ? 'Conectado ✅' : 'Não conectado')}\n` +
-        (ownerPhoneNumber
-            ? `Firewall: ${pc.bold(pc.green(`🛡️  ATIVO — ${ownerPhoneNumber}@c.us`))}\n`
-            : `Firewall: ${pc.bold(pc.dim('não configurado'))}\n`) +
-        `MCPs: ${pc.bold(Object.keys(Vault.read()?.mcps || {}).length)} instalados\n` +
-        `Vault: ${pc.dim(Vault.configPath)}`,
-        '✅ Resumo da configuração',
+        pc.bold(pc.red('⚡ THE OMNI-SHELL CONFIGURATION (DANGEROUS)')) + '\n\n' +
+        'God Mode allows the agent to execute any terminal command\n' +
+        '(Bash/PowerShell) autonomously WITHOUT human supervision.\n' +
+        'Only enable this in disposable VMs or if you completely trust the AI.',
+        '⚠️  GOD MODE',
     );
 
-    p.outro(pc.green('Configuração concluída! Rode: ') + pc.bold(pc.cyan('redbus start')));
+    const godModePrompt = await p.confirm({
+        message: 'Do you want to enable GOD MODE? (Y=Execute instantly, N=Require manual approval)',
+        initialValue: false,
+    });
+    let shellGodMode = false;
+    if (!p.isCancel(godModePrompt)) {
+        shellGodMode = godModePrompt as boolean;
+    }
+
+    // Re-save vault with God Mode
+    const finalConfig = Vault.read()!;
+    Vault.write({
+        ...finalConfig,
+        shell_god_mode: shellGodMode
+    });
+    p.log.success(`✅ God Mode: ${shellGodMode ? pc.red('ACTIVATED') : pc.green('Secured with HITL')}.`);
+
+    p.note(
+        `Provider: ${skipTier2 ? pc.bold('skipped') : pc.bold(tier2Config.provider) + '/' + pc.bold(tier2Config.model)}\n` +
+        `Auth: ${skipTier2 ? pc.bold('none') : pc.bold(tier2Config.authToken ? 'OAuth token' : 'API key')}\n` +
+        `Ollama: ${pc.bold(tier1Config.enabled ? `${tier1Config.model} @ ${tier1Config.url} [${tier1Config.power_class?.toUpperCase()}]` : 'disabled')}\n` +
+        `Default: ${pc.bold('Heuristic Routing (Auto)')}\n` +
+        `WhatsApp: ${pc.bold(WhatsAppChannel.hasSession() ? 'Connected ✅' : 'Not connected')}\n` +
+        (ownerPhoneNumber
+            ? `Firewall: ${pc.bold(pc.green(`🛡️  ACTIVE — ${ownerPhoneNumber}@c.us`))}\n`
+            : `Firewall: ${pc.bold(pc.dim('not configured'))}\n`) +
+        `MCPs: ${pc.bold(Object.keys(finalConfig.mcps || {}).length)} installed\n` +
+        `God Mode: ${pc.bold(shellGodMode ? pc.red('ON') : 'OFF')}\n` +
+        `Vault: ${pc.dim(Vault.configPath)}`,
+        '✅ Configuration summary',
+    );
+
+    p.outro(pc.green('Configuration complete! Run: ') + pc.bold(pc.cyan('redbus start')));
 
     return true;
 }
