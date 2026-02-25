@@ -13,7 +13,7 @@
     "engines": {
         "node": ">= 18.0.0"
     },
-    "license": "MIT",
+    "license": "GPL-3.0",
     "dependencies": {
         "@ai-sdk/anthropic": "^3.0.46",
         "@ai-sdk/google": "^3.0.30",
@@ -24,6 +24,7 @@
         "@redbusagent/shared": "*",
         "ai": "^6.0.97",
         "apache-arrow": "^18.1.0",
+        "cheerio": "^1.2.0",
         "dotenv": "^17.3.1",
         "node-cron": "^4.2.1",
         "playwright": "^1.58.2",

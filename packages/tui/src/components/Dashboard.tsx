@@ -106,7 +106,93 @@ export function Dashboard(): React.ReactElement {
     // ── Message Submission ────────────────────────────────────
 
     const submitMessage = useCallback((text: string) => {
-        if (!text.trim() || !clientRef.current || isStreaming) return;
+        let finalMessage = text.trim();
+        if (!finalMessage || !clientRef.current || isStreaming) return;
+
+        let currentTierForLog = defaultTier;
+
+        if (finalMessage.startsWith('/')) {
+            let handled = false;
+            let actualCmd = '';
+            let rest = '';
+
+            const commands = ['/toggle-tier', '/model', '/switch-cloud', '/auto-route', '/status', '/update'];
+            for (const c of commands) {
+                if (finalMessage.startsWith(c)) {
+                    actualCmd = c;
+                    rest = finalMessage.slice(c.length).trim();
+                    handled = true;
+                    break;
+                }
+            }
+
+            if (handled) {
+                if (actualCmd === '/toggle-tier') {
+                    const nextTier = defaultTier === 1 ? 2 : 1;
+                    const config = Vault.read();
+                    if (nextTier === 2 && config?.tier2_enabled === false) {
+                        setChatLines((prev) => [
+                            ...prev.slice(-(MAX_CHAT_LINES - 1)),
+                            `❌ Tier 2 Cloud is disabled. Run redbus config to configure an API key, or continue using Tier 1.`
+                        ]);
+                        return;
+                    }
+                    setDefaultTier(nextTier);
+                    currentTierForLog = nextTier;
+                    const modeText = nextTier === 1 ? 'Tier 1 (Local)' : 'Tier 2 (Cloud)';
+                    const warning = nextTier === 2 ? ' Warning: API costs will now apply.' : '';
+                    setChatLines((prev) => [
+                        ...prev.slice(-(MAX_CHAT_LINES - 1)),
+                        `🔄 Default routing switched to ${modeText}.${warning}`
+                    ]);
+                    clientRef.current?.send({
+                        type: 'system:command',
+                        timestamp: new Date().toISOString(),
+                        payload: { command: 'set-default-tier', args: { value: nextTier } }
+                    });
+                } else if (actualCmd === '/model' || actualCmd === '/switch-cloud') {
+                    setIsSlashMenuOpen(true);
+                    setActiveMenu('cloud');
+                    return;
+                } else if (actualCmd === '/auto-route') {
+                    clientRef.current?.send({
+                        type: 'system:command',
+                        timestamp: new Date().toISOString(),
+                        payload: { command: 'auto-route' }
+                    });
+                } else if (actualCmd === '/status') {
+                    clientRef.current?.send({
+                        type: 'system:command',
+                        timestamp: new Date().toISOString(),
+                        payload: { command: 'status' }
+                    });
+                } else if (actualCmd === '/update') {
+                    setIsUpdating(true);
+                    setChatLines((prev) => [
+                        ...prev.slice(-(MAX_CHAT_LINES - 1)),
+                        `🔄 Downloading and installing new version... This may take a while.`
+                    ]);
+                    performUpdate().then(() => {
+                        setChatLines((prev) => [
+                            ...prev.slice(-(MAX_CHAT_LINES - 1)),
+                            `✅ Update successfully completed! Please restart Redbus Agent by pressing Ctrl+C and starting again.`
+                        ]);
+                        setIsUpdating(false);
+                        setUpdateAvailable(null);
+                    }).catch((err) => {
+                        setChatLines((prev) => [
+                            ...prev.slice(-(MAX_CHAT_LINES - 1)),
+                            `❌ Update failed: ${err.message}`
+                        ]);
+                        setIsUpdating(false);
+                    });
+                    return;
+                }
+
+                if (!rest) return;
+                finalMessage = rest;
+            }
+        }
 
         const requestId = generateRequestId();
         currentRequestIdRef.current = requestId;
@@ -115,7 +201,7 @@ export function Dashboard(): React.ReactElement {
         setChatLines((prev) => [
             ...prev.slice(-(MAX_CHAT_LINES - 2)),
             '',
-            `🧑 User: ${text}`,
+            `🧑 User: ${finalMessage}`,
         ]);
 
         // Reset streaming state
@@ -128,7 +214,7 @@ export function Dashboard(): React.ReactElement {
             timestamp: new Date().toISOString(),
             payload: {
                 requestId,
-                content: text,
+                content: finalMessage,
                 isOnboarding,
             },
         };
@@ -138,7 +224,7 @@ export function Dashboard(): React.ReactElement {
         }
 
         clientRef.current.send(chatRequest);
-        addLog(`Sent to Tier ${defaultTier}: "${text.slice(0, 50)}${text.length > 50 ? '...' : ''}"`, 'cyan');
+        addLog(`Sent to Tier ${currentTierForLog}: "${finalMessage.slice(0, 50)}${finalMessage.length > 50 ? '...' : ''}"`, 'cyan');
     }, [isStreaming, addLog, isOnboarding, defaultTier]);
 
     useInput((input, key) => {

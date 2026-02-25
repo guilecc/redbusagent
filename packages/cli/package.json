@@ -12,7 +12,7 @@
     "engines": {
         "node": ">= 18.0.0"
     },
-    "license": "MIT",
+    "license": "GPL-3.0",
     "dependencies": {
         "@clack/prompts": "^0.10.0",
         "@redbusagent/daemon": "^0.1.0",

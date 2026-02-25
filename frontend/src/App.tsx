@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Terminal, Copy, CheckCircle2, Globe, Shield, MessageSquare, Database, Skull, Play } from 'lucide-react';
+import { Terminal, Copy, CheckCircle2, Globe, Shield, MessageSquare, Database, Skull, Play, Brain, Camera, UserCircle } from 'lucide-react';
 import { Changelog } from './components/Changelog';
 
 function App() {
@@ -132,6 +132,21 @@ function App() {
                             icon={<Play size={28} strokeWidth={2.5} />}
                             title="Cognitive Router"
                             desc="Don't burn Anthropic tokens on stupid questions. The heuristic router analyzes complexity in real-time: simple tasks run free on local models, complex coding drops to the Cloud."
+                        />
+                        <FeatureCard
+                            icon={<Brain size={28} strokeWidth={2.5} />}
+                            title="Knowledge Distillation"
+                            desc="The local Ollama model actively learns from Claude and Gemini. High-value cloud responses are captured and injected as few-shot memory for on-the-fly cognitive upgrades without fine-tuning."
+                        />
+                        <FeatureCard
+                            icon={<Camera size={28} strokeWidth={2.5} />}
+                            title="Multimodal Vision"
+                            desc="Playwright doesn't just read the DOM anymore. The agent takes full-page Base64 screenshots and sends them to Tier 2 models for visual debugging and true contextual understanding."
+                        />
+                        <FeatureCard
+                            icon={<UserCircle size={28} strokeWidth={2.5} />}
+                            title="Dynamic Personas"
+                            desc="No hardcoded system prompts. Define the agent's name, context, and operational behavior on the fly during onboarding. The persona lives in the vault and dictates everything."
                         />
                     </div>
                 </div>

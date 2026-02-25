@@ -1,35 +1,49 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { BrowserManager } from '../browser.js';
+import * as cheerio from 'cheerio';
 
 export const webSearchTool = tool({
-    description: 'Searches the web (Google/DuckDuckGo) and returns parsed text results. Use to find up-to-date information dynamically.',
+    description: 'Searches the web and returns parsed text results. Use to find up-to-date information dynamically.',
     inputSchema: z.object({
         query: z.string().describe('The search query or keywords'),
     }),
     execute: async ({ query }) => {
         console.log(`  🌐 Web Search: ${query}`);
         try {
-            const { page, context } = await BrowserManager.getPageForDomain('duckduckgo.com');
-            const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
-            await page.goto(url, { waitUntil: 'domcontentloaded' });
+            const formData = new URLSearchParams();
+            formData.append('q', query);
 
-            // Extract headlines and snippets
-            const results = await page.evaluate(() => {
-                const resultsNodes = document.querySelectorAll('.result');
-                const parsed = [];
-                for (let i = 0; i < Math.min(resultsNodes.length, 5); i++) {
-                    const node = resultsNodes[i];
-                    if (!node) continue;
-                    const title = node.querySelector('.result__title')?.textContent?.trim();
-                    const snippet = node.querySelector('.result__snippet')?.textContent?.trim();
-                    if (title) parsed.push({ title, snippet });
-                }
-                return parsed;
+            const res = await fetch('https://lite.duckduckgo.com/lite/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                },
+                body: formData.toString()
             });
 
-            await context.close();
-            return { success: true, results };
+            if (!res.ok) {
+                throw new Error(`DuckDuckGo returned ${res.status}`);
+            }
+
+            const html = await res.text();
+            const $ = cheerio.load(html);
+            const results: { title: string, url: string, snippet: string }[] = [];
+
+            $('.result-snippet').each((i: number, el: any) => {
+                const snippet = $(el).text().trim();
+                const trNode = $(el).closest('tr').prev();
+                if (trNode) {
+                    const titleNode = trNode.find('.result-link');
+                    const title = titleNode.text().trim();
+                    const url = titleNode.attr('href') || '';
+                    if (title && snippet) {
+                        results.push({ title, url, snippet });
+                    }
+                }
+            });
+
+            return { success: true, results: results.slice(0, 5) };
         } catch (err: any) {
             return { success: false, error: err.message };
         }

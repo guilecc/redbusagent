@@ -15,12 +15,13 @@ export type { Tier2Provider };
 
 // ─── Tier 1 (Ollama / Local) ──────────────────────────────────────
 
-export function getTier1Config(): { url: string; model: string; enabled: boolean } {
+export function getTier1Config(): { url: string; model: string; enabled: boolean; power_class?: string } {
     const config = Vault.read();
     return {
         url: config?.tier1?.url ?? 'http://127.0.0.1:11434',
         model: config?.tier1?.model ?? 'llama3',
         enabled: config?.tier1?.enabled ?? true,
+        power_class: config?.tier1?.power_class,
     };
 }
 

@@ -1,6 +1,6 @@
 # redbusagent
 
-![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)
+![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)
 ![Node.js Version](https://img.shields.io/badge/Node.js-%3E%3D%2018.0.0-success)
 
 > **The Autonomous, Self-Forging Node.js Agent with Embedded RAG and WhatsApp Control.**
@@ -17,6 +17,9 @@ Redbusagent is a next-generation AI agent framework designed to run independentl
 * **Encrypted Vault**: AES-256 encrypted local storage for API keys, user credentials, and WhatsApp session tokens.
 * **WhatsApp Bridge (Owner-Only Firewall)**: Remote control your agent from your phone via WhatsApp, protected by strict owner-only authentication.
 * **Playwright Headless Browsing**: Persistent browsing capabilities with session state, capable of navigating, scraping, searching, and engaging with dynamic web apps.
+* **Multimodal Vision Control**: Takes full-page Base64 screenshots during web sessions to enable Tier 2 models to visually debug and interact with the screen.
+* **Knowledge Distillation Mechanism**: Captures brilliant outputs from Cloud models and stores them to provide on-the-fly few-shot learning directly into the local Tier 1 model.
+* **Dynamic Persona System**: Fully customizable agent identities and behaviors injected at runtime instead of hardcoded prompts.
 * **Self-Healing Code Forge**: Built-in coding capabilities to generate, iterate, and self-correct scripts in real time using the workspace context.
 
 ---
@@ -89,4 +92,4 @@ This architecture means the daemon can safely hum along in the background servin
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE).
+This project is licensed under the [GPL-3.0 License](LICENSE).
