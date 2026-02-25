@@ -59,8 +59,18 @@ if (Test-Path $InstallDir) {
 
 # 3. Install npm packages
 Write-Host ""
+
+# Ask if user wants to clean before installing
+if ((Test-Path "$InstallDir\node_modules") -or (Test-Path "$InstallDir\packages\shared\dist")) {
+    Write-Host ">> A previous installation was detected." -ForegroundColor Yellow
+    $DoClean = Read-Host "Do you want to clean before reinstalling? (removes node_modules, dist and cache) [y/N]"
+    if ($DoClean -match '^[Yy]$') {
+        Write-Host ">> Cleaning previous build artifacts..." -ForegroundColor Yellow
+        npm run clean 2>$null
+    }
+}
+
 Write-Host ">> Installing npm packages and building dependencies..." -ForegroundColor Yellow
-npm run clean -ErrorAction SilentlyContinue
 npm install --no-audit --no-fund
 npm run build
 

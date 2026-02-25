@@ -13,8 +13,8 @@
         }
     },
     "scripts": {
-        "build": "tsc --project tsconfig.json",
-        "dev": "tsc --project tsconfig.json --watch"
+        "build": "tsc --build tsconfig.json",
+        "dev": "tsc --build tsconfig.json --watch"
     },
     "engines": {
         "node": ">= 18.0.0"

@@ -19,7 +19,7 @@
     "dev:daemon": "npm run dev --workspace=packages/daemon",
     "dev:tui": "npm run dev --workspace=packages/tui",
     "build": "npm run build --workspace=@redbusagent/shared && npm run build --workspace=@redbusagent/daemon && npm run build --workspace=@redbusagent/tui && npm run build --workspace=@redbusagent/cli && npm run build --workspace=redbus-frontend",
-    "clean": "rm -rf packages/*/dist packages/*/node_modules node_modules"
+    "clean": "rm -rf packages/*/dist packages/*/*.tsbuildinfo packages/*/node_modules node_modules"
   },
   "engines": {
     "node": ">= 18.0.0"
