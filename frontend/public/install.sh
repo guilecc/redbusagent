@@ -101,34 +101,35 @@ npm run build
 # 4. Create global link for the CLI
 echo ""
 echo -e "${YELLOW}>> Configuring global 'redbus' binary...${NC}"
-npm link
 
-# Ensure redbus is accessible: create a symlink in /usr/local/bin if npm global bin is not in PATH
-NPM_BIN="$(npm prefix -g)/bin"
-if ! command -v redbus &> /dev/null; then
-    if [ -f "$NPM_BIN/redbus" ] || [ -L "$NPM_BIN/redbus" ]; then
-        echo -e "${YELLOW}>> Adding redbus to /usr/local/bin...${NC}"
-        sudo ln -sf "$NPM_BIN/redbus" /usr/local/bin/redbus 2>/dev/null || ln -sf "$NPM_BIN/redbus" "$HOME/.local/bin/redbus" 2>/dev/null || true
-    fi
+# Create a wrapper script in /usr/local/bin that loads NVM and runs redbus
+# This avoids PATH issues with NVM-installed Node not being in PATH after script exits
+WRAPPER="/usr/local/bin/redbus"
+sudo bash -c "cat > $WRAPPER" << 'WRAPPER_EOF'
+#!/usr/bin/env bash
+# redbus global wrapper — auto-loads NVM if needed
+if ! command -v node &> /dev/null; then
+    export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+    [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
 fi
+SCRIPT_DIR="$(cd -P "$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")" && pwd)"
+# If this is the wrapper in /usr/local/bin, redirect to the real script
+if [ -f "$HOME/.redbusagent/bin/redbus" ]; then
+    exec "$HOME/.redbusagent/bin/redbus" "$@"
+fi
+echo "Error: redbusagent not found. Reinstall with: curl -fsSL https://redbus.pages.dev/install.sh | bash"
+exit 1
+WRAPPER_EOF
+sudo chmod +x "$WRAPPER" 2>/dev/null || true
 
 echo ""
 echo -e "${BLUE}========================================${NC}"
 echo -e "${GREEN}✅ Redbus Agent installed successfully!${NC}"
 echo -e "${BLUE}========================================${NC}"
 echo -e ""
-if command -v redbus &> /dev/null; then
-    echo -e "To start the Redbus Agent, type in your terminal:"
-    echo -e "  ${YELLOW}redbus${NC}"
-    echo -e ""
-    echo -e "To configure AI providers, type:"
-    echo -e "  ${YELLOW}redbus config${NC}"
-else
-    echo -e "To start the Redbus Agent, ${YELLOW}open a new terminal${NC} and type:"
-    echo -e "  ${YELLOW}redbus${NC}"
-    echo -e ""
-    echo -e "If 'redbus' is still not found, run:"
-    echo -e "  ${YELLOW}export PATH=\"$NPM_BIN:\$PATH\"${NC}"
-    echo -e "  ${YELLOW}redbus${NC}"
-fi
+echo -e "To start the Redbus Agent, type in your terminal:"
+echo -e "  ${YELLOW}redbus${NC}"
+echo -e ""
+echo -e "To configure AI providers, type:"
+echo -e "  ${YELLOW}redbus config${NC}"
 echo -e ""
