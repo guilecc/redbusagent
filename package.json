@@ -31,5 +31,11 @@
   "devDependencies": {
     "@types/node": "^25.3.0",
     "typescript": "^5.9.3"
+  },
+  "overrides": {
+    "whatsapp-web.js": {
+      "unzipper": "^0.12.3",
+      "archiver": "^7.0.1"
+    }
   }
 }
