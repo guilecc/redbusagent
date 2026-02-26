@@ -126,18 +126,39 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
 
         // ── Step 3: Fetch Models (dynamic!) ────────────────────────
 
-        const s = p.spinner();
-        s.start(`Fetching available models from ${provider}...`);
+        let fetchResult!: Awaited<ReturnType<typeof fetchTier2Models>>;
+        let shouldRetry = true;
 
-        const fetchResult = await fetchTier2Models(provider, { apiKey, authToken });
+        while (shouldRetry) {
+            const s = p.spinner();
+            s.start(`Fetching available models from ${provider}...`);
 
-        if (fetchResult.usingFallback) {
-            s.stop(pc.yellow(`⚠️  Could not list models (${fetchResult.error ?? 'error'}) — using default list`));
-        } else {
-            s.stop(pc.green(`${fetchResult.models.length} models found!`));
+            fetchResult = await fetchTier2Models(provider, { apiKey, authToken });
+
+            if (fetchResult.usingFallback) {
+                s.stop(pc.yellow(`⚠️  Could not list models (${fetchResult.error ?? 'error'})`));
+
+                const retryChoice = await p.select({
+                    message: 'What would you like to do?',
+                    options: [
+                        { value: 'retry', label: '🔄 Try again' },
+                        { value: 'fallback', label: '📋 Continue with default model list' },
+                    ],
+                });
+                if (p.isCancel(retryChoice)) return false;
+
+                if (retryChoice === 'retry') {
+                    continue;
+                }
+                // fallback — exit loop with fallback models
+                shouldRetry = false;
+            } else {
+                s.stop(pc.green(`${fetchResult.models.length} models found!`));
+                shouldRetry = false;
+            }
         }
 
-        if (fetchResult.models.length === 0) {
+        if (fetchResult!.models.length === 0) {
             p.log.error('No models available. Check your credential.');
             return false;
         }
