@@ -35,13 +35,13 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
     let powerClass: Tier1PowerClass = 'bronze';
     let recommendedTier1Model = 'qwen2.5-coder:7b';
 
-    if (ramGB >= 64) {
+    if (ramGB >= 62) {
         powerClass = 'platinum';
         recommendedTier1Model = 'llama3.3:70b';
-    } else if (ramGB >= 32) {
+    } else if (ramGB >= 30) {
         powerClass = 'gold';
         recommendedTier1Model = 'gemma2:27b';
-    } else if (ramGB >= 16) {
+    } else if (ramGB >= 14) {
         powerClass = 'silver';
         recommendedTier1Model = 'qwen2.5-coder:14b';
     }
