@@ -71,7 +71,11 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
     }
 
     if (!skipTier2) {
-        p.note('Tier 2 (Cloud Provider) is mandatory for advanced reasoning and complex agentic tasks. Please enter your API key.', '☁️ MANDATORY CLOUD REASONING');
+        if (powerClass === 'gold' || powerClass === 'platinum') {
+            p.note('Great — Cloud API will complement your powerful local engine for the most complex tasks.', '☁️ CLOUD REASONING (OPTIONAL BOOST)');
+        } else {
+            p.note('Your hardware has limited RAM, so a Cloud Provider is essential for advanced reasoning and complex agentic tasks.', '☁️ CLOUD REASONING (RECOMMENDED)');
+        }
     }
 
     // ── Step 1: Tier 2 Provider ───────────────────────────────
@@ -186,7 +190,13 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
     // ── Step 5: Tier 1 (Ollama Local) ─────────────────────────
 
     let configureTier1 = true;
-    p.note('Tier 1 (Local AI Engine) is mandatory for offline tasks and simple reasoning. It will be configured now.', '💻 MANDATORY LOCAL ENGINE');
+    if (powerClass === 'platinum') {
+        p.note('Now let\'s configure your local AI engine — with 64GB+ RAM, this will be your primary workhorse.', '💻 LOCAL ENGINE (PRIMARY)');
+    } else if (powerClass === 'gold') {
+        p.note('Now let\'s configure your local AI engine — with 32GB+ RAM, you can run very capable models locally.', '💻 LOCAL ENGINE (PRIMARY)');
+    } else {
+        p.note('Tier 1 (Local AI Engine) handles offline tasks and simple reasoning. Let\'s configure it now.', '💻 LOCAL ENGINE');
+    }
 
     let tier1Config: VaultTier1Config;
 
