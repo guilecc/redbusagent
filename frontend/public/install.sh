@@ -37,12 +37,19 @@ fi
 # Install Chromium/Puppeteer dependencies (needed for WhatsApp login via QR code)
 if [ "$(uname)" != "Darwin" ] && command -v apt-get &> /dev/null; then
     echo -e "${YELLOW}>> Installing browser dependencies for WhatsApp...${NC}"
-    sudo apt-get update -qq
-    sudo apt-get install -y -qq \
+    sudo apt-get update -qq 2>/dev/null || true
+    # Try standard package names first, then t64 variants (Ubuntu 24.04+)
+    if ! sudo apt-get install -y -qq \
         libatk1.0-0 libatk-bridge2.0-0 libcups2 libxdamage1 \
         libxrandr2 libgbm1 libpango-1.0-0 libcairo2 libasound2 \
-        libnspr4 libnss3 libxcomposite1 libxfixes3 libxkbcommon0 \
-        > /dev/null 2>&1 || true
+        libnspr4 libnss3 libxcomposite1 libxfixes3 libxkbcommon0 2>&1; then
+        echo -e "${YELLOW}   Retrying with alternative package names (Ubuntu 24.04+)...${NC}"
+        sudo apt-get install -y -qq \
+            libatk1.0-0t64 libatk-bridge2.0-0t64 libcups2t64 libxdamage1 \
+            libxrandr2t64 libgbm1 libpango-1.0-0t64 libcairo2t64 libasound2t64 \
+            libnspr4 libnss3t64 libxcomposite1 libxfixes3 libxkbcommon0 2>&1 || \
+            echo -e "${RED}   ⚠️  Could not install some browser dependencies. WhatsApp may not work.${NC}"
+    fi
 fi
 
 if ! command -v node &> /dev/null || ! command -v npm &> /dev/null; then
