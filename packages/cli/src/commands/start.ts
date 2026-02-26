@@ -7,33 +7,42 @@
  * Usage: redbus start
  */
 
-import { spawn } from 'node:child_process';
+import { spawn, execSync } from 'node:child_process';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { createConnection } from 'node:net';
 import pc from 'picocolors';
-import { Vault } from '@redbusagent/shared';
+import { Vault, DEFAULT_PORT, DEFAULT_HOST } from '@redbusagent/shared';
 import { runOnboardingWizard } from '../wizard/onboarding.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = resolve(__dirname, '../../../../');
 const PID_FILE = join(Vault.dir, 'daemon.pid');
+const DAEMON_PORT = Number(process.env['REDBUS_PORT']) || DEFAULT_PORT;
+const DAEMON_HOST = process.env['REDBUS_HOST'] || DEFAULT_HOST;
 
 function resolveTsx(): string {
     return resolve(PROJECT_ROOT, 'node_modules/.bin/tsx');
 }
 
-function isDaemonRunning(): boolean {
-    if (!existsSync(PID_FILE)) return false;
-    try {
-        const pid = parseInt(readFileSync(PID_FILE, 'utf-8').trim(), 10);
-        if (isNaN(pid)) return false;
-        process.kill(pid, 0);
-        return true;
-    } catch {
-        return false;
-    }
+/** Check if daemon is reachable via TCP (the real source of truth) */
+function isDaemonReachable(): Promise<boolean> {
+    return new Promise((resolve) => {
+        const socket = createConnection({ host: DAEMON_HOST, port: DAEMON_PORT }, () => {
+            socket.destroy();
+            resolve(true);
+        });
+        socket.on('error', () => {
+            socket.destroy();
+            resolve(false);
+        });
+        socket.setTimeout(3000, () => {
+            socket.destroy();
+            resolve(false);
+        });
+    });
 }
 
 export async function startCommand(): Promise<void> {
@@ -53,15 +62,16 @@ export async function startCommand(): Promise<void> {
         console.log(''); // spacing
     }
 
-    // ── Check if daemon is running ───────────────────────────
-    if (!isDaemonRunning()) {
-        console.log(pc.red('\n  ❌ Daemon is not running.'));
+    // ── Check if daemon is running (TCP is the source of truth) ──
+    const reachable = await isDaemonReachable();
+    if (!reachable) {
+        console.log(pc.red('\n  ❌ Daemon is not running (port ' + DAEMON_PORT + ' unreachable).'));
         console.log(pc.dim('     Start it first with: ') + pc.cyan('redbus daemon'));
         console.log(pc.dim('     Then run: ') + pc.cyan('redbus start\n'));
         process.exit(1);
     }
 
-    console.log(pc.dim('  ✅ Daemon is running.'));
+    console.log(pc.dim('  ✅ Daemon is running (port ' + DAEMON_PORT + ').'));
 
     const tsx = resolveTsx();
     const tuiEntry = resolve(PROJECT_ROOT, 'packages/tui/src/main.tsx');
