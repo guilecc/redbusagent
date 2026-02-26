@@ -66,7 +66,7 @@ describe('detectToolCallLoop', () => {
         }));
         const result = detectToolCallLoop(history, 'read_file', { path: '/foo' });
         expect(result.stuck).toBe(true);
-        expect(result.level).toBe('critical');
+        if (result.stuck) expect(result.level).toBe('critical');
     });
 
     it('detects warning level before critical', () => {
@@ -77,7 +77,7 @@ describe('detectToolCallLoop', () => {
         }));
         const result = detectToolCallLoop(history, 'read_file', { path: '/foo' });
         expect(result.stuck).toBe(true);
-        expect(result.level).toBe('warning');
+        if (result.stuck) expect(result.level).toBe('warning');
     });
 
     it('respects disabled config', () => {
@@ -99,7 +99,7 @@ describe('detectToolCallLoop', () => {
         }));
         const result = detectToolCallLoop(history, 'read_file', { path: '/foo' }, { globalCircuitBreakerThreshold: 8 });
         expect(result.stuck).toBe(true);
-        expect(result.detector).toBe('global_circuit_breaker');
+        if (result.stuck) expect(result.detector).toBe('global_circuit_breaker');
     });
 });
 
