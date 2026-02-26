@@ -283,7 +283,7 @@ export function Dashboard(): React.ReactElement {
 
             onDisconnected: () => {
                 setConnected(false);
-                addLog('Disconnected. Trying to reconnect...', 'yellow');
+                addLog('❌ Daemon is offline. Run \'redbus daemon\' in another terminal.', 'red');
             },
             onError: (err) => {
                 addLog(`Error: ${err.message}`, 'red');

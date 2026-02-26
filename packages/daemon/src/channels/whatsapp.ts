@@ -20,14 +20,34 @@ const { Client, LocalAuth } = pkg;
 import qrcode from 'qrcode-terminal';
 import { Vault } from '@redbusagent/shared';
 import { askTier2 } from '../core/cognitive-router.js';
+import type { DaemonWsServer } from '../infra/ws-server.js';
 
 export class WhatsAppChannel {
     private static instance: WhatsAppChannel;
     private client: pkg.Client | null = null;
     private isThinking: boolean = false;
+    private wsServer: DaemonWsServer | null = null;
 
     constructor() {
         WhatsAppChannel.instance = this;
+    }
+
+    /**
+     * Inject the WebSocket server for omnichannel broadcasting.
+     * Called from daemon main.ts after wsServer is created.
+     */
+    public setWsServer(server: DaemonWsServer): void {
+        this.wsServer = server;
+    }
+
+    /** Broadcast a log message to all connected TUI clients */
+    private broadcastToTui(message: string, level: 'info' | 'warn' = 'info'): void {
+        if (!this.wsServer) return;
+        this.wsServer.broadcast({
+            type: 'log',
+            timestamp: new Date().toISOString(),
+            payload: { level, source: 'whatsapp', message },
+        });
     }
 
     public static getInstance(): WhatsAppChannel {
@@ -135,22 +155,19 @@ export class WhatsAppChannel {
             console.log(`  🛡️ WhatsAppChannel: Firewall ATIVO — ouvindo APENAS: ${this.ownerJid}`);
         });
 
-        // 🛡️ INBOUND FIREWALL on 'message' (incoming messages only)
-        // First line: if not from owner → silent drop. No log, no processing.
-        this.client.on('message', async (msg: pkg.Message) => {
-            if (msg.from !== this.ownerJid) return; // 🛡️ FIREWALL: silent drop
-            // Messages from owner are also caught by message_create below.
-            // This listener exists purely as an extra guard layer.
-        });
-
         // 🛡️ INBOUND FIREWALL on 'message_create' (all messages: sent + received)
+        // This single listener handles BOTH incoming messages AND self-messages (fromMe).
+        // The 'message' event is NOT needed — message_create covers everything.
         this.client.on('message_create', async (message: pkg.Message) => {
-            // 🛡️ FIREWALL: Only accept "Note to Self" — from owner TO owner
-            if (message.from !== this.ownerJid || message.to !== this.ownerJid) {
-                return; // 🛡️ FIREWALL: silently blocked
+            // 🛡️ FIREWALL: Accept ONLY messages from the owner's own number.
+            // - Incoming messages from owner: message.from === ownerJid
+            // - Self-messages (fromMe / "Note to Self"): message.fromMe === true AND message.from === ownerJid
+            // Block everything else (groups, other contacts, strangers).
+            if (message.from !== this.ownerJid) {
+                return; // 🛡️ FIREWALL: not from owner — silently blocked
             }
 
-            // Skip bot replies (our own messages start with 🔴)
+            // Skip bot replies (our own responses start with 🔴)
             if (message.body.startsWith('🔴')) {
                 return;
             }
@@ -158,7 +175,10 @@ export class WhatsAppChannel {
             const body = message.body.trim();
             if (!body) return;
 
-            console.log(`  🧠 WhatsAppChannel: Recebeu [${body.slice(0, 30)}...] -> Roteando p/ Tier 2...`);
+            console.log(`  📱 WhatsAppChannel: Recebeu [${body.slice(0, 40)}...] -> Roteando p/ Tier 2...`);
+
+            // ── Omnichannel: Mirror input to TUI ──────────────────
+            this.broadcastToTui(`📱 [WhatsApp Input]: ${body}`);
 
             if (this.isThinking) {
                 await this.sendToOwner('🔴 *redbusagent:* Já estou processando uma requisição. Aguarde um momento...');
@@ -170,13 +190,18 @@ export class WhatsAppChannel {
             try {
                 let fullResponse = '';
                 await askTier2(body, {
-                    onChunk: (chunk) => { },
+                    onChunk: (chunk) => {
+                        // ── Omnichannel: Stream chunks to TUI (ghost typing) ──
+                        this.broadcastToTui(chunk);
+                    },
                     onDone: (text) => { fullResponse = text; },
                     onError: (err) => {
                         console.error('  ❌ WhatsAppChannel: Falha no Tier 2:', err);
+                        this.broadcastToTui(`❌ [WhatsApp Error]: ${err.message}`, 'warn');
                     },
                     onToolCall: async (name) => {
                         console.log(`  🔧 WhatsAppChannel Forjando: ${name}...`);
+                        this.broadcastToTui(`🔧 [WhatsApp Tool]: ${name}`);
                     },
                     onToolResult: (name, success) => {
                         console.log(`  ✅ WhatsAppChannel Forja finalizada: ${name} [${success}]`);
@@ -184,11 +209,14 @@ export class WhatsAppChannel {
                 });
 
                 if (fullResponse) {
+                    // ── Send via WhatsApp AND mirror to TUI ──────────
                     await this.sendToOwner(`🔴 *redbusagent:*\n\n${fullResponse}`);
+                    this.broadcastToTui(`🤖 [Agent via WhatsApp]: ${fullResponse}`);
                 }
             } catch (err: any) {
                 console.error('  ❌ WhatsAppChannel: Error:', err);
                 await this.sendToOwner(`🔴 *redbusagent:* Ocorreu um erro ao processar sua requisição: ${err.message}`);
+                this.broadcastToTui(`❌ [WhatsApp Error]: ${err.message}`, 'warn');
             } finally {
                 this.isThinking = false;
             }

@@ -217,6 +217,7 @@ if (shouldRunLocalEngine) {
 // ── Extensions (Channels) ─────────────────────────────────────────
 
 const whatsapp = WhatsAppChannel.getInstance();
+whatsapp.setWsServer(wsServer); // Omnichannel: mirror WhatsApp activity to TUI
 whatsapp.startSilent().catch(err => {
     console.error('  ❌ Failed to start WhatsApp Bridge:', err);
 });

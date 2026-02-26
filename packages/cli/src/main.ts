@@ -22,6 +22,7 @@ ${pc.bold('Usage:')}
   ${pc.cyan('redbus')} ${pc.yellow('<command>')}
 
 ${pc.bold('Commands:')}
+  ${pc.yellow('daemon')}   Starts the Daemon only (background service, no TUI)
   ${pc.yellow('start')}    Starts the Daemon + interactive TUI
   ${pc.yellow('config')}   Opens the configuration wizard
   ${pc.yellow('channel')}  Manages Extra Channels (e.g. whatsapp)
@@ -30,7 +31,8 @@ ${pc.bold('Commands:')}
 
 ${pc.bold('Getting Started:')}
   ${pc.dim('1.')} ${pc.cyan('redbus config')}   ${pc.dim('— Configure your API keys')}
-  ${pc.dim('2.')} ${pc.cyan('redbus start')}    ${pc.dim('— Start the agent')}
+  ${pc.dim('2.')} ${pc.cyan('redbus daemon')}   ${pc.dim('— Start the daemon service')}
+  ${pc.dim('3.')} ${pc.cyan('redbus start')}    ${pc.dim('— Connect the TUI client')}
   `);
 }
 
@@ -38,6 +40,12 @@ export async function main(args: string[]): Promise<void> {
     const command = args[0];
 
     switch (command) {
+        case 'daemon': {
+            const { daemonCommand } = await import('./commands/daemon.js');
+            await daemonCommand();
+            break;
+        }
+
         case 'start': {
             const { startCommand } = await import('./commands/start.js');
             await startCommand();
