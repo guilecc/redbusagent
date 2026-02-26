@@ -10,10 +10,11 @@
 import { spawn } from 'node:child_process';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, openSync } from 'node:fs';
 import { join } from 'node:path';
+import { createConnection } from 'node:net';
 import pc from 'picocolors';
-import { Vault } from '@redbusagent/shared';
+import { Vault, DEFAULT_PORT, DEFAULT_HOST } from '@redbusagent/shared';
 import { runOnboardingWizard } from '../wizard/onboarding.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -36,58 +37,60 @@ function isDaemonRunning(): boolean {
     }
 }
 
-function startDaemonBackground(): Promise<void> {
+/** Try to connect to the daemon's WebSocket port to confirm it's accepting connections */
+function waitForDaemonReady(maxWaitMs = 15000): Promise<void> {
+    const port = Number(process.env['REDBUS_PORT']) || DEFAULT_PORT;
+    const host = process.env['REDBUS_HOST'] || DEFAULT_HOST;
+    const startTime = Date.now();
+
     return new Promise((resolve, reject) => {
-        const tsx = resolveTsx();
-        const daemonEntry = join(PROJECT_ROOT, 'packages/daemon/src/main.ts');
-
-        console.log(pc.dim('  🚀 Daemon not running. Starting in background...'));
-
-        const daemonProcess = spawn(tsx, [daemonEntry], {
-            stdio: ['ignore', 'pipe', 'pipe'],
-            cwd: PROJECT_ROOT,
-            detached: true,
-            env: { ...process.env },
-        });
-
-        daemonProcess.unref();
-
-        let resolved = false;
-
-        // Wait for "Daemon is ready" message or PID file to appear
-        const timeout = setTimeout(() => {
-            if (!resolved) {
-                resolved = true;
-                console.log(pc.green('  ✅ Daemon started (PID: ' + daemonProcess.pid + ')'));
+        function tryConnect() {
+            if (Date.now() - startTime > maxWaitMs) {
+                // Timeout — but daemon process was spawned, so proceed anyway
                 resolve();
+                return;
             }
-        }, 8000); // max 8s wait
 
-        daemonProcess.stdout?.on('data', (data: Buffer) => {
-            const text = data.toString();
-            if (text.includes('Daemon is ready') && !resolved) {
-                resolved = true;
-                clearTimeout(timeout);
-                console.log(pc.green('  ✅ Daemon started (PID: ' + daemonProcess.pid + ')'));
+            const socket = createConnection({ host, port }, () => {
+                socket.destroy();
                 resolve();
-            }
-        });
+            });
 
-        daemonProcess.on('error', (err) => {
-            if (!resolved) {
-                resolved = true;
-                clearTimeout(timeout);
-                reject(err);
-            }
-        });
+            socket.on('error', () => {
+                socket.destroy();
+                setTimeout(tryConnect, 500);
+            });
+        }
 
-        daemonProcess.on('exit', (code) => {
-            if (!resolved) {
-                resolved = true;
-                clearTimeout(timeout);
-                reject(new Error(`Daemon exited prematurely with code ${code}`));
-            }
-        });
+        tryConnect();
+    });
+}
+
+function startDaemonBackground(): Promise<void> {
+    const tsx = resolveTsx();
+    const daemonEntry = join(PROJECT_ROOT, 'packages/daemon/src/main.ts');
+
+    console.log(pc.dim('  🚀 Daemon not running. Starting in background...'));
+
+    // Redirect daemon stdout/stderr to a log file so pipes don't bind the processes
+    const logPath = join(Vault.dir, 'daemon.log');
+    const logFd = openSync(logPath, 'a');
+
+    const daemonProcess = spawn(tsx, [daemonEntry], {
+        stdio: ['ignore', logFd, logFd],
+        cwd: PROJECT_ROOT,
+        detached: true,
+        env: { ...process.env },
+    });
+
+    daemonProcess.unref();
+
+    console.log(pc.dim(`  📄 Daemon log: ${logPath}`));
+    console.log(pc.dim(`  ⏳ Waiting for daemon to be ready...`));
+
+    // Wait for the daemon to start accepting connections
+    return waitForDaemonReady().then(() => {
+        console.log(pc.green(`  ✅ Daemon started (PID: ${daemonProcess.pid})`));
     });
 }
 
