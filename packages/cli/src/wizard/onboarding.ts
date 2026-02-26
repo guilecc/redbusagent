@@ -316,7 +316,7 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
                                     const percent = Math.round((data.completed / data.total) * 100);
                                     pullSpinner.message(`Checking/Downloading model '${tier1Config.model}' in Ollama via API... (${percent}%)`);
                                 } else if (data.status) {
-                                    // Mostra fallback status if no progress is available yet e.g "pulling manifest"
+                                    // Show fallback status if no progress is available yet e.g "pulling manifest"
                                     pullSpinner.message(`Configuring model '${tier1Config.model}'... (${data.status})`);
                                 }
                             } catch (e) {
@@ -444,7 +444,7 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
         try {
             rmSync(authDir, { recursive: true, force: true });
         } catch (e) {
-            // Ignora caso a pasta não exista ou esteja bloqueada
+            // Ignore if the folder doesn't exist or is locked
         }
 
         ownerPhoneNumber = undefined;

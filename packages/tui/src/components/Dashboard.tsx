@@ -99,7 +99,7 @@ export function Dashboard(): React.ReactElement {
     // ── Logging ───────────────────────────────────────────────
 
     const addLog = useCallback((text: string, color = 'white') => {
-        const time = new Date().toLocaleTimeString('pt-BR');
+        const time = new Date().toLocaleTimeString('en-US');
         setLogs((prev) => [...prev.slice(-(MAX_LOG_ENTRIES - 1)), { time, text, color }]);
     }, []);
 

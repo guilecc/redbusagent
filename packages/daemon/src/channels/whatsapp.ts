@@ -87,27 +87,27 @@ export class WhatsAppChannel {
             });
 
             client.on('qr', (qr: string) => {
-                console.log('\n  🟩 Escaneie o QR Code abaixo no seu WhatsApp (Aparelhos Conectados):\n');
+                console.log('\n  🟩 Scan the QR Code below in your WhatsApp (Linked Devices):\n');
                 qrcode.generate(qr, { small: true });
             });
 
             client.on('authenticated', () => {
-                console.log('\n  ✅ Autenticado com sucesso no WhatsApp!');
+                console.log('\n  ✅ Successfully authenticated with WhatsApp!');
             });
 
             client.on('ready', async () => {
-                console.log('  ✅ Sessão salva no Vault do redbusagent.\n');
+                console.log('  ✅ Session saved to redbusagent Vault.\n');
                 await client.destroy();
                 resolve();
             });
 
             client.on('auth_failure', (msg: string) => {
-                console.error('  ❌ Falha de autenticação:', msg);
+                console.error('  ❌ Authentication failed:', msg);
                 reject(new Error(msg));
             });
 
             client.initialize().catch((err: any) => {
-                console.error('  ❌ Erro ao inicializar o WhatsApp:', err);
+                console.error('  ❌ Error initializing WhatsApp:', err);
                 reject(err);
             });
         });
@@ -140,8 +140,8 @@ export class WhatsAppChannel {
             return;
         }
 
-        console.log('  📱 WhatsAppChannel: Inicializando silenciosamente...');
-        console.log(`  🛡️ WhatsAppChannel: Firewall ATIVO — apenas ${this.ownerJid} será processado.`);
+        console.log('  📱 WhatsAppChannel: Initializing silently...');
+        console.log(`  🛡️ WhatsAppChannel: Firewall ACTIVE — only ${this.ownerJid} will be processed.`);
 
         this.client = new Client({
             authStrategy: new LocalAuth({ dataPath: WhatsAppChannel.authPath }),
@@ -151,8 +151,8 @@ export class WhatsAppChannel {
         });
 
         this.client.on('ready', async () => {
-            console.log('  ✅ WhatsAppChannel: Prontidão alcançada!');
-            console.log(`  🛡️ WhatsAppChannel: Firewall ATIVO — ouvindo APENAS: ${this.ownerJid}`);
+            console.log('  ✅ WhatsAppChannel: Ready!');
+            console.log(`  🛡️ WhatsAppChannel: Firewall ACTIVE — listening ONLY to: ${this.ownerJid}`);
         });
 
         // 🛡️ INBOUND FIREWALL on 'message_create' (all messages: sent + received)
@@ -175,13 +175,13 @@ export class WhatsAppChannel {
             const body = message.body.trim();
             if (!body) return;
 
-            console.log(`  📱 WhatsAppChannel: Recebeu [${body.slice(0, 40)}...] -> Roteando p/ Tier 2...`);
+            console.log(`  📱 WhatsAppChannel: Received [${body.slice(0, 40)}...] -> Routing to Tier 2...`);
 
             // ── Omnichannel: Mirror input to TUI ──────────────────
             this.broadcastToTui(`📱 [WhatsApp Input]: ${body}`);
 
             if (this.isThinking) {
-                await this.sendToOwner('🔴 *redbusagent:* Já estou processando uma requisição. Aguarde um momento...');
+                await this.sendToOwner('🔴 *redbusagent:* I am already processing a request. Please wait a moment...');
                 return;
             }
 
@@ -215,7 +215,7 @@ export class WhatsAppChannel {
                 }
             } catch (err: any) {
                 console.error('  ❌ WhatsAppChannel: Error:', err);
-                await this.sendToOwner(`🔴 *redbusagent:* Ocorreu um erro ao processar sua requisição: ${err.message}`);
+                await this.sendToOwner(`🔴 *redbusagent:* An error occurred while processing your request: ${err.message}`);
                 this.broadcastToTui(`❌ [WhatsApp Error]: ${err.message}`, 'warn');
             } finally {
                 this.isThinking = false;
@@ -224,14 +224,14 @@ export class WhatsAppChannel {
 
         // Suppress auth and other warnings locally in daemon loop
         this.client.on('auth_failure', (msg: string) => {
-            console.error('  ❌ WhatsAppChannel Auth Falhou no Background:', msg);
+            console.error('  ❌ WhatsAppChannel Auth Failed in Background:', msg);
         });
 
         this.client.initialize().catch((err: any) => {
             if (err.message && err.message.includes('already running')) {
-                console.error('  ⚠️  WhatsAppChannel: O navegador do WhatsApp já está rodando em outro processo (ou travou). Ignorando inicialização silenciosa.');
+                console.error('  ⚠️  WhatsAppChannel: The WhatsApp browser is already running in another process (or crashed). Skipping silent initialization.');
             } else {
-                console.error('  ❌ Erro silencioso no WhatsApp:', err);
+                console.error('  ❌ Silent WhatsApp error:', err);
             }
         });
     }
@@ -245,7 +245,7 @@ export class WhatsAppChannel {
      */
     private async sendToOwner(text: string): Promise<void> {
         if (!this.client || !this.ownerJid) {
-            console.error('  🛡️❌ WhatsAppChannel.sendToOwner: client ou ownerJid não disponível.');
+            console.error('  🛡️❌ WhatsAppChannel.sendToOwner: client or ownerJid not available.');
             return;
         }
         await this.client.sendMessage(this.ownerJid, text);

@@ -38,7 +38,7 @@ import { AutoRAG } from './auto-rag.js';
 function getPersonaContext(): string {
     const persona = PersonaManager.read();
     if (!persona) return '';
-    return `Você é ${persona.agent_name}. O contexto do seu usuário é: ${persona.user_context}. Suas diretrizes comportamentais são: ${persona.behavioral_guidelines}.\n\n`;
+    return `You are ${persona.agent_name}. Your user's context is: ${persona.user_context}. Your behavioral guidelines are: ${persona.behavioral_guidelines}.\n\n`;
 }
 
 // ─── Provider Factory ─────────────────────────────────────────────
@@ -84,7 +84,7 @@ function createTier1Model(): LanguageModel {
 
 export function createTier2Model(): LanguageModel {
     const config = getTier2Config();
-    if (!config) throw new Error('Tier 2 não configurado. Rode: redbus config');
+    if (!config) throw new Error('Tier 2 not configured. Run: redbus config');
 
     switch (config.provider) {
         case 'anthropic': {
@@ -394,7 +394,7 @@ THE LAZINESS BAN: Never attempt to do complex math, data filtering, or system an
         getSystemPromptTier2(),
         `\n\n${PROACTIVE_DIRECTIVE}`,
         `\n\n${CapabilityRegistry.getCapabilityManifest()}`,
-        context ? `\n## Contexto Adicional da Sessão\n${context}` : '',
+        context ? `\n## Additional Session Context\n${context}` : '',
     ].join('');
 
     try {

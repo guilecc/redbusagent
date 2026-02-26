@@ -54,23 +54,23 @@ await MCPEngine.getInstance().initialize();
 if (Vault.isConfigured()) {
     console.log(`  🔐 Vault: ${Vault.configPath}`);
 } else {
-    console.log('  🔐 Vault: ⚠️  não configurado — rode: redbus config');
+    console.log('  🔐 Vault: ⚠️  not configured — run: redbus config');
 }
 
 // Display router status
 const routerStatus = getRouterStatus();
 console.log('  🧠 Cognitive Router:');
-console.log(`     Tier 1 (Local):  ${routerStatus.tier1.model} @ ${routerStatus.tier1.url} [${routerStatus.tier1.enabled ? '✅' : '⏸️  desativado'}]`);
+console.log(`     Tier 1 (Local):  ${routerStatus.tier1.model} @ ${routerStatus.tier1.url} [${routerStatus.tier1.enabled ? '✅' : '⏸️  disabled'}]`);
 if (routerStatus.tier2) {
     if (routerStatus.tier2.configured) {
         console.log(`     Tier 2 (Cloud):  ${routerStatus.tier2.provider}/${routerStatus.tier2.model} [✅ ${routerStatus.tier2.authMethod}]`);
     } else {
-        console.log(`     Tier 2 (Cloud):  ${routerStatus.tier2.provider}/${routerStatus.tier2.model} [⚠️  credenciais ausentes]`);
+        console.log(`     Tier 2 (Cloud):  ${routerStatus.tier2.provider}/${routerStatus.tier2.model} [⚠️  credentials missing]`);
     }
 } else {
-    console.log('     Tier 2 (Cloud):  ⚠️  não configurado');
+    console.log('     Tier 2 (Cloud):  ⚠️  not configured');
 }
-console.log(`  🔨 Forge: ${Forge.dir} (${routerStatus.forgedTools} ferramentas registradas)`);
+console.log(`  🔨 Forge: ${Forge.dir} (${routerStatus.forgedTools} registered tools)`);
 const coreMemStats = CoreMemory.getStats();
 console.log(`  🧠 Core Memory: ${coreMemStats.exists ? `${coreMemStats.charCount} chars (${coreMemStats.percentFull}% full)` : 'initialized'}`);
 
@@ -84,12 +84,12 @@ if (totalConfiguredMCPs > 0) {
     const mcpList = connectedMCPs.length > 0 ? `(${connectedMCPs.join(', ')})` : '';
     const totalToolsFromMcp = MCPEngine.getInstance().getTools().length;
 
-    console.log(`  🔌 MCP Engine: ${successRatio} extensões ativas ${mcpList} [${allGood ? '✅' : '⚠️ '}]`);
+    console.log(`  🔌 MCP Engine: ${successRatio} active extensions ${mcpList} [${allGood ? '✅' : '⚠️ '}]`);
     if (connectedMCPs.length > 0) {
-        console.log(`     -> Provendo ${totalToolsFromMcp} de ferramentas dinâmicas`);
+        console.log(`     -> Providing ${totalToolsFromMcp} dynamic tools`);
     }
 } else {
-    console.log(`  🔌 MCP Engine: nenhuma extensão conectada`);
+    console.log(`  🔌 MCP Engine: no extensions connected`);
 }
 
 console.log('');
@@ -117,14 +117,14 @@ const wsServer = new DaemonWsServer({
                     wsServer.sendTo(clientId, {
                         type: 'log',
                         timestamp: new Date().toISOString(),
-                        payload: { level: 'info', source: 'System', message: 'Próxima mensagem forçada para Tier 1 (Local)' }
+                        payload: { level: 'info', source: 'System', message: 'Next message forced to Tier 1 (Local)' }
                     });
                 } else if (command === 'auto-route') {
                     chatHandler.setForceTier1(false);
                     wsServer.sendTo(clientId, {
                         type: 'log',
                         timestamp: new Date().toISOString(),
-                        payload: { level: 'info', source: 'System', message: 'Roteamento automático restaurado' }
+                        payload: { level: 'info', source: 'System', message: 'Automatic routing restored' }
                     });
                 } else if (command === 'status') {
                     const status = getRouterStatus();
