@@ -132,12 +132,21 @@ export async function configCommand(): Promise<void> {
             const s = p.spinner();
             s.start('Starting Factory Reset...');
 
-            // Delete entire ~/.redbusagent directory (except bin/ to save bandwidth for Ollama)
-            if (existsSync(Vault.dir)) {
-                const files = readdirSync(Vault.dir);
-                for (const file of files) {
-                    if (file === 'bin') continue;
-                    rmSync(join(Vault.dir, file), { recursive: true, force: true });
+            // Delete only user data — preserve the application structure (node_modules, packages, .git, bin, etc.)
+            const USER_DATA = [
+                'config.json',
+                '.masterkey',
+                'memory',
+                'forge',
+                'auth_whatsapp',
+                'tools-registry.json',
+                'cognitive-map.json',
+                'core-memory.md',
+            ];
+            for (const entry of USER_DATA) {
+                const fullPath = join(Vault.dir, entry);
+                if (existsSync(fullPath)) {
+                    rmSync(fullPath, { recursive: true, force: true });
                 }
             }
 
