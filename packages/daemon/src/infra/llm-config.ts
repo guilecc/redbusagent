@@ -78,7 +78,7 @@ export function validateTier2Config(): Tier2Validation {
     if (!config?.tier2) {
         return {
             valid: false,
-            error: 'Vault não configurado. Rode: redbus config',
+            error: 'Vault not configured. Run: redbus config',
         };
     }
 
@@ -88,7 +88,7 @@ export function validateTier2Config(): Tier2Validation {
             if (auth.method === 'none') {
                 return {
                     valid: false,
-                    error: 'Anthropic não configurado. Rode: redbus config',
+                    error: 'Anthropic not configured. Run: redbus config',
                 };
             }
             return {
@@ -98,15 +98,15 @@ export function validateTier2Config(): Tier2Validation {
         }
         case 'google':
             if (!config.tier2.apiKey) {
-                return { valid: false, error: 'Google API key não configurada. Rode: redbus config' };
+                return { valid: false, error: 'Google API key not configured. Run: redbus config' };
             }
             return { valid: true, authMethod: 'API key' };
         case 'openai':
             if (!config.tier2.apiKey) {
-                return { valid: false, error: 'OpenAI API key não configurada. Rode: redbus config' };
+                return { valid: false, error: 'OpenAI API key not configured. Run: redbus config' };
             }
             return { valid: true, authMethod: 'API key' };
         default:
-            return { valid: false, error: `Provider desconhecido: ${config.tier2.provider as string}` };
+            return { valid: false, error: `Unknown provider: ${config.tier2.provider as string}` };
     }
 }

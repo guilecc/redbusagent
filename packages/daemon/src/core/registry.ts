@@ -42,10 +42,20 @@ export class CapabilityRegistry {
         for (const t of mcpTools) {
             const safeName = t.toolName.replace(/[^a-zA-Z0-9_-]/g, '_');
 
-            // Fallback for MCP tools that might legitimately lack an inputSchema
-            const schema = (t.inputSchema && Object.keys(t.inputSchema).length > 0)
-                ? jsonSchema(t.inputSchema)
-                : z.object({ _params: z.record(z.string(), z.any()).optional() }).describe('Fallback schema');
+            // Sanitize MCP inputSchema: Anthropic requires top-level `type: "object"`.
+            // Some MCP servers return schemas missing this field, causing:
+            //   "tools.N.custom.input_schema.type: Field required"
+            let schema;
+            if (t.inputSchema && Object.keys(t.inputSchema).length > 0) {
+                const sanitized = { type: 'object', ...t.inputSchema };
+                // Ensure properties exists (Anthropic also requires it for object types)
+                if (!sanitized.properties) {
+                    sanitized.properties = {};
+                }
+                schema = jsonSchema(sanitized);
+            } else {
+                schema = z.object({ _params: z.record(z.string(), z.any()).optional() }).describe('Fallback schema');
+            }
 
             mcpSdkTools[`mcp_x_${safeName}`] = tool({
                 description: `[MCP: ${t.mcpId}] ${t.description}`,
