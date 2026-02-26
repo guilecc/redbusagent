@@ -2,11 +2,12 @@
  * @redbusagent/daemon — The Forge
  *
  * The Forge is where the agent writes, installs dependencies,
- * and executes its own Node.js scripts autonomously.
+ * and executes its own Node.js and Python scripts autonomously.
  *
  * Workspace: ~/.redbusagent/forge/
- *  - Scripts are written here as .js files
+ *  - Scripts are written here as .js or .py files
  *  - Has its own package.json for isolated npm installs
+ *  - Has its own Python venv for isolated pip installs
  *  - Each execution is a child_process with stdout/stderr capture
  */
 
@@ -25,11 +26,32 @@ export interface ForgeExecutionResult {
     durationMs: number;
 }
 
+export type ForgeLanguage = 'node' | 'python';
+
 // ─── Constants ────────────────────────────────────────────────────
 
 const FORGE_DIR = join(Vault.dir, 'forge');
 const FORGE_PACKAGE_JSON = join(FORGE_DIR, 'package.json');
+const FORGE_VENV_DIR = join(FORGE_DIR, '.venv');
 const EXECUTION_TIMEOUT_MS = 30_000; // 30 seconds max per script
+
+// ─── Helpers ─────────────────────────────────────────────────────
+
+function detectLanguage(filename: string): ForgeLanguage {
+    if (filename.endsWith('.py')) return 'python';
+    return 'node';
+}
+
+/** Returns the path to the Python interpreter inside the venv */
+function venvPython(): string {
+    // Works on macOS/Linux; Windows would use Scripts/python.exe
+    return join(FORGE_VENV_DIR, 'bin', 'python3');
+}
+
+/** Returns the path to the pip executable inside the venv */
+function venvPip(): string {
+    return join(FORGE_VENV_DIR, 'bin', 'pip');
+}
 
 // ─── Forge Service ────────────────────────────────────────────────
 
@@ -37,6 +59,11 @@ export class Forge {
     /** Path to the forge workspace */
     static get dir(): string {
         return FORGE_DIR;
+    }
+
+    /** Path to the Python venv directory */
+    static get venvDir(): string {
+        return FORGE_VENV_DIR;
     }
 
     /**
@@ -62,6 +89,42 @@ export class Forge {
     }
 
     /**
+     * Ensures the Python venv exists inside the forge workspace.
+     * Creates it on first use so we don't slow down startup if Python isn't needed.
+     */
+    static async ensurePythonVenv(): Promise<{ success: boolean; error?: string }> {
+        if (existsSync(venvPython())) return { success: true };
+
+        console.log('  🐍 Forge: Creating Python virtual environment...');
+        return new Promise((resolve) => {
+            execFile(
+                'python3',
+                ['-m', 'venv', FORGE_VENV_DIR],
+                {
+                    cwd: FORGE_DIR,
+                    timeout: 60_000,
+                    env: { ...process.env },
+                },
+                (error, _stdout, stderr) => {
+                    if (error) {
+                        resolve({ success: false, error: stderr || error.message });
+                    } else {
+                        console.log('  🐍 Forge: Python venv created');
+                        resolve({ success: true });
+                    }
+                },
+            );
+        });
+    }
+
+    /**
+     * Detect language from filename extension.
+     */
+    static detectLanguage(filename: string): ForgeLanguage {
+        return detectLanguage(filename);
+    }
+
+    /**
      * Install npm dependencies in the forge workspace.
      * Runs `npm install` silently.
      */
@@ -76,6 +139,43 @@ export class Forge {
                     cwd: FORGE_DIR,
                     timeout: 60_000, // 60s for installs
                     env: { ...process.env, NODE_ENV: 'production' },
+                },
+                (error, _stdout, stderr) => {
+                    if (error) {
+                        resolve({ success: false, error: stderr || error.message });
+                    } else {
+                        resolve({ success: true });
+                    }
+                },
+            );
+        });
+    }
+
+    /**
+     * Install Python (pip) dependencies into the forge venv.
+     * Ensures the venv exists before installing.
+     */
+    static async installPythonDependencies(deps: string[]): Promise<{ success: boolean; error?: string }> {
+        if (deps.length === 0) return { success: true };
+
+        const venvResult = await this.ensurePythonVenv();
+        if (!venvResult.success) {
+            return { success: false, error: `Failed to create venv: ${venvResult.error}` };
+        }
+
+        return new Promise((resolve) => {
+            execFile(
+                venvPip(),
+                ['install', ...deps],
+                {
+                    cwd: FORGE_DIR,
+                    timeout: 120_000, // 120s for pip installs
+                    maxBuffer: 2 * 1024 * 1024,
+                    env: {
+                        ...process.env,
+                        VIRTUAL_ENV: FORGE_VENV_DIR,
+                        PATH: `${join(FORGE_VENV_DIR, 'bin')}:${process.env['PATH'] || ''}`,
+                    },
                 },
                 (error, _stdout, stderr) => {
                     if (error) {
@@ -108,24 +208,48 @@ export class Forge {
 
     /**
      * Execute a script in the forge workspace via child_process.
+     * Detects language from file extension (.py → python3, .js → node).
      * Captures stdout, stderr, exit code, and execution duration.
      */
     static async executeScript(filename: string, input?: string): Promise<ForgeExecutionResult> {
         const filepath = join(FORGE_DIR, filename);
+        const lang = detectLanguage(filename);
         const startTime = Date.now();
+
+        // For Python scripts, ensure venv exists so imports resolve
+        if (lang === 'python') {
+            const venvResult = await this.ensurePythonVenv();
+            if (!venvResult.success) {
+                return {
+                    success: false,
+                    exitCode: 1,
+                    stdout: '',
+                    stderr: `Failed to ensure Python venv: ${venvResult.error}`,
+                    durationMs: Date.now() - startTime,
+                };
+            }
+        }
+
+        const interpreter = lang === 'python' ? venvPython() : 'node';
 
         return new Promise((resolve) => {
             const args = [filepath];
             if (input) args.push(input);
 
+            const envVars = { ...process.env };
+            if (lang === 'python') {
+                envVars['VIRTUAL_ENV'] = FORGE_VENV_DIR;
+                envVars['PATH'] = `${join(FORGE_VENV_DIR, 'bin')}:${process.env['PATH'] || ''}`;
+            }
+
             const child = execFile(
-                'node',
+                interpreter,
                 args,
                 {
                     cwd: FORGE_DIR,
                     timeout: EXECUTION_TIMEOUT_MS,
                     maxBuffer: 1024 * 1024, // 1MB output buffer
-                    env: { ...process.env },
+                    env: envVars,
                 },
                 (error, stdout, stderr) => {
                     const durationMs = Date.now() - startTime;

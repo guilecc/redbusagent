@@ -2,6 +2,7 @@
  * @redbusagent/daemon — create_and_run_tool
  *
  * The primary native tool for the Forge.
+ * Supports both Node.js (.js) and Python (.py) scripts.
  */
 
 import { tool } from 'ai';
@@ -10,13 +11,18 @@ import { Forge } from '../forge.js';
 import { ToolRegistry } from '../tool-registry.js';
 
 export const createAndRunTool = tool({
-    description: `Creates a Node.js script in the Forge workspace, installs any required npm dependencies, executes the script, and returns the output. Use this to generate code, run computations, create files, fetch data, or any task that requires code execution. The code MUST be valid Node.js (CommonJS). Use require() for imports. The script's stdout will be returned as the result.`,
+    description: `Creates a script in the Forge workspace, installs any required dependencies, executes the script, and returns the output. Supports TWO languages:
+
+• **Node.js** — filename must end in \`.js\`. Code must be valid CommonJS. Use require() for imports and console.log() for output. Dependencies are installed via npm.
+• **Python** — filename must end in \`.py\`. Code must be valid Python 3. Use print() for output. Dependencies are installed via pip into an isolated venv. Input is passed as sys.argv[1].
+
+The script's stdout will be returned as the result. Use this to generate code, run computations, create files, fetch data, do data science, or any task that requires code execution.`,
 
     inputSchema: z.object({
-        filename: z.string().describe('Name of the script file to create (e.g. "generate-ticket.js"). Must end in .js'),
+        filename: z.string().describe('Name of the script file to create (e.g. "generate-ticket.js" or "analyze-data.py"). Must end in .js or .py'),
         description: z.string().describe('Brief description of what this tool does'),
-        code: z.string().describe('The complete Node.js code (CommonJS) to write and execute. Use console.log() for output.'),
-        dependencies: z.array(z.string()).default([]).describe('npm packages to install before execution'),
+        code: z.string().describe('The complete source code to write and execute. For .js use CommonJS with console.log(). For .py use Python 3 with print().'),
+        dependencies: z.array(z.string()).default([]).describe('Packages to install before execution. For .js: npm packages. For .py: pip packages (e.g. "requests", "pandas", "numpy").'),
     }),
 
     execute: async (params: {
@@ -27,27 +33,35 @@ export const createAndRunTool = tool({
     }) => {
         const { filename, description, code, dependencies } = params;
         const startTime = Date.now();
+        const lang = Forge.detectLanguage(filename);
+        const langLabel = lang === 'python' ? '🐍 Python' : '📦 Node.js';
 
         try {
             Forge.ensureWorkspace();
 
+            // ── Dependency installation ──────────────────────────
             if (dependencies.length > 0) {
-                console.log(`  📦 Forge: Installing ${dependencies.length} dependencies: ${dependencies.join(', ')}`);
-                const installResult = await Forge.installDependencies(dependencies);
+                console.log(`  ${langLabel} Forge: Installing ${dependencies.length} dependencies: ${dependencies.join(', ')}`);
+
+                const installResult = lang === 'python'
+                    ? await Forge.installPythonDependencies(dependencies)
+                    : await Forge.installDependencies(dependencies);
+
                 if (!installResult.success) {
                     return { success: false, phase: 'dependency_install', error: `Failed: ${installResult.error}` };
                 }
-                console.log('  📦 Forge: Dependencies installed');
+                console.log(`  ${langLabel} Forge: Dependencies installed`);
             }
 
+            // ── Write & execute ──────────────────────────────────
             const filepath = Forge.writeScript(filename, code);
             console.log(`  📝 Forge: Script written to ${filepath}`);
-            console.log(`  ▶️  Forge: Executing ${filename}...`);
+            console.log(`  ▶️  Forge: Executing ${filename} (${lang})...`);
 
             const result = await Forge.executeScript(filename);
 
             if (result.success) {
-                const toolName = filename.replace(/\.js$/, '').replace(/[^a-zA-Z0-9]/g, '_');
+                const toolName = filename.replace(/\.(js|py)$/, '').replace(/[^a-zA-Z0-9]/g, '_');
                 ToolRegistry.register({ name: toolName, description, filename, createdAt: new Date().toISOString() });
                 console.log(`  ✅ Forge: ${filename} executed in ${result.durationMs}ms`);
                 return { success: true, output: result.stdout, durationMs: result.durationMs, registeredAs: toolName };
