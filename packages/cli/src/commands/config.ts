@@ -22,7 +22,7 @@ export async function configCommand(): Promise<void> {
             { value: 'reconfigure', label: '🔄 Reconfigure AI Providers (Keep Memory and Tools)', hint: 'Keys only' },
             { value: 'install_mcp', label: '🔌 Install MCP Extensions (Model Context Protocol)', hint: 'GitHub, Scrapling, etc.' },
             { value: 'remove_mcp', label: '🗑️ Remove MCP Extensions', hint: 'Uninstall active MCPs' },
-            { value: 'wipe_brain', label: '🧠 Wipe Brain (Delete Memory, MCPs and Forged Tools)', hint: 'Reset progress' },
+            { value: 'wipe_brain', label: '🧠 Wipe Brain (Obliterate ALL agent state)', hint: 'Memory, Persona, Tools, MCPs, Core Memory' },
             { value: 'factory_reset', label: '🔥 Factory Reset (Delete EVERYTHING, including MCPs)', hint: 'Careful!' },
             { value: 'exit', label: '🚪 Cancel / Exit' },
         ],
@@ -82,7 +82,7 @@ export async function configCommand(): Promise<void> {
 
         case 'wipe_brain': {
             const confirm = await p.confirm({
-                message: 'Are you sure you want to delete all memory, MCPs and forged tools? This action is irreversible.',
+                message: 'Are you sure you want to obliterate ALL agent state (memory, persona, core memory, MCPs, forged tools)? This action is irreversible.',
                 initialValue: false,
             });
             if (!confirm || p.isCancel(confirm)) {
@@ -91,21 +91,26 @@ export async function configCommand(): Promise<void> {
             }
 
             const s = p.spinner();
-            s.start('Wiping brain (memory and tools)...');
+            s.start('Obliterating brain (memory, persona, tools, core memory)...');
 
-            // Delete memory/ and forge/
-            const memoryDir = join(Vault.dir, 'memory');
-            const forgeDir = join(Vault.dir, 'forge');
+            // Delete all state directories
+            const STATE_DIRS = ['memory', 'forge', 'auth_whatsapp'];
+            for (const dir of STATE_DIRS) {
+                rmSync(join(Vault.dir, dir), { recursive: true, force: true });
+            }
 
-            rmSync(memoryDir, { recursive: true, force: true });
-            rmSync(forgeDir, { recursive: true, force: true });
+            // Delete all state files
+            const STATE_FILES = ['persona.json', 'core-memory.md', 'daemon.pid'];
+            for (const file of STATE_FILES) {
+                const fullPath = join(Vault.dir, file);
+                if (existsSync(fullPath)) {
+                    rmSync(fullPath, { force: true });
+                }
+            }
 
             // Reset tools-registry.json and cognitive-map.json
-            const registryPath = join(Vault.dir, 'tools-registry.json');
-            const cognitiveMapPath = join(Vault.dir, 'cognitive-map.json');
-
-            writeFileSync(registryPath, JSON.stringify({ version: 1, tools: [] }, null, 2));
-            writeFileSync(cognitiveMapPath, JSON.stringify([], null, 2));
+            writeFileSync(join(Vault.dir, 'tools-registry.json'), JSON.stringify({ version: 1, tools: [] }, null, 2));
+            writeFileSync(join(Vault.dir, 'cognitive-map.json'), JSON.stringify([], null, 2));
 
             // Remove installed MCPs from the Vault config
             const config = Vault.read();
@@ -113,8 +118,8 @@ export async function configCommand(): Promise<void> {
                 Vault.write({ ...config, mcps: {} });
             }
 
-            s.stop('Brain successfully wiped!');
-            p.log.success('Brain wiped. MCP extensions uninstalled. The agent will start from scratch on the next boot.');
+            s.stop('Brain obliterated!');
+            p.log.success('Total wipe complete: memory, persona, core memory, forged tools, MCPs, WhatsApp session — all destroyed. The agent will start as a blank slate on the next boot.');
             process.exit(0);
             break;
         }
@@ -142,6 +147,8 @@ export async function configCommand(): Promise<void> {
                 'tools-registry.json',
                 'cognitive-map.json',
                 'core-memory.md',
+                'persona.json',
+                'daemon.pid',
             ];
             for (const entry of USER_DATA) {
                 const fullPath = join(Vault.dir, entry);
