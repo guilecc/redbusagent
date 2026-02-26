@@ -8,6 +8,8 @@
  *  4. Handles graceful shutdown on SIGINT/SIGTERM
  */
 
+import { writeFileSync, unlinkSync } from 'node:fs';
+import { join } from 'node:path';
 import {
     DEFAULT_PORT,
     DEFAULT_HOST,
@@ -37,6 +39,10 @@ const HOST = process.env['REDBUS_HOST'] || DEFAULT_HOST;
 console.log(`\n🔴 ${APP_NAME} daemon v${APP_VERSION}`);
 console.log(`   PID: ${process.pid}`);
 console.log(`   Listening on ws://${HOST}:${PORT}\n`);
+
+// ── Write PID file for `redbus stop` ────────────────────────────
+const PID_FILE = join(Vault.dir, 'daemon.pid');
+writeFileSync(PID_FILE, String(process.pid), { encoding: 'utf-8', mode: 0o600 });
 
 // Initialize Forge & Registry & Core Memory & MCP
 Forge.ensureWorkspace();
@@ -231,6 +237,10 @@ async function shutdown(signal: string): Promise<void> {
     await whatsapp.stop();
     TaskScheduler.stopAll();
     await wsServer.shutdown();
+
+    // Clean up PID file
+    try { unlinkSync(PID_FILE); } catch { /* ignore if already removed */ }
+
     console.log('  👋 Daemon stopped.\n');
     process.exit(0);
 }

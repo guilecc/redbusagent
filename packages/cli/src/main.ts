@@ -23,7 +23,8 @@ ${pc.bold('Usage:')}
 
 ${pc.bold('Commands:')}
   ${pc.yellow('daemon')}   Starts the Daemon only (background service, no TUI)
-  ${pc.yellow('start')}    Starts the Daemon + interactive TUI
+  ${pc.yellow('start')}    Starts the interactive TUI (connects to running daemon)
+  ${pc.yellow('stop')}     Stops the running daemon
   ${pc.yellow('config')}   Opens the configuration wizard
   ${pc.yellow('channel')}  Manages Extra Channels (e.g. whatsapp)
   ${pc.yellow('update')}   Downloads and installs the latest Redbus version
@@ -33,6 +34,7 @@ ${pc.bold('Getting Started:')}
   ${pc.dim('1.')} ${pc.cyan('redbus config')}   ${pc.dim('— Configure your API keys')}
   ${pc.dim('2.')} ${pc.cyan('redbus daemon')}   ${pc.dim('— Start the daemon service')}
   ${pc.dim('3.')} ${pc.cyan('redbus start')}    ${pc.dim('— Connect the TUI client')}
+  ${pc.dim('4.')} ${pc.cyan('redbus stop')}     ${pc.dim('— Stop the daemon')}
   `);
 }
 
@@ -49,6 +51,12 @@ export async function main(args: string[]): Promise<void> {
         case 'start': {
             const { startCommand } = await import('./commands/start.js');
             await startCommand();
+            break;
+        }
+
+        case 'stop': {
+            const { stopCommand } = await import('./commands/stop.js');
+            await stopCommand();
             break;
         }
 
