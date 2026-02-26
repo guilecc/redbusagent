@@ -127,7 +127,7 @@ THE LAZINESS BAN: Never attempt to do complex math, data filtering, or system an
 `;
 
     const tier1Config = getTier1Config();
-    const isGold = tier1Config.power_class === 'gold';
+    const isGold = tier1Config.power_class === 'gold' || tier1Config.power_class === 'platinum';
     const tools = CapabilityRegistry.getAvailableTools();
 
     // Prevent weak Tier 1 from forging things or messing with structural shell commands

@@ -32,7 +32,7 @@ export interface VaultTier2Config {
     readonly authToken?: string;
 }
 
-export type Tier1PowerClass = 'bronze' | 'silver' | 'gold';
+export type Tier1PowerClass = 'bronze' | 'silver' | 'gold' | 'platinum';
 
 export interface VaultTier1Config {
     readonly enabled: boolean;

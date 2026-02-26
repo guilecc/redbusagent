@@ -35,23 +35,44 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
     let powerClass: Tier1PowerClass = 'bronze';
     let recommendedTier1Model = 'qwen2.5-coder:7b';
 
-    if (ramGB >= 32) {
+    if (ramGB >= 64) {
+        powerClass = 'platinum';
+        recommendedTier1Model = 'llama3.3:70b';
+    } else if (ramGB >= 32) {
         powerClass = 'gold';
-        recommendedTier1Model = 'qwen2.5-coder:32b';
+        recommendedTier1Model = 'gemma2:27b';
     } else if (ramGB >= 16) {
         powerClass = 'silver';
         recommendedTier1Model = 'qwen2.5-coder:14b';
     }
 
-    p.note(
-        `Detected RAM: ${pc.bold(`${ramGB} GB`)}\n` +
+    let hardwareMessage = `Detected RAM: ${pc.bold(`${ramGB} GB`)}\n` +
         `Processing Class: ${pc.bold(pc.yellow(powerClass.toUpperCase()))}\n` +
-        `Recommended Local Model: ${pc.bold(pc.cyan(recommendedTier1Model))}`,
-        '💻 Local Hardware Analysis',
-    );
+        `Recommended Local Model: ${pc.bold(pc.cyan(recommendedTier1Model))}`;
+
+    if (powerClass === 'gold') {
+        hardwareMessage += `\n\n${pc.green('Excellent hardware detected (32GB+ RAM). We recommend 20B-35B parameter models like Gemma 2 or Command R.')}`;
+    } else if (powerClass === 'platinum') {
+        hardwareMessage += `\n\n${pc.green('Workstation-grade hardware detected (64GB+ RAM). You can run 70B+ parameter models like Llama 3.3. You likely will not need a Cloud API.')}`;
+    }
+
+    p.note(hardwareMessage, '💻 Local Hardware Analysis');
 
     let skipTier2 = false;
-    p.note('Tier 2 (Cloud Provider) is mandatory for advanced reasoning and complex agentic tasks. Please enter your API key.', '☁️ MANDATORY CLOUD REASONING');
+
+    // ── Local-Only Bypass for Gold/Platinum ──────────────────────
+    if (powerClass === 'gold' || powerClass === 'platinum') {
+        const skipCloud = await p.confirm({
+            message: 'Your hardware is powerful enough for a fully offline setup. Would you like to skip Cloud API (Tier 2) configuration entirely?',
+            initialValue: powerClass === 'platinum',
+        });
+        if (p.isCancel(skipCloud)) return false;
+        skipTier2 = skipCloud as boolean;
+    }
+
+    if (!skipTier2) {
+        p.note('Tier 2 (Cloud Provider) is mandatory for advanced reasoning and complex agentic tasks. Please enter your API key.', '☁️ MANDATORY CLOUD REASONING');
+    }
 
     // ── Step 1: Tier 2 Provider ───────────────────────────────
 
@@ -175,15 +196,38 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
             }
         }
 
-        const LOCAL_MODELS = [
-            { value: 'llama3.2:1b', label: '🪶 llama3.2:1b', hint: 'General tasks, ultra-light (< 2GB RAM)' },
+        // Bronze options
+        const LOCAL_MODELS: Array<{ value: string; label: string; hint: string }> = [
             { value: 'qwen2.5-coder:7b', label: '💻 qwen2.5-coder:7b', hint: 'Excellent for code (~8GB RAM)' },
             { value: 'llama3.1:8b', label: '🧠 llama3.1:8b', hint: 'General, great reasoning (~8GB RAM)' },
-            { value: 'qwen2.5-coder:14b', label: '💻 qwen2.5-coder:14b', hint: 'Code, high precision (~16GB RAM)' },
-            { value: 'deepseek-r1:14b', label: '🔬 deepseek-r1:14b', hint: 'Exceptional deep reasoning (~16GB RAM)' },
-            { value: 'qwen2.5-coder:32b', label: '🚀 qwen2.5-coder:32b', hint: 'Code, local GPT-4 level (~32GB RAM)' },
-            { value: 'custom', label: '✏️  Other...', hint: 'Type the model name manually' }
         ];
+
+        // Silver options
+        if (powerClass === 'silver' || powerClass === 'gold' || powerClass === 'platinum') {
+            LOCAL_MODELS.push(
+                { value: 'qwen2.5-coder:14b', label: '💻 qwen2.5-coder:14b', hint: 'Code, high precision (~16GB RAM)' },
+                { value: 'deepseek-r1:14b', label: '🔬 deepseek-r1:14b', hint: 'Exceptional deep reasoning (~16GB RAM)' },
+            );
+        }
+
+        // Gold options
+        if (powerClass === 'gold' || powerClass === 'platinum') {
+            LOCAL_MODELS.push(
+                { value: 'gemma2:27b', label: '🌟 gemma2:27b', hint: `Google's highly efficient model (~32GB RAM)${powerClass === 'gold' ? ' ⭐ recommended' : ''}` },
+                { value: 'command-r:35b', label: '🤖 command-r:35b', hint: `Cohere's agentic model (~32GB RAM)${powerClass === 'gold' ? ' ⭐ recommended' : ''}` },
+                { value: 'codestral:22b', label: '💻 codestral:22b', hint: `Mistral's coding model (~32GB RAM)${powerClass === 'gold' ? ' ⭐ recommended' : ''}` },
+            );
+        }
+
+        // Platinum options
+        if (powerClass === 'platinum') {
+            LOCAL_MODELS.push(
+                { value: 'llama3.3:70b', label: '🏆 llama3.3:70b', hint: "Meta's flagship, GPT-4 level (~64GB RAM) ⭐ recommended" },
+                { value: 'qwen2.5-coder:72b', label: '🚀 qwen2.5-coder:72b', hint: 'Ultimate coding powerhouse (~64GB RAM) ⭐ recommended' },
+            );
+        }
+
+        LOCAL_MODELS.push({ value: 'custom', label: '✏️  Other...', hint: 'Type the model name manually' });
 
         const selectedModel = await p.select({
             message: 'Which Ollama model do you want to use for Tier 1 (Local)?',

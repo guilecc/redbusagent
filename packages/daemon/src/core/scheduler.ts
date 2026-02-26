@@ -59,7 +59,7 @@ export class TaskScheduler {
             const powerClass = (tier1Config as any)?.power_class || 'bronze';
 
             // "MUST flag it to be strictly executed by Tier 2 (or Tier 1 Gold) to guarantee accurate analytical results."
-            const requiredTier = powerClass === 'gold' ? 'tier1' : 'tier2';
+            const requiredTier = (powerClass === 'gold' || powerClass === 'platinum') ? 'tier1' : 'tier2';
 
             this.wsServer.broadcast({
                 type: 'log',
