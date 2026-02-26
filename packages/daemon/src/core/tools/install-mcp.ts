@@ -9,6 +9,7 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import { MCPEngine } from '../mcp-engine.js';
 import { Vault } from '@redbusagent/shared';
+import { approvalGate } from '../approval-gate.js';
 
 export const installMcpTool = tool({
     description:
@@ -22,8 +23,9 @@ export const installMcpTool = tool({
         command: z.string().describe('The executable command (e.g. "npx", "uvx", "docker")'),
         args: z.array(z.string()).describe('Arguments for the command (e.g. ["-y", "@modelcontextprotocol/server-memory"])'),
         env: z.record(z.string(), z.string()).optional().describe('Optional environment variables required by the MCP (e.g. { "GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_..." })'),
+        flagToolsAs: z.enum(['destructive', 'intrusive']).optional().describe('If set, all tools discovered from this MCP will require user approval before execution (destructive = data loss risk, intrusive = external communication risk).'),
     }),
-    execute: async ({ id, name, command, args, env }) => {
+    execute: async ({ id, name, command, args, env, flagToolsAs }) => {
         const mcpEnv = env ?? {};
 
         console.log(`  🔌 Installing MCP: ${name} (${id}) — ${command} ${args.join(' ')}`);
@@ -59,6 +61,18 @@ export const installMcpTool = tool({
             const discoveredTools = await engine.addMCP(id, command, args, mcpEnv);
 
             const toolNames = discoveredTools.map(t => t.toolName);
+
+            // ── 4. Register approval flags for MCP tools if requested ──
+            if (flagToolsAs && toolNames.length > 0) {
+                for (const tn of toolNames) {
+                    const sdkName = `mcp_x_${tn.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+                    approvalGate.registerToolFlags(sdkName, {
+                        destructive: flagToolsAs === 'destructive',
+                        intrusive: flagToolsAs === 'intrusive',
+                    });
+                }
+                console.log(`  🛡️ MCP "${name}" tools flagged as ${flagToolsAs} — approval required.`);
+            }
 
             console.log(`  ✅ MCP "${name}" installed successfully. Discovered ${toolNames.length} tool(s): ${toolNames.join(', ') || '(none)'}`);
 

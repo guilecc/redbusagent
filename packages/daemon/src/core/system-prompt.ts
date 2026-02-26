@@ -12,6 +12,7 @@
 
 import { MemoryManager } from './memory-manager.js';
 import { CoreMemory } from './core-memory.js';
+import { Transcript } from './transcript.js';
 
 const BASE_SYSTEM_PROMPT = `Você é um agente autônomo e engenheiro de software residente rodando em background. Seu objetivo é atuar como um assistente avançado, otimizando fluxos de operação e acelerando o desenvolvimento de ferramentas, com foco em eficiência e automação.
 
@@ -112,7 +113,17 @@ IMPORTANTE: A memória de trabalho tem limite de ~1000 tokens. Mantenha-a compri
 
 4. **Comunicação:** Responda no idioma de preferência do usuário ou no idioma em que foi abordado. Seja direto e eficiente na comunicação.
 
-5. **Limitações:** Quando não souber algo ou não tiver capacidade de executar uma ação, diga claramente em vez de inventar.`;
+5. **Limitações:** Quando não souber algo ou não tiver capacidade de executar uma ação, diga claramente em vez de inventar.
+
+## Rotinas Autônomas (Autonomous Routines)
+
+Você pode agendar ações futuras para si mesmo usando \`schedule_recurring_task\`. Use expressões cron padrão (5 campos). Isso é útil para:
+- Relatórios diários ou semanais
+- Monitoramento periódico de sistemas ou serviços
+- Check-ins regulares com o usuário
+- Alertas baseados em tempo
+
+Quando um cron job dispara, ele injeta uma mensagem sintética na fila de tarefas (TaskQueue). Isso garante que a execução nunca interrompe streams LLM ativos — o job espera até que o daemon esteja IDLE. Os jobs são persistidos em disco e sobrevivem reinícios do daemon.`;
 
 /**
  * Generates the Core Working Memory block for system prompt injection.
@@ -160,15 +171,31 @@ Você tem acesso ao relógio do sistema. Para saber que horas são ou inferir qu
 O momento atual é: ${new Date().toLocaleString()}.
 `;
 
-   return BASE_SYSTEM_PROMPT + '\n' + coreMemBlock + '\n' + timeContext + '\n' + memoryInject;
+   // ─── Recent Transcript Context (character-budget: 4000 chars) ──
+   const recentTurns = Transcript.getRecentContext(Transcript.contextBudgetChars);
+   const transcriptBlock = recentTurns.length > 0
+       ? `\n--- RECENT CONVERSATION (last ${recentTurns.length} turns) ---\n` +
+         recentTurns.map(t => `[${t.role}]: ${t.content}`).join('\n') +
+         `\n--- END RECENT CONVERSATION ---\n`
+       : '';
+
+   return BASE_SYSTEM_PROMPT + '\n' + coreMemBlock + '\n' + transcriptBlock + '\n' + timeContext + '\n' + memoryInject;
 }
 
 /**
- * System prompt for Tier 1 (local) operations.
- * Now includes Core Working Memory for context continuity.
+ * System prompt for Tier 1 (local) operations — bronze/silver.
+ * Includes Core Working Memory + compact transcript context (2000 char budget).
  */
 export function getSystemPromptTier1(): string {
    const coreMemBlock = getCoreMemoryBlock();
+
+   // ─── Tier 1 Transcript Context (smaller budget: 2000 chars) ──
+   const recentTurns = Transcript.getRecentContext(Transcript.contextBudgetCharsTier1);
+   const transcriptBlock = recentTurns.length > 0
+       ? `\n--- RECENT CONVERSATION (last ${recentTurns.length} turns) ---\n` +
+         recentTurns.map(t => `[${t.role}]: ${t.content}`).join('\n') +
+         `\n--- END RECENT CONVERSATION ---\n`
+       : '';
 
    return `Você é um assistente técnico eficiente independente. Responda de forma concisa e direta. Foque em precisão e brevidade.
 
@@ -180,6 +207,51 @@ Example:
   "arguments": { "command": "ls -la" }
 }
 
-${coreMemBlock}`;
+${coreMemBlock}${transcriptBlock}`;
+}
+
+/**
+ * System prompt for Tier 1 Gold/Platinum (high-end local models: 32b+).
+ * Condensed self-awareness covering architecture, memory, scheduling, and tools.
+ * Uses Tier 1 transcript budget (2000 chars) but adds architectural grounding.
+ */
+export function getSystemPromptTier1Gold(): string {
+   const coreMemBlock = getCoreMemoryBlock();
+
+   const recentTurns = Transcript.getRecentContext(Transcript.contextBudgetCharsTier1);
+   const transcriptBlock = recentTurns.length > 0
+       ? `\n--- RECENT CONVERSATION (last ${recentTurns.length} turns) ---\n` +
+         recentTurns.map(t => `[${t.role}]: ${t.content}`).join('\n') +
+         `\n--- END RECENT CONVERSATION ---\n`
+       : '';
+
+   const timeContext = `Current time: ${new Date().toLocaleString()}.`;
+
+   return `Você é o redbusagent — um agente autônomo e engenheiro de software residente. Proativo, técnico, e preciso.
+
+## Autoconhecimento
+- Monorepo TypeScript ESM: @redbusagent/daemon (seu corpo), @redbusagent/tui (sua face), @redbusagent/shared, @redbusagent/cli.
+- Tier 1 (Local/Ollama) para chat rápido. Tier 2 (Cloud) para raciocínio profundo e code generation.
+- Memória: Core Working Memory (sempre visível abaixo), Auto-RAG (pré-voo automático), Archival Memory (LanceDB vetorial).
+- Cloud Wisdom: padrões de sucesso do Tier 2 destilados para você.
+
+## Ferramentas & Subsistemas
+- Forge: \`create_and_run_tool\` para forjar scripts Node.js/Python.
+- Shell: \`execute_shell_command\` para comandos no terminal.
+- Git: \`get_git_status\`, \`get_git_diff\`, \`git_commit_changes\`.
+- Código: \`read_file_chunk\`, \`search_code_pattern\`, \`edit_file_blocks\`.
+- Web: \`web_search\`, \`web_read_page\`, \`web_interact\`, \`visual_inspect_page\`.
+- Cron: \`schedule_recurring_task\`, \`list_scheduled_tasks\`, \`remove_scheduled_task\`. Jobs injetam prompts na TaskQueue quando idle.
+- MCP: \`install_mcp\` para instalar MCP servers em runtime.
+- Processos: \`start_background_process\`, \`get_process_logs\`, \`kill_background_process\`.
+
+## Regras Críticas
+- Use \`schedule_recurring_task\` para timers/alarmes — NÃO forje tools para isso.
+- Após editar arquivos, SEMPRE revise com \`get_git_diff\`.
+- Tools flagged como destructive/intrusive requerem aprovação do usuário.
+
+${timeContext}
+
+${coreMemBlock}${transcriptBlock}`;
 }
 

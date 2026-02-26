@@ -21,6 +21,7 @@ import type { ClientMessage } from '@redbusagent/shared';
 import { DaemonWsServer } from './infra/ws-server.js';
 import { TaskScheduler } from './core/scheduler.js';
 import { ChatHandler } from './core/chat-handler.js';
+import { HeartbeatManager } from './core/gateway/heartbeat.js';
 import { getRouterStatus } from './core/cognitive-router.js';
 import { Forge } from './core/forge.js';
 import { ToolRegistry } from './core/tool-registry.js';
@@ -195,8 +196,14 @@ const wsServer = new DaemonWsServer({
 
 const chatHandler = new ChatHandler(wsServer);
 
+// ── Gateway Heartbeat (State Machine Tick Loop) ──────────────
+const heartbeat = new HeartbeatManager(wsServer, { port: PORT });
+chatHandler.setHeartbeat(heartbeat);
+heartbeat.start();
+
 TaskScheduler.init(wsServer, chatHandler);
 
+console.log('  💓 Heartbeat manager started (1s tick loop)');
 console.log('  ⏱️  Task Scheduler started (deterministic cron engine)');
 console.log('  💬 Chat handler initialized');
 console.log('  ✅ Daemon is ready. Waiting for TUI connections...\n');
@@ -232,6 +239,7 @@ whatsapp.startSilent().catch(err => {
 
 async function shutdown(signal: string): Promise<void> {
     console.log(`\n  🛑 Received ${signal}. Shutting down gracefully...`);
+    heartbeat.stop();
     OllamaManager.shutdown();
     await MCPEngine.getInstance().stop();
     await whatsapp.stop();

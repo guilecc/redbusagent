@@ -8,6 +8,18 @@ export interface ChangelogEntry {
 
 export const changelogData: ChangelogEntry[] = [
     {
+        version: "v0.1.3",
+        date: "2026-02-26",
+        title: "Friendly Copy Pass",
+        type: "patch",
+        changes: [
+            "✏️ Rewrote hero section — 'Yeah, another moltbotopenclaw claw.' with a friendlier subtitle about being truly inspired.",
+            "💬 Updated all feature descriptions to feel more approachable and conversational.",
+            "🏷️ Updated page title, meta tags, and Open Graph to match the new tone.",
+            "🙏 Added a note that all inspirations are credited in the code."
+        ]
+    },
+    {
         version: "v0.1.2",
         date: "2026-02-26",
         title: "SEO & Tone Pass",

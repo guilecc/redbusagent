@@ -8,7 +8,9 @@
     "scripts": {
         "build": "tsc --build tsconfig.json",
         "dev": "tsx --watch src/main.ts",
-        "start": "node dist/main.js"
+        "start": "node dist/main.js",
+        "test": "vitest run",
+        "test:watch": "vitest"
     },
     "engines": {
         "node": ">= 18.0.0"
@@ -25,8 +27,8 @@
         "ai": "^6.0.97",
         "apache-arrow": "^18.1.0",
         "cheerio": "^1.2.0",
+        "croner": "^10.0.1",
         "dotenv": "^17.3.1",
-        "node-cron": "^4.2.1",
         "playwright": "^1.58.2",
         "qrcode-terminal": "^0.12.0",
         "uuid": "^13.0.0",
@@ -35,7 +37,6 @@
         "zod": "^4.3.6"
     },
     "devDependencies": {
-        "@types/node-cron": "^3.0.11",
         "@types/qrcode-terminal": "^0.12.2",
         "@types/uuid": "^10.0.0",
         "@types/ws": "^8.5.14"

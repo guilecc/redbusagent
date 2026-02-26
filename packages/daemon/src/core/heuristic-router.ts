@@ -33,6 +33,13 @@ export function calculateComplexityScore(prompt: string, recentHistory: any[] = 
     }
     score += recentContextScore;
 
+    // Infrastructure & Subsystem Keywords (+40)
+    // Catches MCP, memory ops, visual inspection, background processes — all require Tier 2 reasoning
+    const infraRegex = /\b(mcp|plugin|install server|install plugin|background|monitor|visual|screenshot|inspect|layout|look at|memorize|remember|forget|memória|lembrar|esquecer|archival|core.?memory|approval|protocol)\b/i;
+    if (infraRegex.test(lowerPrompt)) {
+        score += 40;
+    }
+
     // Analytical & Reasoning Keywords (+20)
     const analyticalRegex = /\b(analyze|summarize|compare|why|calculate|explain|evaluate|review|investigate|debug|troubleshoot|plan|design|analise|analisar|resuma|resumir|compare|comparar|por que|porque|calcule|calcular|explique|explicar|avalie|avaliar|revise|revisar|mudar|arquitetura|lógica)\b/i;
     if (analyticalRegex.test(lowerPrompt)) {

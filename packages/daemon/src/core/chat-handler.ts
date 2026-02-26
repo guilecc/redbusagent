@@ -9,26 +9,37 @@ import type { DaemonWsServer } from '../infra/ws-server.js';
 import type { ChatRequestMessage } from '@redbusagent/shared';
 import { PersonaManager, Vault } from '@redbusagent/shared';
 import { askTier1, askTier2 } from './cognitive-router.js';
+import { resolveSenderRole } from './tool-policy.js';
 import { calculateComplexityScore } from './heuristic-router.js';
 import { CoreMemory } from './core-memory.js';
-import { shellApproval } from './shell-executor.js';
+import { approvalGate, type ApprovalRequest } from './approval-gate.js';
+import { enqueueCommandInLane, CommandLane } from './task-queue.js';
 import { processMonitorEmitter } from './tools/process-manager.js';
+import type { HeartbeatManager } from './gateway/heartbeat.js';
 
 export class ChatHandler {
     private forceTier1 = false;
+    private heartbeat: HeartbeatManager | null = null;
 
     constructor(private readonly wsServer: DaemonWsServer) {
-        shellApproval.on('approval_requested', ({ id, command }) => {
-            console.log(`  [ChatHandler] Relaying shell approval to TUI: ${command}`);
+        // ─── Generalized Approval Gate ──────────────────────────────────
+        approvalGate.on('approval_requested', (request: ApprovalRequest) => {
+            const emoji = request.reason === 'destructive' ? '⚠️' : '📱';
+            const label = request.reason === 'destructive' ? 'SECURITY ALERT' : 'INTRUSIVE ACTION';
+            const detail = request.toolName === 'execute_shell_command'
+                ? `execute a system command:\n\`${request.description}\``
+                : `use **${request.toolName}**: ${request.description}`;
+
+            console.log(`  [ChatHandler] Relaying approval request to TUI: ${request.toolName}`);
             this.wsServer.broadcast({
                 type: 'chat:stream:chunk',
                 timestamp: new Date().toISOString(),
-                payload: { requestId: id, delta: `⚠️ SECURITY ALERT: The agent wants to execute a system command:\n\`${command}\`\n\nAllow execution? (Y/N)` }
+                payload: { requestId: request.id, delta: `${emoji} ${label}: The agent wants to ${detail}\n\nApprove? (Y/N)` }
             });
             this.wsServer.broadcast({
                 type: 'chat:stream:done',
                 timestamp: new Date().toISOString(),
-                payload: { requestId: id, fullText: '', tier: 'tier1', model: 'system' }
+                payload: { requestId: request.id, fullText: '', tier: 'tier1', model: 'system' }
             });
         });
 
@@ -59,6 +70,11 @@ export class ChatHandler {
         });
     }
 
+    /** Attach the HeartbeatManager so we can signal THINKING state */
+    setHeartbeat(hb: HeartbeatManager): void {
+        this.heartbeat = hb;
+    }
+
     setForceTier1(enabled: boolean): void {
         this.forceTier1 = enabled;
     }
@@ -73,19 +89,20 @@ export class ChatHandler {
         const vaultConfig = Vault.read();
         let targetTier = this.forceTier1 ? 'tier1' : tier;
 
-        // Security Gate Interception for Shell Executor
-        if (shellApproval.hasPendingRequests()) {
+        // ─── Generalized Approval Gate Interception ──────────────────
+        if (approvalGate.hasPendingRequests()) {
             const isAffirmative = /^(yes|y|sure|manda bala|pode|sim|claro|please|yeah|yep)\b/i.test(content.trim());
-            const id = shellApproval.getFirstPendingId()!;
-            shellApproval.resolveApproval(id, isAffirmative);
+            const pending = approvalGate.getFirstPending();
+            const id = approvalGate.getFirstPendingId()!;
+            approvalGate.resolveApproval(id, isAffirmative);
 
+            const toolLabel = pending?.toolName ?? 'unknown tool';
             this.wsServer.broadcast({
                 type: 'log',
                 timestamp: new Date().toISOString(),
-                payload: { level: 'info', source: 'System', message: isAffirmative ? '✅ Shell command approved.' : '❌ Shell command denied.' }
+                payload: { level: 'info', source: 'System', message: isAffirmative ? `✅ ${toolLabel} approved.` : `❌ ${toolLabel} denied.` }
             });
 
-            // We do not continue here as this was a response to an ongoing tool call
             this.wsServer.broadcast({
                 type: 'chat:stream:done',
                 timestamp: new Date().toISOString(),
@@ -194,60 +211,74 @@ Return ONLY the JSON object. Do not explain.`;
 
         console.log(`  🧠 [${targetTier}] Processing request ${requestId.slice(0, 8)}... from ${clientId}`);
 
-        let result;
-        const callbacks = {
-            onChunk: (delta: string) => {
-                this.wsServer.broadcast({
-                    type: 'chat:stream:chunk',
-                    timestamp: new Date().toISOString(),
-                    payload: { requestId, delta },
-                });
-            },
-            onDone: (fullText: string) => {
-            },
-            onError: (error: Error) => {
-                console.error(`  ❌ [${targetTier}] Error:`, error.message);
-                this.wsServer.broadcast({
-                    type: 'chat:error',
-                    timestamp: new Date().toISOString(),
-                    payload: { requestId, error: error.message },
-                });
-            },
-            onToolCall: (toolName: string, args: Record<string, unknown>) => {
-                console.log(`  🔧 [${targetTier}] Tool call: ${toolName}`);
-                this.wsServer.broadcast({
-                    type: 'chat:tool:call',
-                    timestamp: new Date().toISOString(),
-                    payload: { requestId, toolName, args },
-                });
-            },
-            onToolResult: (toolName: string, success: boolean, toolResult: string) => {
-                console.log(`  ${success ? '✅' : '❌'} [${targetTier}] Tool result: ${toolName} — ${success ? 'success' : 'failed'}`);
-                this.wsServer.broadcast({
-                    type: 'chat:tool:result',
-                    timestamp: new Date().toISOString(),
-                    payload: { requestId, toolName, success, result: toolResult },
-                });
-            },
-        };
+        // ─── Lane-based Queue: Route to session or main lane ───────
+        // System-originated requests (watcher) go to main lane; user requests
+        // use a per-client session lane for future multi-session parallelism.
+        const lane = clientId === 'system'
+            ? CommandLane.Main
+            : `session:${clientId}`;
+        await enqueueCommandInLane(lane, async () => {
+                let result;
+                const callbacks = {
+                    onChunk: (delta: string) => {
+                        this.wsServer.broadcast({
+                            type: 'chat:stream:chunk',
+                            timestamp: new Date().toISOString(),
+                            payload: { requestId, delta },
+                        });
+                    },
+                    onDone: (fullText: string) => {
+                    },
+                    onError: (error: Error) => {
+                        console.error(`  ❌ [${targetTier}] Error:`, error.message);
+                        this.wsServer.broadcast({
+                            type: 'chat:error',
+                            timestamp: new Date().toISOString(),
+                            payload: { requestId, error: error.message },
+                        });
+                    },
+                    onToolCall: (toolName: string, args: Record<string, unknown>) => {
+                        console.log(`  🔧 [${targetTier}] Tool call: ${toolName}`);
+                        this.wsServer.broadcast({
+                            type: 'chat:tool:call',
+                            timestamp: new Date().toISOString(),
+                            payload: { requestId, toolName, args },
+                        });
+                    },
+                    onToolResult: (toolName: string, success: boolean, toolResult: string) => {
+                        console.log(`  ${success ? '✅' : '❌'} [${targetTier}] Tool result: ${toolName} — ${success ? 'success' : 'failed'}`);
+                        this.wsServer.broadcast({
+                            type: 'chat:tool:result',
+                            timestamp: new Date().toISOString(),
+                            payload: { requestId, toolName, success, result: toolResult },
+                        });
+                    },
+                };
 
-        if (targetTier === 'tier1') {
-            result = await askTier1(content, callbacks, messages);
-        } else {
-            result = await askTier2(content, callbacks, undefined, messages);
-        }
+                const senderRole = resolveSenderRole(clientId);
+                this.heartbeat?.setThinking(true);
+                try {
+                    if (targetTier === 'tier1') {
+                        result = await askTier1(content, callbacks, messages, senderRole);
+                    } else {
+                        result = await askTier2(content, callbacks, undefined, messages, senderRole);
+                    }
+                } finally {
+                    this.heartbeat?.setThinking(false);
+                }
 
-        this.wsServer.broadcast({
-            type: 'chat:stream:done',
-            timestamp: new Date().toISOString(),
-            payload: {
-                requestId,
-                fullText: '',
-                tier: result.tier,
-                model: result.model,
-            },
-        });
+                this.wsServer.broadcast({
+                    type: 'chat:stream:done',
+                    timestamp: new Date().toISOString(),
+                    payload: {
+                        requestId,
+                        fullText: '',
+                        tier: result.tier,
+                        model: result.model,
+                    },
+                });
 
-        console.log(`  ✅ [${result.tier}] Completed request ${requestId.slice(0, 8)}... via ${result.model}`);
+                console.log(`  ✅ [${result.tier}] Completed request ${requestId.slice(0, 8)}... via ${result.model}`);
+        }, { warnAfterMs: 5_000 });
     }
 }

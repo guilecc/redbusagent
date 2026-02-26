@@ -13,7 +13,7 @@
  *  • Tools include core_memory_replace and core_memory_append.
  */
 
-import { streamText, generateText, stepCountIs, type LanguageModel } from 'ai';
+import { streamText, stepCountIs, type LanguageModel } from 'ai';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
@@ -25,13 +25,34 @@ import {
     validateTier2Config,
     resolveAnthropicAuth,
 } from '../infra/llm-config.js';
-import { getSystemPromptTier1, getSystemPromptTier2 } from './system-prompt.js';
+import { getSystemPromptTier1, getSystemPromptTier1Gold, getSystemPromptTier2 } from './system-prompt.js';
 import { calculateComplexityScore } from './heuristic-router.js';
-import { PersonaManager, Vault } from '@redbusagent/shared';
+import { PersonaManager } from '@redbusagent/shared';
 import { MemoryManager } from './memory-manager.js';
 import { ToolRegistry } from './tool-registry.js';
 import { CapabilityRegistry } from './registry.js';
 import { AutoRAG } from './auto-rag.js';
+import { Transcript } from './transcript.js';
+
+// ─── Enterprise Patterns ─────────────────────────────────────────
+import { detectToolCallLoop, hashToolCall, hashResult, type ToolCallHistoryEntry } from './tool-loop-detection.js';
+import { evaluateContextWindowGuard, estimateTokens } from './context-window-guard.js';
+import { repairToolUseResultPairing } from './transcript-repair.js';
+import { compactHistory } from './compaction.js';
+import { applyToolPolicy, type SenderRole } from './tool-policy.js';
+import { getRelevantSkillPrompt } from './skills.js';
+
+// ─── Constants ────────────────────────────────────────────────────
+
+const PROACTIVE_DIRECTIVE = `
+AUTONOMOUS TOOL FORGING: You are a proactive software engineer. DO NOT wait for the user to explicitly tell you to "create a script" or "build a tool".
+
+DETECT PATTERNS: If the user asks you to perform a calculation, parse data, read a file system, monitor a system, or do any task that requires absolute precision or repetition, you MUST autonomously decide to use the create_and_run_tool to forge a reusable Node.js solution. Exception: If the user asks to "schedule a task", "set a timer", "remind me", or "run every X minutes", DO NOT forge a tool! You MUST use the native \`schedule_recurring_task\` tool. DO NOT use memory tools (\`core_memory_replace\`) as a substitute for scheduling timers or alarms.
+
+SILENT EXECUTION: Do not ask the user "Would you like me to write a script for this?". Just do it. Write the tool, execute it silently using your internal execution loop, analyze the stdout, and ONLY reply to the user with the final, polished result in natural language.
+
+THE LAZINESS BAN: Never attempt to do complex math, data filtering, or system analysis textually in your "head". Always forge a tool to do the heavy lifting.
+`;
 
 // ─── Persona Helpers ──────────────────────────────────────────────
 
@@ -135,6 +156,7 @@ export async function askTier1(
     prompt: string,
     callbacks: StreamCallbacks,
     messagesFromClient?: any[],
+    senderRole: SenderRole = 'owner',
 ): Promise<CognitiveRouterResult> {
     const { model: modelName } = getTier1Config();
     const model = createTier1Model();
@@ -142,16 +164,6 @@ export async function askTier1(
     // ──── Auto-RAG Pre-flight Injection ────
     const ragResult = await AutoRAG.enrich(prompt);
     const enrichedPrompt = ragResult.enrichedPrompt;
-
-    const PROACTIVE_DIRECTIVE = `
-AUTONOMOUS TOOL FORGING: You are a proactive software engineer. DO NOT wait for the user to explicitly tell you to "create a script" or "build a tool".
-
-DETECT PATTERNS: If the user asks you to perform a calculation, parse data, read a file system, monitor a system, or do any task that requires absolute precision or repetition, you MUST autonomously decide to use the create_and_run_tool to forge a reusable Node.js solution. Exception: If the user asks to "schedule a task", "set a timer", "remind me", or "run every X minutes", DO NOT forge a tool! You MUST use the native \`schedule_task\` tool. DO NOT use memory tools (\`core_memory_replace\`) as a substitute for scheduling timers or alarms.
-
-SILENT EXECUTION: Do not ask the user "Would you like me to write a script for this?". Just do it. Write the tool, execute it silently using your internal execution loop, analyze the stdout, and ONLY reply to the user with the final, polished result in natural language.
-
-THE LAZINESS BAN: Never attempt to do complex math, data filtering, or system analysis textually in your "head". Always forge a tool to do the heavy lifting.
-`;
 
     const tier1Config = getTier1Config();
     const isGold = tier1Config.power_class === 'gold' || tier1Config.power_class === 'platinum';
@@ -163,39 +175,73 @@ THE LAZINESS BAN: Never attempt to do complex math, data filtering, or system an
         delete (tools as any)['execute_shell_command'];
     }
 
-    // 🛡️ GUARDRAIL: Strip outbound communication tools from small (bronze) models
-    // on low-complexity conversational requests to prevent hallucinated tool calls.
-    // Small models lack the judgement to correctly gate intrusive tools like WhatsApp.
-    // The tool stays available only when the conversation is clearly complex/intentional
-    // (score >= 50), which typically means the user used an explicit scheduling/notification keyword.
+    // 🛡️ GUARDRAIL: Strip dangerous/complex tools from bronze models.
+    // Bronze models (≤4096 tokens) hallucinate structured tool calls and can't
+    // reason about multi-step workflows (MCP install, visual inspection, etc.).
     const isBronze = tier1Config.power_class === 'bronze';
+    const isSilver = tier1Config.power_class === 'silver';
     if (isBronze) {
         const complexityScore = calculateComplexityScore(prompt, messagesFromClient ?? []);
         if (complexityScore < 50) {
             delete (tools as any)['send_whatsapp_message'];
             console.log(`  🛡️ [tier1] Guardrail: send_whatsapp_message stripped for bronze model (complexity score: ${complexityScore})`);
         }
+        // Strip tools that require multi-step reasoning or carry heavy side effects
+        delete (tools as any)['install_mcp'];
+        delete (tools as any)['visual_inspect_page'];
+        delete (tools as any)['web_interact'];
+        delete (tools as any)['start_background_process'];
+        delete (tools as any)['schedule_recurring_task'];
+        console.log(`  🛡️ [tier1] Guardrail: install_mcp, visual_inspect_page, web_interact, start_background_process, schedule_recurring_task stripped for bronze model`);
     }
 
-    let systemPromptContext = getPersonaContext() + getSystemPromptTier1();
+    // Silver models can handle most tools but MCP installation is still too complex
+    if (isSilver) {
+        delete (tools as any)['install_mcp'];
+        console.log(`  🛡️ [tier1] Guardrail: install_mcp stripped for silver model`);
+    }
+
+    // 🛡️ Tool Policy: Strip owner-only tools for non-owner senders (system/scheduled)
+    const filteredTools = senderRole === 'owner' ? tools : applyToolPolicy(tools as Record<string, unknown>, senderRole) as typeof tools;
+
+    // ─── System Prompt Construction (tier-aware context budget) ────
+    let systemPromptContext = getPersonaContext() + (isGold ? getSystemPromptTier1Gold() : getSystemPromptTier1());
     if (isGold) {
+        // Gold/Platinum: full context — directive + manifest + wisdom
         systemPromptContext += `\n\n${PROACTIVE_DIRECTIVE}\n\n${CapabilityRegistry.getCapabilityManifest()}`;
-    } else {
+    } else if (!isBronze) {
+        // Silver: manifest only (no directive, no wisdom)
         systemPromptContext += `\n\n${CapabilityRegistry.getCapabilityManifest()}`;
     }
+    // Bronze: NO manifest, NO wisdom — protect the 4096-token window
 
-    try {
-        const wisdom = await MemoryManager.searchMemory('cloud_wisdom', prompt, 3);
-        if (wisdom && wisdom.length > 0) {
-            systemPromptContext += `\n\nPAST SUCCESSFUL EXAMPLES (Mimic this level of reasoning):\n`;
-            wisdom.forEach((w) => {
-                systemPromptContext += `${w}\n\n`;
-            });
+    // Cloud Wisdom injection — skip for bronze to avoid context overflow
+    if (!isBronze) {
+        try {
+            const wisdom = await MemoryManager.searchMemory('cloud_wisdom', prompt, 3);
+            if (wisdom && wisdom.length > 0) {
+                systemPromptContext += `\n\nPAST SUCCESSFUL EXAMPLES (Mimic this level of reasoning):\n`;
+                wisdom.forEach((w) => {
+                    systemPromptContext += `${w}\n\n`;
+                });
+            }
+        } catch (err) {
+            console.error('  ❌ [tier1] Failed to retrieve cloud wisdom:', err);
         }
-    } catch (err) {
-        console.error('  ❌ [tier1] Failed to retrieve cloud wisdom:', err);
     }
 
+    // 📚 Skills injection — load relevant skill instructions (skip bronze)
+    if (!isBronze) {
+        try {
+            const skillPrompt = await getRelevantSkillPrompt(prompt);
+            if (skillPrompt) {
+                systemPromptContext += skillPrompt;
+                console.log(`  📚 [tier1] Skill prompt injected`);
+            }
+        } catch (err) {
+            console.error('  ❌ [tier1] Failed to load skills:', err);
+        }
+    }
 
     let messages: any[];
     if (messagesFromClient && messagesFromClient.length > 0) {
@@ -216,6 +262,12 @@ THE LAZINESS BAN: Never attempt to do complex math, data filtering, or system an
         messages = [{ role: 'user', content: enrichedPrompt }];
     }
 
+    // ─── Transcript: Log user turn ───
+    Transcript.append({ role: 'user', content: prompt, meta: { tier: 'tier1', model: modelName } });
+
+    // 🔄 Tool Loop Detection: track tool call history for this request
+    const toolCallHistory: ToolCallHistoryEntry[] = [];
+
     let stepCount = 0;
     const MAX_STEPS = 5;
 
@@ -227,7 +279,7 @@ THE LAZINESS BAN: Never attempt to do complex math, data filtering, or system an
                 model,
                 system: systemPromptContext,
                 messages,
-                tools,
+                tools: filteredTools,
                 onError: ({ error }) => {
                     console.error('  ❌ [tier1] streamText onError:', error);
                 },
@@ -315,9 +367,17 @@ THE LAZINESS BAN: Never attempt to do complex math, data filtering, or system an
                 console.log(`  🔧 [tier1] Raw JSON Tool Call Interceptado: ${rawToolCall.name}`);
                 callbacks.onToolCall?.(rawToolCall.name, rawToolCall.arguments || {});
 
+                // ─── Transcript: Log tool call ───
+                Transcript.append({
+                    role: 'tool-call',
+                    content: JSON.stringify(rawToolCall.arguments || {}),
+                    meta: { toolName: rawToolCall.name, tier: 'tier1', model: modelName },
+                });
+
                 const toolFn = (tools as any)[rawToolCall.name];
                 let toolOutput = '';
                 let success = false;
+                const toolStart = Date.now();
 
                 if (toolFn) {
                     try {
@@ -331,7 +391,37 @@ THE LAZINESS BAN: Never attempt to do complex math, data filtering, or system an
                     toolOutput = `Error: Tool '${rawToolCall.name}' not found.`;
                 }
 
+                const toolDuration = Date.now() - toolStart;
+
+                // ─── Transcript: Log tool result with duration ───
+                Transcript.append({
+                    role: 'tool-result',
+                    content: toolOutput,
+                    meta: {
+                        toolName: rawToolCall.name,
+                        success,
+                        tier: 'tier1',
+                        model: modelName,
+                        durationMs: toolDuration,
+                        ...(!success ? { error: toolOutput.slice(0, 200) } : {}),
+                    },
+                });
+
                 callbacks.onToolResult?.(rawToolCall.name, success, toolOutput);
+
+                // 🔄 Tool Loop Detection
+                toolCallHistory.push({
+                    argsHash: hashToolCall(rawToolCall.name, rawToolCall.arguments || {}),
+                    resultHash: hashResult(toolOutput),
+                    toolName: rawToolCall.name,
+                });
+                const loopCheck = detectToolCallLoop(toolCallHistory, rawToolCall.name, rawToolCall.arguments || {});
+                if (loopCheck.stuck) {
+                    console.warn(`  🚨 [tier1] Loop detected (${loopCheck.detector}): ${loopCheck.message}`);
+                    callbacks.onChunk(`\n⚠️ Loop detected: ${loopCheck.message}. Breaking out.\n`);
+                    callbacks.onDone(`Loop circuit breaker activated: ${loopCheck.message}`);
+                    return { tier: 'tier1', model: modelName };
+                }
 
                 messages.push({ role: 'assistant', content: fullText });
                 messages.push({ role: 'user', content: `[System Tool Execution Result]:\n${toolOutput}\n\nWhen you receive a tool execution output, formulate a natural language response to the user based on that output. DO NOT output JSON anymore unless another tool is needed.` });
@@ -343,7 +433,10 @@ THE LAZINESS BAN: Never attempt to do complex math, data filtering, or system an
                 callbacks.onChunk(fullText.trim());
             }
 
-            callbacks.onDone(isJsonMode && !rawToolCall && !nativeToolUsed ? fullText.trim() : fullText);
+            const finalText = isJsonMode && !rawToolCall && !nativeToolUsed ? fullText.trim() : fullText;
+            // ─── Transcript: Log assistant turn ───
+            Transcript.append({ role: 'assistant', content: finalText, meta: { tier: 'tier1', model: modelName } });
+            callbacks.onDone(finalText);
             return { tier: 'tier1', model: modelName };
 
         } catch (err) {
@@ -362,6 +455,7 @@ export async function askTier2(
     callbacks: StreamCallbacks,
     context?: string,
     messagesFromClient?: any[],
+    senderRole: SenderRole = 'owner',
 ): Promise<CognitiveRouterResult> {
     const validation = validateTier2Config();
     if (!validation.valid) {
@@ -376,26 +470,30 @@ export async function askTier2(
 
     const config = getTier2Config()!;
     const model = createTier2Model();
-    const tools = CapabilityRegistry.getAvailableTools();
+    const rawTools = CapabilityRegistry.getAvailableTools();
 
-    const PROACTIVE_DIRECTIVE = `
-AUTONOMOUS TOOL FORGING: You are a proactive software engineer. DO NOT wait for the user to explicitly tell you to "create a script" or "build a tool".
-
-DETECT PATTERNS: If the user asks you to perform a calculation, parse data, read a file system, monitor a system, or do any task that requires absolute precision or repetition, you MUST autonomously decide to use the create_and_run_tool to forge a reusable Node.js solution. Exception: If the user asks to "schedule a task", "set a timer", "remind me", or "run every X minutes", DO NOT forge a tool! You MUST use the native \`schedule_task\` tool. DO NOT use memory tools (\`core_memory_replace\`) as a substitute for scheduling timers or alarms.
-
-SILENT EXECUTION: Do not ask the user "Would you like me to write a script for this?". Just do it. Write the tool, execute it silently using your internal execution loop, analyze the stdout, and ONLY reply to the user with the final, polished result in natural language.
-
-THE LAZINESS BAN: Never attempt to do complex math, data filtering, or system analysis textually in your "head". Always forge a tool to do the heavy lifting.
-`;
+    // 🛡️ Tool Policy: Strip owner-only tools for non-owner senders
+    const tools = senderRole === 'owner' ? rawTools : applyToolPolicy(rawTools as Record<string, unknown>, senderRole) as typeof rawTools;
 
     // Enrich system prompt with capability manifest and external context
-    const fullSystemPrompt = [
+    let fullSystemPrompt = [
         getPersonaContext(),
         getSystemPromptTier2(),
         `\n\n${PROACTIVE_DIRECTIVE}`,
         `\n\n${CapabilityRegistry.getCapabilityManifest()}`,
         context ? `\n## Additional Session Context\n${context}` : '',
     ].join('');
+
+    // 📚 Skills injection — load relevant skill instructions
+    try {
+        const skillPrompt = await getRelevantSkillPrompt(prompt);
+        if (skillPrompt) {
+            fullSystemPrompt += skillPrompt;
+            console.log(`  📚 [tier2] Skill prompt injected`);
+        }
+    } catch (err) {
+        console.error('  ❌ [tier2] Failed to load skills:', err);
+    }
 
     try {
         // ── Sanitize tool schemas: Anthropic requires input_schema.type = "object" ──
@@ -431,6 +529,9 @@ THE LAZINESS BAN: Never attempt to do complex math, data filtering, or system an
         }
         console.log(`  🧠 [tier2] Calling ${config.provider}/${config.model} with ${Object.keys(tools).length} tools (AutoRAG: ${ragResult.chunksFound} chunks)`);
 
+        // ─── Transcript: Log user turn ───
+        Transcript.append({ role: 'user', content: prompt, meta: { tier: 'tier2', model: config.model } });
+
         let messages: any[];
         if (messagesFromClient && messagesFromClient.length > 0) {
             messages = [...messagesFromClient];
@@ -450,6 +551,45 @@ THE LAZINESS BAN: Never attempt to do complex math, data filtering, or system an
             messages = [{ role: 'user', content: enrichedPrompt }];
         }
 
+        // 🔧 Transcript Repair: ensure tool-use/result parity (Anthropic requirement)
+        const repairReport = repairToolUseResultPairing(messages);
+        if (repairReport.syntheticResultsAdded > 0 || repairReport.orphanResultsDropped > 0) {
+            console.log(`  🔧 [tier2] Transcript repair: +${repairReport.syntheticResultsAdded} synthetic results, -${repairReport.orphanResultsDropped} orphans, ${repairReport.payloadsTrimmed} payloads trimmed`);
+            messages = repairReport.messages;
+        }
+
+        // 📏 Context Window Guard: pre-flight token budget check
+        const systemTokens = estimateTokens(fullSystemPrompt);
+        const msgTokens = messages.reduce((sum: number, m: any) => sum + estimateTokens(typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? '')), 0);
+        const guard = evaluateContextWindowGuard(config.model, systemTokens, msgTokens);
+        if (guard.shouldBlock) {
+            console.warn(`  🚫 [tier2] Context window BLOCKED: ${guard.usedTokens}/${guard.maxTokens} tokens used, ${guard.remainingTokens} remaining`);
+            // Attempt compaction before giving up
+            const compacted = await compactHistory(messages, {
+                maxTokens: Math.floor(guard.maxTokens * 0.7),
+                targetTokens: Math.floor(guard.maxTokens * 0.5),
+                summarize: async (text, instruction) => {
+                    // Use a lightweight summarization call
+                    const summaryModel = createTier2Model();
+                    const summaryResult = streamText({ model: summaryModel, system: instruction, messages: [{ role: 'user' as const, content: text }] });
+                    let summary = '';
+                    for await (const part of summaryResult.fullStream) {
+                        if (part.type === 'text-delta') summary += part.text;
+                    }
+                    return summary;
+                },
+            });
+            if (compacted.compacted) {
+                messages = compacted.messages;
+                console.log(`  📦 [tier2] Compaction applied: ${compacted.originalTokens} → ${compacted.finalTokens} tokens`);
+            } else {
+                callbacks.onError(new Error(`Context window exceeded (${guard.usedTokens}/${guard.maxTokens} tokens). Please start a new conversation.`));
+                return { tier: 'tier2', model: config.model };
+            }
+        } else if (guard.action === 'compact') {
+            console.log(`  ⚠️ [tier2] Context window warning: ${guard.remainingTokens} tokens remaining. Consider compaction soon.`);
+        }
+
         const result = streamText({
             model,
             system: fullSystemPrompt,
@@ -464,6 +604,12 @@ THE LAZINESS BAN: Never attempt to do complex math, data filtering, or system an
         let fullText = '';
         let eventCount = 0;
         let toolCalled = false;
+        /** Tracks tool-call start times for duration measurement */
+        const toolTimers = new Map<string, number>();
+        /** 🔄 Tool Loop Detection: track history for this request */
+        const tier2ToolHistory: ToolCallHistoryEntry[] = [];
+        /** Track last tool call args for loop detection pairing */
+        let lastToolCallArgs: unknown = {};
 
         for await (const part of result.fullStream) {
             eventCount++;
@@ -475,25 +621,60 @@ THE LAZINESS BAN: Never attempt to do complex math, data filtering, or system an
 
                 case 'tool-call':
                     toolCalled = true;
+                    toolTimers.set(part.toolName, Date.now());
+                    lastToolCallArgs = part.input;
                     console.log(`  🔧 [tier2] Tool call: ${part.toolName}`);
+                    Transcript.append({
+                        role: 'tool-call',
+                        content: JSON.stringify(part.input),
+                        meta: { toolName: part.toolName, tier: 'tier2', model: config.model },
+                    });
                     callbacks.onToolCall?.(
                         part.toolName,
                         part.input as Record<string, unknown>,
                     );
                     break;
 
-                case 'tool-result':
-                    console.log(`  🔧 [tier2] Tool result: ${part.toolName}`);
-                    callbacks.onToolResult?.(
-                        part.toolName,
-                        typeof part.output === 'object' && part.output !== null && 'success' in part.output
-                            ? (part.output as { success: boolean }).success
-                            : true,
-                        typeof part.output === 'string'
-                            ? part.output
-                            : JSON.stringify(part.output, null, 2),
-                    );
+                case 'tool-result': {
+                    const toolDurationMs = toolTimers.has(part.toolName)
+                        ? Date.now() - toolTimers.get(part.toolName)!
+                        : undefined;
+                    toolTimers.delete(part.toolName);
+                    console.log(`  🔧 [tier2] Tool result: ${part.toolName}${toolDurationMs != null ? ` (${toolDurationMs}ms)` : ''}`);
+                    const toolOutput = typeof part.output === 'string'
+                        ? part.output
+                        : JSON.stringify(part.output, null, 2);
+                    const toolSuccess = typeof part.output === 'object' && part.output !== null && 'success' in part.output
+                        ? (part.output as { success: boolean }).success
+                        : true;
+                    // Transcript logs with auto-truncation (1000 chars)
+                    Transcript.append({
+                        role: 'tool-result',
+                        content: toolOutput,
+                        meta: {
+                            toolName: part.toolName,
+                            success: toolSuccess,
+                            tier: 'tier2',
+                            model: config.model,
+                            durationMs: toolDurationMs,
+                            ...(!toolSuccess ? { error: toolOutput.slice(0, 200) } : {}),
+                        },
+                    });
+                    callbacks.onToolResult?.(part.toolName, toolSuccess, toolOutput);
+
+                    // 🔄 Tool Loop Detection
+                    tier2ToolHistory.push({
+                        argsHash: hashToolCall(part.toolName, lastToolCallArgs),
+                        resultHash: hashResult(toolOutput),
+                        toolName: part.toolName,
+                    });
+                    const loopResult = detectToolCallLoop(tier2ToolHistory, part.toolName, lastToolCallArgs);
+                    if (loopResult.stuck && loopResult.level === 'critical') {
+                        console.warn(`  🚨 [tier2] Loop detected (${loopResult.detector}): ${loopResult.message}`);
+                        callbacks.onChunk(`\n⚠️ Tool loop detected: ${loopResult.message}. Breaking out.\n`);
+                    }
                     break;
+                }
 
                 case 'error':
                     console.error('  ❌ [tier2] Stream error event:', part.error);
@@ -515,6 +696,9 @@ THE LAZINESS BAN: Never attempt to do complex math, data filtering, or system an
                 console.error('  ❌ [tier2] Failed to memorize cloud wisdom:', err);
             });
         }
+
+        // ─── Transcript: Log assistant turn ───
+        Transcript.append({ role: 'assistant', content: fullText, meta: { tier: 'tier2', model: config.model } });
 
         callbacks.onDone(fullText);
         return { tier: 'tier2', model: config.model };
