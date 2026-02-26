@@ -23,6 +23,7 @@ import { editFileBlocksTool } from './tools/edit-file-blocks.js';
 import { getGitStatusTool, getGitDiffTool, gitCommitChangesTool } from './tools/git-manager.js';
 import { startBackgroundProcessTool, getProcessLogsTool, killBackgroundProcessTool } from './tools/process-manager.js';
 import { visualInspectPageTool } from './tools/visual-inspect-page.js';
+import { installMcpTool } from './tools/install-mcp.js';
 import { Forge } from './forge.js';
 import { Vault } from '@redbusagent/shared';
 import { WhatsAppChannel } from '../channels/whatsapp.js';
@@ -82,6 +83,7 @@ export class CapabilityRegistry {
             get_process_logs: getProcessLogsTool,
             kill_background_process: killBackgroundProcessTool,
             visual_inspect_page: visualInspectPageTool,
+            install_mcp: installMcpTool,
             ...dynamicTools,
             ...mcpSdkTools,
         };
@@ -112,7 +114,8 @@ ${hasWhatsapp ? `- 📱 WhatsApp: You are connected to the user's WhatsApp. You 
 - 🛠️ Surgical Code Editing: When you need to modify an existing file, DO NOT recreate the whole file. Use the edit_file_blocks tool. Provide the EXACT existing lines in the search_block, and your new lines in the replace_block. Always read the file first to get the exact indentation before attempting an edit.
 - 💻 System Shell: You have direct terminal access. You can execute OS commands via the execute_shell_command tool.
 - 🔨 Forge: You can write and execute Node.js tools. Your tools and workspace are physically located at: \`${Forge.dir}\`. You currently have ${forgedTools.length} custom tools forged${forgedTools.length > 0 ? `: ${forgedNames}` : '.'}
-- 🔌 MCP (Model Context Protocol): You are connected to MCP servers exposing ${mcpCount} external tools dynamically.`;
+- 🔌 MCP (Model Context Protocol): You are connected to MCP servers exposing ${mcpCount} external tools dynamically.
+- 🧩 MCP Discovery & Install: You can discover and install new MCP servers at runtime using install_mcp. Workflow: (1) Use web_search to find MCPs (e.g. "MCP server for X site:github.com", "npm @modelcontextprotocol/server-*", "registry.modelcontextprotocol.io"). (2) Use web_read_page to read the MCP's README for the correct command/args. (3) Ask the user for any required API keys/tokens. (4) Call install_mcp with the id, name, command, args, and env. The MCP will be activated immediately and its tools will become available.`;
     }
 }
 

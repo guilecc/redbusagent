@@ -46,6 +46,25 @@ export class MCPEngine {
         }
     }
 
+    /**
+     * Public method to add and spawn a new MCP server at runtime.
+     * Returns the list of tools exposed by the new MCP, or throws on failure.
+     */
+    async addMCP(mcpId: string, command: string, args: string[], env: Record<string, string> = {}): Promise<MCPToolInfo[]> {
+        // If already connected, close the existing client first
+        const existing = this.clients.get(mcpId);
+        if (existing) {
+            try { await existing.close(); } catch { /* ignore */ }
+            this.clients.delete(mcpId);
+            this.toolsCache = this.toolsCache.filter(t => t.mcpId !== mcpId);
+        }
+
+        await this.spawnMCP(mcpId, command, args, env);
+
+        // Return the tools that were just discovered for this MCP
+        return this.toolsCache.filter(t => t.mcpId === mcpId);
+    }
+
     private async spawnMCP(mcpId: string, command: string, args: string[], env: Record<string, string>): Promise<void> {
         try {
             console.log(`[MCPEngine] Spawning MCP ${mcpId} with command: ${command} ${args.join(' ')}`);
