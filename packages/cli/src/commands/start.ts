@@ -1,8 +1,8 @@
 /**
  * @redbusagent/cli — Start Command (TUI-only thin client)
  *
- * Launches the TUI client. If the daemon is not already running,
- * it auto-starts the daemon in the background first, then launches the TUI.
+ * Launches only the TUI client. Requires the daemon to be running.
+ * If the daemon is not running, tells the user to run `redbus daemon` first.
  *
  * Usage: redbus start
  */
@@ -10,11 +10,10 @@
 import { spawn } from 'node:child_process';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readFileSync, existsSync, openSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { createConnection } from 'node:net';
 import pc from 'picocolors';
-import { Vault, DEFAULT_PORT, DEFAULT_HOST } from '@redbusagent/shared';
+import { Vault } from '@redbusagent/shared';
 import { runOnboardingWizard } from '../wizard/onboarding.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -30,68 +29,11 @@ function isDaemonRunning(): boolean {
     try {
         const pid = parseInt(readFileSync(PID_FILE, 'utf-8').trim(), 10);
         if (isNaN(pid)) return false;
-        process.kill(pid, 0); // signal 0 = check existence
+        process.kill(pid, 0);
         return true;
     } catch {
         return false;
     }
-}
-
-/** Try to connect to the daemon's WebSocket port to confirm it's accepting connections */
-function waitForDaemonReady(maxWaitMs = 15000): Promise<void> {
-    const port = Number(process.env['REDBUS_PORT']) || DEFAULT_PORT;
-    const host = process.env['REDBUS_HOST'] || DEFAULT_HOST;
-    const startTime = Date.now();
-
-    return new Promise((resolve, reject) => {
-        function tryConnect() {
-            if (Date.now() - startTime > maxWaitMs) {
-                // Timeout — but daemon process was spawned, so proceed anyway
-                resolve();
-                return;
-            }
-
-            const socket = createConnection({ host, port }, () => {
-                socket.destroy();
-                resolve();
-            });
-
-            socket.on('error', () => {
-                socket.destroy();
-                setTimeout(tryConnect, 500);
-            });
-        }
-
-        tryConnect();
-    });
-}
-
-function startDaemonBackground(): Promise<void> {
-    const tsx = resolveTsx();
-    const daemonEntry = join(PROJECT_ROOT, 'packages/daemon/src/main.ts');
-
-    console.log(pc.dim('  🚀 Daemon not running. Starting in background...'));
-
-    // Redirect daemon stdout/stderr to a log file so pipes don't bind the processes
-    const logPath = join(Vault.dir, 'daemon.log');
-    const logFd = openSync(logPath, 'a');
-
-    const daemonProcess = spawn(tsx, [daemonEntry], {
-        stdio: ['ignore', logFd, logFd],
-        cwd: PROJECT_ROOT,
-        detached: true,
-        env: { ...process.env },
-    });
-
-    daemonProcess.unref();
-
-    console.log(pc.dim(`  📄 Daemon log: ${logPath}`));
-    console.log(pc.dim(`  ⏳ Waiting for daemon to be ready...`));
-
-    // Wait for the daemon to start accepting connections
-    return waitForDaemonReady().then(() => {
-        console.log(pc.green(`  ✅ Daemon started (PID: ${daemonProcess.pid})`));
-    });
 }
 
 export async function startCommand(): Promise<void> {
@@ -111,18 +53,15 @@ export async function startCommand(): Promise<void> {
         console.log(''); // spacing
     }
 
-    // ── Auto-start daemon if not running ──────────────────────
+    // ── Check if daemon is running ───────────────────────────
     if (!isDaemonRunning()) {
-        try {
-            await startDaemonBackground();
-        } catch (err: any) {
-            console.error(pc.red(`\n❌ Failed to start daemon: ${err.message}`));
-            console.log(pc.dim('   Try starting manually with: redbus daemon\n'));
-            process.exit(1);
-        }
-    } else {
-        console.log(pc.dim('  ✅ Daemon already running.'));
+        console.log(pc.red('\n  ❌ Daemon is not running.'));
+        console.log(pc.dim('     Start it first with: ') + pc.cyan('redbus daemon'));
+        console.log(pc.dim('     Then run: ') + pc.cyan('redbus start\n'));
+        process.exit(1);
     }
+
+    console.log(pc.dim('  ✅ Daemon is running.'));
 
     const tsx = resolveTsx();
     const tuiEntry = resolve(PROJECT_ROOT, 'packages/tui/src/main.tsx');
