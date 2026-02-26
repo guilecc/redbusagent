@@ -75,6 +75,16 @@ if [ "$NODE_MAJOR" -lt 18 ]; then
     NODE_VERSION=$(node -v | cut -d 'v' -f 2)
 fi
 
+if ! command -v uvx &> /dev/null; then
+    echo -e "${YELLOW}Installing uv (Python package runner for MCP servers)...${NC}"
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    # Source the env so uvx is available in this session
+    if [ -f "$HOME/.local/bin/env" ]; then
+        . "$HOME/.local/bin/env"
+    fi
+    export PATH="$HOME/.local/bin:$PATH"
+fi
+
 if ! command -v ollama &> /dev/null; then
     echo -e "${YELLOW}Installing Ollama...${NC}"
     if [ "$(uname)" == "Darwin" ]; then
@@ -90,7 +100,7 @@ if ! command -v ollama &> /dev/null; then
     fi
 fi
 
-echo -e "✔️ Dependencies OK (Node v$NODE_VERSION, git, npm, ollama)"
+echo -e "✔️ Dependencies OK (Node v$NODE_VERSION, git, npm, ollama, uvx)"
 
 # 2. Clone or update repository
 echo ""
