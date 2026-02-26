@@ -34,6 +34,17 @@ if ! command -v git &> /dev/null; then
     fi
 fi
 
+# Install Chromium/Puppeteer dependencies (needed for WhatsApp login via QR code)
+if [ "$(uname)" != "Darwin" ] && command -v apt-get &> /dev/null; then
+    echo -e "${YELLOW}>> Installing browser dependencies for WhatsApp...${NC}"
+    sudo apt-get update -qq
+    sudo apt-get install -y -qq \
+        libatk1.0-0 libatk-bridge2.0-0 libcups2 libxdamage1 \
+        libxrandr2 libgbm1 libpango-1.0-0 libcairo2 libasound2 \
+        libnspr4 libnss3 libxcomposite1 libxfixes3 libxkbcommon0 \
+        > /dev/null 2>&1 || true
+fi
+
 if ! command -v node &> /dev/null || ! command -v npm &> /dev/null; then
     echo -e "${YELLOW}Installing Node.js and npm via NVM...${NC}"
     curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
