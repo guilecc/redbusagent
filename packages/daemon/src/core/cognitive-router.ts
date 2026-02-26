@@ -398,6 +398,37 @@ THE LAZINESS BAN: Never attempt to do complex math, data filtering, or system an
     ].join('');
 
     try {
+        // ── Sanitize tool schemas: Anthropic requires input_schema.type = "object" ──
+        // Some tools (MCP, Forged) may produce schemas missing the `type` field.
+        // This belt-and-suspenders check catches ANY broken schema before sending to the provider.
+        const toolEntries = Object.entries(tools);
+        for (let i = 0; i < toolEntries.length; i++) {
+            const [name, t] = toolEntries[i]!;
+            const params = (t as any)?.parameters;
+
+            // Check jsonSchema-wrapped tools (MCP tools use `parameters` with jsonSchema)
+            if (params?.jsonSchema) {
+                if (!params.jsonSchema.type) {
+                    console.warn(`  ⚠️ [tier2] Tool[${i}] "${name}" — missing schema.type, injecting "object"`);
+                    params.jsonSchema.type = 'object';
+                }
+                if (!params.jsonSchema.properties) {
+                    params.jsonSchema.properties = {};
+                }
+            }
+
+            // Check Zod-based tools that use `inputSchema` (native + forged tools)
+            const inputSchema = (t as any)?.inputSchema;
+            if (inputSchema?.jsonSchema) {
+                if (!inputSchema.jsonSchema.type) {
+                    console.warn(`  ⚠️ [tier2] Tool[${i}] "${name}" — inputSchema missing type, injecting "object"`);
+                    inputSchema.jsonSchema.type = 'object';
+                }
+                if (!inputSchema.jsonSchema.properties) {
+                    inputSchema.jsonSchema.properties = {};
+                }
+            }
+        }
         console.log(`  🧠 [tier2] Calling ${config.provider}/${config.model} with ${Object.keys(tools).length} tools (AutoRAG: ${ragResult.chunksFound} chunks)`);
 
         let messages: any[];
