@@ -26,6 +26,7 @@ import {
     resolveAnthropicAuth,
 } from '../infra/llm-config.js';
 import { getSystemPromptTier1, getSystemPromptTier2 } from './system-prompt.js';
+import { calculateComplexityScore } from './heuristic-router.js';
 import { PersonaManager, Vault } from '@redbusagent/shared';
 import { MemoryManager } from './memory-manager.js';
 import { ToolRegistry } from './tool-registry.js';
@@ -134,6 +135,20 @@ THE LAZINESS BAN: Never attempt to do complex math, data filtering, or system an
     if (!isGold) {
         delete (tools as any)['create_and_run_tool'];
         delete (tools as any)['execute_shell_command'];
+    }
+
+    // 🛡️ GUARDRAIL: Strip outbound communication tools from small (bronze) models
+    // on low-complexity conversational requests to prevent hallucinated tool calls.
+    // Small models lack the judgement to correctly gate intrusive tools like WhatsApp.
+    // The tool stays available only when the conversation is clearly complex/intentional
+    // (score >= 50), which typically means the user used an explicit scheduling/notification keyword.
+    const isBronze = tier1Config.power_class === 'bronze';
+    if (isBronze) {
+        const complexityScore = calculateComplexityScore(prompt, messagesFromClient ?? []);
+        if (complexityScore < 50) {
+            delete (tools as any)['send_whatsapp_message'];
+            console.log(`  🛡️ [tier1] Guardrail: send_whatsapp_message stripped for bronze model (complexity score: ${complexityScore})`);
+        }
     }
 
     let systemPromptContext = getPersonaContext() + getSystemPromptTier1();

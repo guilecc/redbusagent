@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { WhatsAppChannel } from '../../channels/whatsapp.js';
 
 export const sendWhatsappMessageTool = tool({
-    description: `Send a direct proactive message via WhatsApp to the application's owner. Use this when the user asks you to remind them on WhatsApp, or to surface important updates and alerts asynchronously to their phone.`,
+    description: `Sends a WhatsApp message to the owner's phone. CRITICAL RULE: NEVER use this tool unless the user explicitly uses the words 'WhatsApp', 'mensagem', 'avise', 'notifica', 'manda no zap', or explicitly requests to notify someone on their phone. If the user just asks a question, requests information, asks for a joke, or makes any kind of conversational request, DO NOT use this tool — answer in the standard chat instead. This tool is ONLY for deliberate, user-initiated outbound notifications. When in doubt, DO NOT use it.`,
     inputSchema: z.object({
         message: z.string().describe('The message content to send to the owner over WhatsApp.'),
     }),
