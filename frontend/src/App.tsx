@@ -53,14 +53,14 @@ function App() {
                         Yeah, another<br />
                         <span className="text-red-600 line-through decoration-white/30 mr-4">moltbot</span>
                         <span className="text-red-600 line-through decoration-white/30 mr-4">openclaw</span><br />
-                        <span className="text-white">fuckingclaw.</span>
+                        <span className="text-white">claw.</span>
                     </h1>
                     <div className="space-y-4">
                         <p className="text-2xl md:text-3xl font-medium tracking-tight text-white/80 max-w-3xl mx-auto">
-                            Just the stuff I actually like, powered by a smart heuristic router that balances local and cloud models so you don't burn all your cash.
+                            Just the parts I actually want, powered by a heuristic router that balances local and cloud models so you keep your money.
                         </p>
                         <p className="text-lg md:text-xl font-medium tracking-tight text-white/50 max-w-2xl mx-auto">
-                            Yeah, it's an imitation, but I built this shit from absolute scratch.
+                            Yes, it's an imitation. I built it from scratch anyway.
                         </p>
                     </div>
 
@@ -111,7 +111,7 @@ function App() {
                         <FeatureCard
                             icon={<MessageSquare size={28} strokeWidth={2.5} />}
                             title="WhatsApp Bridge"
-                            desc="Control your dev machine from your phone on the shitter. Background daemon keeps the session alive natively."
+                            desc="Control your dev machine from your phone, anywhere. Background daemon keeps the session alive natively."
                         />
                         <FeatureCard
                             icon={<Globe size={28} strokeWidth={2.5} />}
@@ -121,7 +121,7 @@ function App() {
                         <FeatureCard
                             icon={<Database size={28} strokeWidth={2.5} />}
                             title="MemGPT-Style Engine"
-                            desc="Integrated LanceDB on-disk vector DB with dynamic core memory management. It actually remembers what the fuck you did yesterday."
+                            desc="Integrated LanceDB on-disk vector DB with dynamic core memory management. It actually remembers what you did yesterday."
                         />
                         <FeatureCard
                             icon={<Shield size={28} strokeWidth={2.5} />}
@@ -131,7 +131,7 @@ function App() {
                         <FeatureCard
                             icon={<Play size={28} strokeWidth={2.5} />}
                             title="Cognitive Router"
-                            desc="Don't burn Anthropic tokens on stupid questions. The heuristic router analyzes complexity in real-time: simple tasks run free on local models, complex coding drops to the Cloud."
+                            desc="Stop wasting cloud tokens on simple tasks. The heuristic router analyzes complexity in real-time: trivial work runs free on local models, hard problems go to the cloud."
                         />
                         <FeatureCard
                             icon={<Brain size={28} strokeWidth={2.5} />}
@@ -161,7 +161,7 @@ function App() {
                     <Skull size={32} />
                 </div>
                 <p className="text-white/40 font-bold uppercase tracking-widest text-sm mb-2">Deal with it.</p>
-                <p className="text-white/20 text-xs">© {new Date().getFullYear()} Redbus Agent.</p>
+                <p className="text-white/20 text-xs">© {new Date().getFullYear()} redbus.</p>
             </footer>
         </div>
     );
