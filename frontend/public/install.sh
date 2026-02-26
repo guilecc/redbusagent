@@ -136,6 +136,12 @@ rm -rf packages/*/dist packages/*/*.tsbuildinfo frontend/dist 2>/dev/null || tru
 
 npm run build
 
+# 3b. Install Playwright Chromium browser binary (needed for web_read_page tool)
+echo -e "${YELLOW}>> Installing Playwright Chromium browser...${NC}"
+npx --workspace=@redbusagent/daemon playwright install --with-deps chromium 2>/dev/null || \
+    npx --workspace=@redbusagent/daemon playwright install chromium 2>/dev/null || \
+    echo -e "${RED}   ⚠️  Could not install Playwright Chromium. web_read_page will use fetch fallback.${NC}"
+
 # 4. Create global link for the CLI
 echo ""
 echo -e "${YELLOW}>> Configuring global 'redbus' binary...${NC}"

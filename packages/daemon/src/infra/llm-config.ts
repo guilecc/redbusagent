@@ -25,6 +25,43 @@ export function getTier1Config(): { url: string; model: string; enabled: boolean
     };
 }
 
+// ─── Live Engine (VRAM-bound, real-time chat) ─────────────────────
+
+export function getLiveEngineConfig(): { url: string; model: string; enabled: boolean; power_class?: string } {
+    const config = Vault.read();
+    // Fall back to tier1 config if live_engine not configured (backward compat)
+    if (config?.live_engine) {
+        return {
+            url: config.live_engine.url ?? 'http://127.0.0.1:11434',
+            model: config.live_engine.model ?? 'llama3.2:3b',
+            enabled: config.live_engine.enabled ?? true,
+            power_class: config.live_engine.power_class,
+        };
+    }
+    return getTier1Config();
+}
+
+// ─── Worker Engine (RAM-bound, background heavy tasks) ────────────
+
+export interface WorkerEngineConfig {
+    url: string;
+    model: string;
+    enabled: boolean;
+    num_threads: number;
+    num_ctx: number;
+}
+
+export function getWorkerEngineConfig(): WorkerEngineConfig {
+    const config = Vault.read();
+    return {
+        url: config?.worker_engine?.url ?? 'http://127.0.0.1:11434',
+        model: config?.worker_engine?.model ?? 'qwen2.5-coder:14b',
+        enabled: config?.worker_engine?.enabled ?? false,
+        num_threads: config?.worker_engine?.num_threads ?? 8,
+        num_ctx: config?.worker_engine?.num_ctx ?? 8192,
+    };
+}
+
 // ─── Tier 2 (Cloud / Premium) ─────────────────────────────────────
 
 export function getTier2Config(): { provider: Tier2Provider; model: string } | null {

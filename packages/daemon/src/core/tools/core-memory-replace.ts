@@ -12,6 +12,8 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { CoreMemory } from '../core-memory.js';
+import { HeavyTaskQueue } from '../heavy-task-queue.js';
+import { Vault } from '@redbusagent/shared';
 
 export const coreMemoryReplaceTool = tool({
     description: `Replaces the entire Core Working Memory with a new compressed version. Use this to update your working context when important facts change, goals shift, or you need to distill the current state. The Core Memory is always visible to you in your system prompt — keep it concise, structured, and under 1000 tokens. Structure it with sections: ## Active Goals, ## User Context, ## Critical Facts, ## Active Tasks.`,
@@ -45,6 +47,29 @@ export const coreMemoryAppendTool = tool({
     execute: async (params: { fact: string }) => {
         try {
             const result = CoreMemory.append(params.fact);
+
+            // ─── Dual-Local: Auto-delegate compression to Worker Engine ──
+            if (result.needsCompression) {
+                const workerEnabled = Vault.read()?.worker_engine?.enabled ?? false;
+                if (workerEnabled) {
+                    const currentMemory = CoreMemory.read();
+                    HeavyTaskQueue.enqueue({
+                        description: 'Distill core-memory.md (auto-triggered by overflow)',
+                        type: 'distill_memory',
+                        prompt: `You are a memory compression engine. Below is the current core-memory.md which has exceeded its size limit.\n\nCURRENT CORE MEMORY:\n${currentMemory}\n\nCOMPRESS this into a highly condensed version under 3000 characters. Preserve:\n- Active goals and tasks\n- Critical user context and preferences\n- Key facts and architecture decisions\n- File paths and references\n\nRemove:\n- Redundant or outdated information\n- Verbose descriptions that can be shortened\n- Completed tasks that are no longer relevant\n\nReturn ONLY the compressed markdown content, nothing else.`,
+                        onComplete: (compressed) => {
+                            CoreMemory.replace(compressed);
+                            console.log(`  🧠 [Worker] Core Memory distilled successfully (${compressed.length} chars)`);
+                        },
+                    });
+                    return {
+                        success: true,
+                        message: `Fact appended to Core Memory. ⚠️ Memory overflow detected — distillation delegated to Worker Engine (background).`,
+                        needsCompression: true,
+                    };
+                }
+            }
+
             return {
                 success: true,
                 message: `Fact appended to Core Memory.${result.needsCompression ? ' ⚠️ Memory is full — compression cycle recommended.' : ''}`,

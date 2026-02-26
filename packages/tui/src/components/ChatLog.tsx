@@ -21,14 +21,17 @@ export interface ChatLogProps {
 
 // ─── Helpers ──────────────────────────────────────────────────────
 
-function getLineColor(line: string): { color: string; bold: boolean } {
-    if (line.startsWith('🧑')) return { color: 'white', bold: true };
-    if (line.startsWith('🔴')) return { color: 'red', bold: true };
-    if (line.startsWith('🔧')) return { color: 'magenta', bold: true };
-    if (line.startsWith('✅')) return { color: 'green', bold: false };
-    if (line.startsWith('❌')) return { color: 'red', bold: false };
-    if (line.startsWith('⏰')) return { color: 'yellow', bold: true };
-    return { color: 'white', bold: false };
+function getLineColor(line: string): { color: string; bold: boolean; dim: boolean } {
+    if (line.startsWith('🧑')) return { color: 'white', bold: true, dim: false };
+    if (line.startsWith('🔴')) return { color: 'red', bold: true, dim: false };
+    if (line.startsWith('🔧')) return { color: 'magenta', bold: false, dim: false };
+    if (line.startsWith('✅')) return { color: 'green', bold: false, dim: false };
+    if (line.startsWith('❌')) return { color: 'red', bold: false, dim: false };
+    if (line.startsWith('⏰')) return { color: 'yellow', bold: true, dim: false };
+    if (line.startsWith('🔄')) return { color: 'cyan', bold: false, dim: false };
+    // Indented detail lines (tool output previews)
+    if (line.startsWith('  ') || line.startsWith('{') || line.startsWith('"')) return { color: 'gray', bold: false, dim: true };
+    return { color: 'white', bold: false, dim: false };
 }
 
 // ─── Component ────────────────────────────────────────────────────
@@ -54,7 +57,7 @@ export function ChatLog({ chatLines, streamingText, isStreaming, isUpdating }: C
                     {chatLines.map((line, i) => {
                         const style = getLineColor(line);
                         return (
-                            <Text key={i} wrap="wrap" color={style.color as never} bold={style.bold}>
+                            <Text key={i} wrap="wrap" color={style.color as never} bold={style.bold} dimColor={style.dim}>
                                 {line}
                             </Text>
                         );

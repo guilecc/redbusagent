@@ -10,7 +10,7 @@
 
 import * as p from '@clack/prompts';
 import pc from 'picocolors';
-import { Vault, type VaultTier2Config, type VaultTier1Config, type Tier1PowerClass, type Tier2Provider, fetchTier2Models, SUGGESTED_MCPS, getMCPSuggestion, inspectHardwareProfile } from '@redbusagent/shared';
+import { Vault, type VaultTier2Config, type VaultTier1Config, type VaultLiveEngineConfig, type VaultWorkerEngineConfig, type Tier1PowerClass, type Tier2Provider, fetchTier2Models, SUGGESTED_MCPS, getMCPSuggestion, inspectHardwareProfile } from '@redbusagent/shared';
 import { WhatsAppChannel } from '@redbusagent/daemon/dist/channels/whatsapp.js';
 
 // ─── Wizard ───────────────────────────────────────────────────────
@@ -44,14 +44,19 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
     } else if (powerClass === 'silver') {
         recommendedTier1Model = 'qwen2.5-coder:14b';
     } else if (powerClass === 'bronze') {
-        recommendedTier1Model = 'hf.co/bartowski/Qwen2.5-Coder-7B-Instruct-GGUF:IQ3_M';
+        recommendedTier1Model = 'llama3.2:3b';
     }
 
     let hardwareMessage = `🖥️  ${pc.bold(gpuName)}${vramGB > 0 ? ` (${pc.bold(`${vramGB}GB VRAM`)})` : ''} | ${pc.bold(`${systemRamGB}GB RAM`)}\n` +
         `Processing Class: ${pc.bold(pc.yellow(powerClass.toUpperCase()))}\n` +
         `Recommended Local Model: ${pc.bold(pc.cyan(recommendedTier1Model))}`;
 
-    if (powerClass === 'gold') {
+    if (powerClass === 'bronze') {
+        hardwareMessage += `\n\n${pc.yellow('⚠️  4GB VRAM Detected (Bronze Class).')}\n` +
+            `${pc.yellow('To ensure real-time terminal responses (30+ words/sec) without')}\n` +
+            `${pc.yellow('freezing your CPU, we strongly recommend these optimized sub-4B models.')}\n` +
+            `${pc.red('Do NOT select 7B models unless you are willing to wait 1+ minutes per reply.')}`;
+    } else if (powerClass === 'gold') {
         hardwareMessage += `\n\n${pc.green('Excellent GPU detected (12GB+ VRAM). We recommend 20B-35B parameter models like Gemma 2 or Command R.')}`;
     } else if (powerClass === 'platinum') {
         hardwareMessage += `\n\n${pc.green('Workstation-grade GPU detected (24GB+ VRAM). You can run 70B+ parameter models like Llama 3.3. You likely will not need a Cloud API.')}`;
@@ -228,12 +233,13 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
             }
         }
 
-        // Bronze options — ultra-compressed IQ3_M for ≤4GB VRAM
+        // Bronze options — optimized sub-4B models for ≤4GB VRAM (30+ tok/s on GPU)
         const LOCAL_MODELS: Array<{ value: string; label: string; hint: string }> = powerClass === 'bronze'
             ? [
-                { value: 'hf.co/bartowski/Qwen2.5-Coder-7B-Instruct-GGUF:IQ3_M', label: '⚡ Qwen2.5-Coder 7B (IQ3_M)', hint: 'Ultra-compressed IQ3_M model. Fits strictly inside 4GB VRAM for 10x faster GPU execution (~3.2GB)' },
-                { value: 'qwen2.5-coder:7b', label: '💻 qwen2.5-coder:7b', hint: 'Standard Q4 quantization (~4.7GB, may spill to CPU)' },
-                { value: 'llama3.1:8b', label: '🧠 llama3.1:8b', hint: 'General reasoning (~4.7GB, may spill to CPU)' },
+                { value: 'llama3.2:3b', label: '⚡ Llama 3.2 (3B) — The Sweet Spot', hint: 'Best balance of conversational intelligence and speed for 4GB GPUs ⭐ recommended' },
+                { value: 'phi3:mini', label: '🧠 Phi-3 Mini (3.8B) — Logic Expert', hint: "Microsoft's highly optimized logic model. Great for rule-following" },
+                { value: 'qwen2.5-coder:1.5b', label: '🚀 Qwen 2.5 Coder (1.5B) — Ultra-Fast Featherweight', hint: 'Sub-second response times, strictly focused on code and terminal commands' },
+                { value: 'deepseek-r1:1.5b', label: '🔬 DeepSeek R1 (1.5B) — Ultra-Fast Logic', hint: 'Tiny footprint but features built-in reasoning and chain-of-thought' },
             ]
             : [
                 { value: 'qwen2.5-coder:7b', label: '💻 qwen2.5-coder:7b', hint: 'Excellent for code (~8GB RAM)' },
@@ -335,6 +341,136 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
         tier1Config = { enabled: false, url: 'http://127.0.0.1:11434', model: recommendedTier1Model, power_class: powerClass };
     }
 
+    // ── Step 5b: Worker Engine (Dual-Local Architecture) ────────
+    // Live Engine = tier1 (VRAM-bound, fast, real-time chat)
+    // Worker Engine = CPU/RAM-bound, large model for background heavy tasks
+
+    let liveEngineConfig: VaultLiveEngineConfig = {
+        enabled: tier1Config.enabled,
+        url: tier1Config.url,
+        model: tier1Config.model,
+        power_class: powerClass,
+    };
+
+    let workerEngineConfig: VaultWorkerEngineConfig = {
+        enabled: false,
+        url: 'http://127.0.0.1:11434',
+        model: 'qwen2.5-coder:14b',
+        num_threads: 8,
+        num_ctx: 8192,
+    };
+
+    // Only offer Worker Engine if systemRamGB >= 16 (enough headroom for CPU inference)
+    if (systemRamGB >= 16 && tier1Config.enabled) {
+        const cpuCount = (await import('node:os')).default.cpus().length;
+        const recommendedThreads = Math.max(4, Math.floor(cpuCount * 0.6));
+
+        let recommendedWorkerModel = 'qwen2.5-coder:14b';
+        if (systemRamGB >= 64) recommendedWorkerModel = 'qwen2.5-coder:32b';
+        if (systemRamGB >= 128) recommendedWorkerModel = 'llama3.3:70b';
+
+        p.note(
+            pc.bold(pc.blue('🏗️  DUAL-LOCAL ARCHITECTURE: WORKER ENGINE')) + '\n\n' +
+            `Your machine has ${pc.bold(`${systemRamGB}GB System RAM`)} and ${pc.bold(`${cpuCount} CPU cores`)}.\n` +
+            `You can run a ${pc.bold('second, larger model')} on CPU/RAM in the background\n` +
+            `for heavy tasks like memory distillation, deep code review, and complex analysis.\n\n` +
+            `${pc.dim('The Worker Engine runs independently and never blocks your real-time chat.')}\n` +
+            `${pc.dim('Live Engine (GPU) = fast chat | Worker Engine (CPU) = heavy background tasks')}`,
+            '🏗️ Worker Engine (Background)',
+        );
+
+        const enableWorker = await p.confirm({
+            message: `Enable a background Worker Engine? (${recommendedWorkerModel} on CPU, ${recommendedThreads} threads)`,
+            initialValue: systemRamGB >= 32,
+        });
+
+        if (!p.isCancel(enableWorker) && enableWorker) {
+            const WORKER_MODELS: Array<{ value: string; label: string; hint: string }> = [];
+
+            if (systemRamGB >= 16) {
+                WORKER_MODELS.push(
+                    { value: 'qwen2.5-coder:14b', label: '💻 Qwen 2.5 Coder (14B)', hint: 'Great for code review and analysis (~16GB RAM)' },
+                    { value: 'deepseek-r1:14b', label: '🔬 DeepSeek R1 (14B)', hint: 'Deep reasoning and chain-of-thought (~16GB RAM)' },
+                );
+            }
+            if (systemRamGB >= 32) {
+                WORKER_MODELS.push(
+                    { value: 'qwen2.5-coder:32b', label: '🚀 Qwen 2.5 Coder (32B)', hint: `High-precision code analysis (~32GB RAM)${systemRamGB >= 32 && systemRamGB < 64 ? ' ⭐ recommended' : ''}` },
+                    { value: 'gemma2:27b', label: '🌟 Gemma 2 (27B)', hint: 'Google\'s versatile model (~32GB RAM)' },
+                );
+            }
+            if (systemRamGB >= 64) {
+                WORKER_MODELS.push(
+                    { value: 'llama3.3:70b', label: '🏆 Llama 3.3 (70B)', hint: `GPT-4 level intelligence (~64GB RAM) ⭐ recommended` },
+                    { value: 'qwen2.5-coder:72b', label: '🚀 Qwen 2.5 Coder (72B)', hint: 'Ultimate coding powerhouse (~64GB RAM)' },
+                );
+            }
+
+            WORKER_MODELS.push({ value: 'custom', label: '✏️  Other...', hint: 'Type the model name manually' });
+
+            const selectedWorker = await p.select({
+                message: 'Which model for the Worker Engine (CPU background tasks)?',
+                options: WORKER_MODELS,
+                initialValue: recommendedWorkerModel,
+            });
+            if (!p.isCancel(selectedWorker)) {
+                let workerModel = selectedWorker as string;
+                if (workerModel === 'custom') {
+                    const custom = await p.text({
+                        message: 'Enter the Worker Engine model name:',
+                        placeholder: recommendedWorkerModel,
+                    });
+                    if (!p.isCancel(custom)) workerModel = custom.trim();
+                }
+
+                workerEngineConfig = {
+                    enabled: true,
+                    url: 'http://127.0.0.1:11434',
+                    model: workerModel || recommendedWorkerModel,
+                    num_threads: recommendedThreads,
+                    num_ctx: 8192,
+                };
+
+                // Pull the worker model too
+                const pullWorker = p.spinner();
+                try {
+                    pullWorker.start(`Checking/Downloading worker model '${workerEngineConfig.model}'...`);
+                    const response = await fetch(`${workerEngineConfig.url}/api/pull`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ name: workerEngineConfig.model, stream: true })
+                    });
+                    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                    if (response.body) {
+                        const reader = response.body.getReader();
+                        const decoder = new TextDecoder('utf-8');
+                        let done = false;
+                        while (!done) {
+                            const { value, done: d } = await reader.read();
+                            done = d;
+                            if (value) {
+                                const lines = decoder.decode(value, { stream: true }).split('\n').filter(l => l.trim());
+                                for (const line of lines) {
+                                    try {
+                                        const data = JSON.parse(line);
+                                        if (data.total && data.completed) {
+                                            pullWorker.message(`Downloading worker model '${workerEngineConfig.model}'... (${Math.round((data.completed / data.total) * 100)}%)`);
+                                        }
+                                    } catch {}
+                                }
+                            }
+                        }
+                    }
+                    pullWorker.stop(`✅ Worker model '${workerEngineConfig.model}' ready!`);
+                } catch {
+                    pullWorker.stop(`⚠️ Could not download. Run: ollama pull ${workerEngineConfig.model}`);
+                }
+
+                p.log.success(`🏗️ Worker Engine: ${pc.bold(workerEngineConfig.model)} (${recommendedThreads} threads, CPU-only)`);
+            }
+        }
+    }
+
     let default_chat_tier: 1 | 2 = 1;
 
     // ── Step 6: Save to Vault (initial — before WhatsApp) ─────
@@ -352,6 +488,8 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
         tier2_enabled: !skipTier2,
         tier2: tier2Config,
         tier1: tier1Config,
+        live_engine: liveEngineConfig,
+        worker_engine: workerEngineConfig,
         default_chat_tier,
         owner_phone_number: ownerPhoneNumber,
         credentials,
@@ -412,6 +550,8 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
             tier2_enabled: !skipTier2,
             tier2: tier2Config,
             tier1: tier1Config,
+            live_engine: liveEngineConfig,
+            worker_engine: workerEngineConfig,
             default_chat_tier,
             owner_phone_number: ownerPhoneNumber,
             credentials,
@@ -454,6 +594,8 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
             tier2_enabled: !skipTier2,
             tier2: tier2Config,
             tier1: tier1Config,
+            live_engine: liveEngineConfig,
+            worker_engine: workerEngineConfig,
             default_chat_tier,
             owner_phone_number: undefined,
             credentials,
@@ -556,7 +698,8 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
     p.note(
         `Provider: ${skipTier2 ? pc.bold('skipped') : pc.bold(tier2Config.provider) + '/' + pc.bold(tier2Config.model)}\n` +
         `Auth: ${skipTier2 ? pc.bold('none') : pc.bold(tier2Config.authToken ? 'OAuth token' : 'API key')}\n` +
-        `Ollama: ${pc.bold(tier1Config.enabled ? `${tier1Config.model} @ ${tier1Config.url} [${tier1Config.power_class?.toUpperCase()}]` : 'disabled')}\n` +
+        `Live Engine: ${pc.bold(liveEngineConfig.enabled ? `${liveEngineConfig.model} (GPU/VRAM)` : 'disabled')}\n` +
+        `Worker Engine: ${pc.bold(workerEngineConfig.enabled ? `${workerEngineConfig.model} (CPU, ${workerEngineConfig.num_threads} threads)` : 'disabled')}\n` +
         `Default: ${pc.bold('Heuristic Routing (Auto)')}\n` +
         `WhatsApp: ${pc.bold(WhatsAppChannel.hasSession() ? 'Connected ✅' : 'Not connected')}\n` +
         (ownerPhoneNumber

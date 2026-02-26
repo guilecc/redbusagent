@@ -24,6 +24,8 @@ import {
     getTier2ApiKey,
     validateTier2Config,
     resolveAnthropicAuth,
+    getLiveEngineConfig,
+    getWorkerEngineConfig,
 } from '../infra/llm-config.js';
 import { getSystemPromptTier1, getSystemPromptTier1Gold, getSystemPromptTier2 } from './system-prompt.js';
 import { calculateComplexityScore } from './heuristic-router.js';
@@ -133,6 +135,35 @@ export function createTier2Model(): LanguageModel {
 }
 
 
+// ─── Worker Engine Model Factory (CPU/RAM-bound) ─────────────────
+
+export function createWorkerModel(): LanguageModel {
+    const workerConfig = getWorkerEngineConfig();
+
+    const workerOllama = createOpenAI({
+        baseURL: `${workerConfig.url}/v1`,
+        apiKey: 'ollama',
+        fetch: async (url, init) => {
+            if (init?.body && typeof init.body === 'string') {
+                try {
+                    const body = JSON.parse(init.body);
+                    body.keep_alive = '60m';
+                    body.options = {
+                        ...body.options,
+                        num_thread: workerConfig.num_threads,
+                        num_ctx: workerConfig.num_ctx,
+                        num_gpu: 0,   // Force CPU-only — keep GPU free for Live Engine
+                    };
+                    init = { ...init, body: JSON.stringify(body) };
+                } catch { /* non-JSON body, pass through */ }
+            }
+            return globalThis.fetch(url, init);
+        },
+    });
+
+    return workerOllama(workerConfig.model);
+}
+
 // ─── Stream Callbacks ─────────────────────────────────────────────
 
 // ─── Streaming Interfaces ─────────────────────────────────────────
@@ -146,7 +177,7 @@ export interface StreamCallbacks {
 }
 
 export interface CognitiveRouterResult {
-    tier: 'tier1' | 'tier2';
+    tier: 'tier1' | 'tier2' | 'worker';
     model: string;
 }
 
@@ -710,15 +741,66 @@ export async function askTier2(
     }
 }
 
+// ─── Worker Engine: Background Heavy Task Execution ───────────────
+
+/**
+ * askWorkerEngine — Executes a prompt on the Worker Engine (CPU/RAM-bound).
+ * Used for heavy tasks like memory distillation, deep analysis, code review.
+ * Runs synchronously (blocking) but is called from the HeartbeatManager's
+ * independent worker loop, so it never blocks the Live chat.
+ */
+export async function askWorkerEngine(prompt: string): Promise<{ result: string; model: string }> {
+    const workerConfig = getWorkerEngineConfig();
+    if (!workerConfig.enabled) {
+        throw new Error('Worker Engine is not enabled. Run: redbus config');
+    }
+
+    const model = createWorkerModel();
+    console.log(`  🏗️ [worker] Processing on ${workerConfig.model} (CPU-only, ${workerConfig.num_threads} threads)...`);
+
+    try {
+        const result = streamText({
+            model,
+            system: 'You are a background worker AI. Execute the task precisely. Return only the result, no conversational fluff.',
+            messages: [{ role: 'user' as const, content: prompt }],
+        });
+
+        let fullText = '';
+        for await (const part of result.fullStream) {
+            if (part.type === 'text-delta') {
+                fullText += part.text;
+            }
+        }
+
+        console.log(`  🏗️ [worker] Completed: ${fullText.length} chars`);
+        return { result: fullText, model: workerConfig.model };
+    } catch (err) {
+        const error = err instanceof Error ? err : new Error(String(err));
+        console.error(`  ❌ [worker] Exception: ${error.message}`);
+        throw error;
+    }
+}
+
+// ─── Live Engine Alias ────────────────────────────────────────────
+
+/**
+ * askLiveEngine — Alias for askTier1. Uses the Live Engine (VRAM-bound)
+ * for real-time chat. The Live Engine config falls back to tier1 if
+ * live_engine is not explicitly configured in the Vault.
+ */
+export const askLiveEngine = askTier1;
+
 export function getRouterStatus(): {
     tier1: { url: string; model: string; enabled: boolean };
     tier2: { provider: string; model: string; configured: boolean; authMethod?: string } | null;
+    workerEngine: { model: string; enabled: boolean; num_threads: number } | null;
     forgedTools: number;
 } {
     const tier1 = getTier1Config();
     const tier2Config = getTier2Config();
     const validation = validateTier2Config();
     const registryCount = ToolRegistry.getAll().length;
+    const workerConfig = getWorkerEngineConfig();
 
     return {
         tier1,
@@ -728,6 +810,13 @@ export function getRouterStatus(): {
                 model: tier2Config.model,
                 configured: validation.valid,
                 authMethod: validation.authMethod,
+            }
+            : null,
+        workerEngine: workerConfig.enabled
+            ? {
+                model: workerConfig.model,
+                enabled: true,
+                num_threads: workerConfig.num_threads,
             }
             : null,
         forgedTools: registryCount,

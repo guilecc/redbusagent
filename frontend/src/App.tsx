@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Terminal, Copy, CheckCircle2, Globe, Shield, MessageSquare, Database, Skull, Play, Brain, Camera, UserCircle } from 'lucide-react';
+import { Terminal, Copy, CheckCircle2, Globe, Shield, MessageSquare, Database, Skull, Play, Brain, Camera, UserCircle, Cpu, Zap } from 'lucide-react';
 import { Changelog } from './components/Changelog';
 
 function App() {
@@ -102,6 +102,43 @@ function App() {
                         </h2>
                     </div>
 
+                    {/* ── Dual-Local Architecture Hero Card ── */}
+                    <div className="mb-12 p-8 border-2 border-red-600 bg-gradient-to-br from-[#0a0000] to-[#1a0505] relative group">
+                        <div className="absolute -top-4 -left-4 bg-red-600 text-black text-xs font-black uppercase px-3 py-1.5 rotate-[-3deg] tracking-widest">
+                            NEW — Dual-Local Architecture
+                        </div>
+                        <div className="flex flex-col md:flex-row gap-8 items-start mt-4">
+                            <div className="flex-1 space-y-4">
+                                <h3 className="text-3xl font-black uppercase tracking-tight text-white">
+                                    Two Brains. One Machine. Zero Cloud.
+                                </h3>
+                                <p className="text-white/60 text-lg leading-relaxed">
+                                    Your GPU runs a small, ultra-fast model (<span className="text-red-400 font-bold">Live Engine</span>) for instant chat responses.
+                                    Meanwhile, your CPU + System RAM quietly runs a much larger model (<span className="text-blue-400 font-bold">Worker Engine</span>) in the background — handling deep analysis, memory distillation, and complex reasoning without ever blocking your conversation.
+                                </p>
+                                <p className="text-white/40">
+                                    4GB VRAM + 64GB RAM? Perfect. The Live Engine stays in your GPU. The Worker Engine lives in your RAM. They never compete.
+                                </p>
+                            </div>
+                            <div className="flex flex-col gap-3 min-w-[220px]">
+                                <div className="flex items-center gap-3 p-3 border border-red-600/40 bg-red-600/5">
+                                    <Zap size={20} className="text-red-500" />
+                                    <div>
+                                        <div className="text-sm font-bold text-red-400 uppercase">Live Engine</div>
+                                        <div className="text-xs text-white/40">GPU / VRAM — 30+ words/sec</div>
+                                    </div>
+                                </div>
+                                <div className="flex items-center gap-3 p-3 border border-blue-600/40 bg-blue-600/5">
+                                    <Cpu size={20} className="text-blue-500" />
+                                    <div>
+                                        <div className="text-sm font-bold text-blue-400 uppercase">Worker Engine</div>
+                                        <div className="text-xs text-white/40">CPU / RAM — Background tasks</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
                     <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-8">
                         <FeatureCard
                             icon={<Terminal size={28} strokeWidth={2.5} />}
@@ -131,12 +168,12 @@ function App() {
                         <FeatureCard
                             icon={<Play size={28} strokeWidth={2.5} />}
                             title="Cognitive Router"
-                            desc="Why burn cloud tokens on easy stuff? The heuristic router figures out complexity in real-time — simple tasks stay local and free, tough ones go to the cloud."
+                            desc="Heuristic complexity scoring routes tasks in real-time. Simple questions stay on the Live Engine. Heavy analysis gets delegated to the Worker Engine in the background."
                         />
                         <FeatureCard
                             icon={<Brain size={28} strokeWidth={2.5} />}
                             title="Knowledge Distillation"
-                            desc="Your local Ollama model learns from Claude and Gemini on the fly. High-quality cloud answers become few-shot memory — cognitive upgrades without any fine-tuning."
+                            desc="The Worker Engine compresses your memory bank in the background — distilling critical facts, discarding noise. Your Live Engine stays lean and fast."
                         />
                         <FeatureCard
                             icon={<Camera size={28} strokeWidth={2.5} />}

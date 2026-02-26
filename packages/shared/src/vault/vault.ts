@@ -41,12 +41,47 @@ export interface VaultTier1Config {
     readonly power_class?: Tier1PowerClass;
 }
 
+// ─── Dual-Local Architecture: Live Engine + Worker Engine ──────────
+
+/**
+ * Live Engine: VRAM-bound, ultra-fast, small model for instant TUI/WhatsApp chat.
+ * Runs on GPU for real-time responsiveness (30+ tok/s).
+ */
+export interface VaultLiveEngineConfig {
+    readonly enabled: boolean;
+    readonly url: string;
+    readonly model: string;
+    readonly power_class?: Tier1PowerClass;
+}
+
+/**
+ * Worker Engine: RAM-bound, large model for heavy background tasks.
+ * Runs on CPU/System RAM (e.g., 32B model on 64GB RAM).
+ * Slow but powerful — processes HeavyTaskQueue asynchronously.
+ */
+export interface VaultWorkerEngineConfig {
+    readonly enabled: boolean;
+    readonly url: string;
+    readonly model: string;
+    /** Number of CPU threads to dedicate to worker inference */
+    readonly num_threads?: number;
+    /** Context window size for worker model */
+    readonly num_ctx?: number;
+}
+
 export interface VaultConfig {
     /** Schema version for future migrations */
     readonly version: number;
     readonly tier2_enabled?: boolean;
     readonly tier2: VaultTier2Config;
     readonly tier1: VaultTier1Config;
+
+    // ─── Dual-Local Architecture ────────────────────────────────
+    /** Live Engine: Fast, small model for real-time chat (GPU/VRAM) */
+    readonly live_engine?: VaultLiveEngineConfig;
+    /** Worker Engine: Heavy, large model for background tasks (CPU/RAM) */
+    readonly worker_engine?: VaultWorkerEngineConfig;
+
     /**
      * The default engine tier for chat communication (1 for local, 2 for cloud).
      */
@@ -215,6 +250,21 @@ export class Vault {
                 model: 'llama3.2:1b',
                 power_class: 'bronze',
                 ...overrides?.tier1,
+            },
+            live_engine: {
+                enabled: true,
+                url: 'http://127.0.0.1:11434',
+                model: 'llama3.2:3b',
+                power_class: 'bronze',
+                ...overrides?.live_engine,
+            },
+            worker_engine: {
+                enabled: false,
+                url: 'http://127.0.0.1:11434',
+                model: 'qwen2.5-coder:14b',
+                num_threads: 8,
+                num_ctx: 8192,
+                ...overrides?.worker_engine,
             },
             default_chat_tier: overrides?.default_chat_tier ?? 2,
             credentials: {},

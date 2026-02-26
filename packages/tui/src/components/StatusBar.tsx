@@ -78,6 +78,26 @@ export function StatusBar({ connected, heartbeat, currentModel }: StatusBarProps
                 )}
             </Box>
 
+            {/* Center-Right: Worker Engine Status */}
+            {payload?.workerStatus?.enabled && (
+                <Box gap={1}>
+                    <Text color="blue" bold>🏗️ Worker</Text>
+                    {payload.workerStatus.running > 0 ? (
+                        <Text color="yellow" bold>⚙ Running</Text>
+                    ) : payload.workerStatus.pending > 0 ? (
+                        <Text color="cyan">◷ {payload.workerStatus.pending} queued</Text>
+                    ) : (
+                        <Text color="gray">● idle</Text>
+                    )}
+                    {payload.workerStatus.completed > 0 && (
+                        <Text color="green">✓{payload.workerStatus.completed}</Text>
+                    )}
+                    {payload.workerStatus.failed > 0 && (
+                        <Text color="red">✗{payload.workerStatus.failed}</Text>
+                    )}
+                </Box>
+            )}
+
             {/* Right: Uptime, Model, Tick */}
             <Box gap={2}>
                 {currentModel && (

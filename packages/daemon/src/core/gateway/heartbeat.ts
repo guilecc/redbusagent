@@ -15,6 +15,9 @@ import type { DaemonWsServer } from '../../infra/ws-server.js';
 import type { DaemonState } from '@redbusagent/shared';
 import { getActiveTaskCount, getTotalQueueSize } from '../task-queue.js';
 import { approvalGate } from '../approval-gate.js';
+import { HeavyTaskQueue } from '../heavy-task-queue.js';
+import { askWorkerEngine } from '../cognitive-router.js';
+import { getWorkerEngineConfig } from '../../infra/llm-config.js';
 
 // ─── Configuration ─────────────────────────────────────────────────
 export const DEFAULT_HEARTBEAT_INTERVAL_MS = 1_000;
@@ -35,6 +38,9 @@ interface StateSnapshot {
     pendingTasks: number;
     awaitingApproval: boolean;
     connectedClients: number;
+    workerPending: number;
+    workerRunning: number;
+    workerCompleted: number;
 }
 
 function snapshotsEqual(a: StateSnapshot | null, b: StateSnapshot): boolean {
@@ -44,16 +50,21 @@ function snapshotsEqual(a: StateSnapshot | null, b: StateSnapshot): boolean {
         a.activeTasks === b.activeTasks &&
         a.pendingTasks === b.pendingTasks &&
         a.awaitingApproval === b.awaitingApproval &&
-        a.connectedClients === b.connectedClients
+        a.connectedClients === b.connectedClients &&
+        a.workerPending === b.workerPending &&
+        a.workerRunning === b.workerRunning &&
+        a.workerCompleted === b.workerCompleted
     );
 }
 
 // ─── HeartbeatManager ──────────────────────────────────────────────
 export class HeartbeatManager {
     private timer: ReturnType<typeof setInterval> | null = null;
+    private workerTimer: ReturnType<typeof setInterval> | null = null;
     private tickCount = 0;
     private startedAt = 0;
     private lastSnapshot: StateSnapshot | null = null;
+    private _workerProcessing = false;
 
     // External state signals (set by ChatHandler or other subsystems)
     private _thinking = false;
@@ -106,12 +117,23 @@ export class HeartbeatManager {
         this.timer = setInterval(() => this.tick(), this.intervalMs);
         // Emit first tick immediately
         this.tick();
+
+        // ─── Worker Engine Loop (independent, every 3s) ────────────
+        const workerConfig = getWorkerEngineConfig();
+        if (workerConfig.enabled) {
+            console.log(`  🏗️ [heartbeat] Worker Engine loop started (model: ${workerConfig.model}, threads: ${workerConfig.num_threads})`);
+            this.workerTimer = setInterval(() => this.workerTick(), 3_000);
+        }
     }
 
     stop(): void {
         if (this.timer) {
             clearInterval(this.timer);
             this.timer = null;
+        }
+        if (this.workerTimer) {
+            clearInterval(this.workerTimer);
+            this.workerTimer = null;
         }
     }
 
@@ -131,12 +153,18 @@ export class HeartbeatManager {
     private tick(): void {
         this.tickCount++;
 
+        const workerConfig = getWorkerEngineConfig();
+        const workerQueueStatus = HeavyTaskQueue.getStatus();
+
         const snapshot: StateSnapshot = {
             state: this.computeState(),
             activeTasks: getActiveTaskCount(),
             pendingTasks: getTotalQueueSize(),
             awaitingApproval: approvalGate.hasPendingRequests(),
             connectedClients: this.wsServer.connectionCount,
+            workerPending: workerQueueStatus.pending,
+            workerRunning: workerQueueStatus.running,
+            workerCompleted: workerQueueStatus.completed,
         };
 
         // HEARTBEAT_OK suppression: skip if nothing changed
@@ -159,8 +187,64 @@ export class HeartbeatManager {
                 awaitingApproval: snapshot.awaitingApproval,
                 connectedClients: snapshot.connectedClients,
                 tick: this.tickCount,
+                workerStatus: workerConfig.enabled ? {
+                    enabled: true,
+                    model: workerConfig.model,
+                    pending: workerQueueStatus.pending,
+                    running: workerQueueStatus.running,
+                    completed: workerQueueStatus.completed,
+                    failed: workerQueueStatus.failed,
+                } : undefined,
             },
         });
+    }
+
+    // ─── Worker Engine Tick (independent loop, every 3s) ─────────────
+    /**
+     * Pulls the next pending task from the HeavyTaskQueue and executes
+     * it on the Worker Engine (CPU/RAM-bound). Only one task runs at a
+     * time to avoid overwhelming system RAM.
+     */
+    private async workerTick(): Promise<void> {
+        // Guard: skip if already processing or no pending tasks
+        if (this._workerProcessing) return;
+        if (!HeavyTaskQueue.hasPending()) return;
+
+        const task = HeavyTaskQueue.dequeue();
+        if (!task) return;
+
+        this._workerProcessing = true;
+        try {
+            const { result } = await askWorkerEngine(task.prompt);
+            HeavyTaskQueue.complete(task.id, result);
+
+            // Broadcast worker completion to connected TUI clients
+            this.wsServer.broadcast({
+                type: 'worker_task_completed',
+                timestamp: new Date().toISOString(),
+                payload: {
+                    taskId: task.id,
+                    description: task.description,
+                    taskType: task.type,
+                    resultLength: result.length,
+                },
+            });
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            HeavyTaskQueue.fail(task.id, msg);
+
+            this.wsServer.broadcast({
+                type: 'worker_task_failed',
+                timestamp: new Date().toISOString(),
+                payload: {
+                    taskId: task.id,
+                    description: task.description,
+                    error: msg,
+                },
+            });
+        } finally {
+            this._workerProcessing = false;
+        }
     }
 }
 

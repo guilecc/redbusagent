@@ -18,6 +18,22 @@ export interface BaseMessage {
 /** Global daemon state machine states */
 export type DaemonState = 'IDLE' | 'THINKING' | 'EXECUTING_TOOL' | 'BLOCKED_WAITING_USER';
 
+/** Worker Engine queue status (Dual-Local Architecture) */
+export interface WorkerQueueStatus {
+    /** Whether the Worker Engine is configured and enabled */
+    readonly enabled: boolean;
+    /** Worker Engine model name (e.g. "qwen2.5-coder:14b") */
+    readonly model: string;
+    /** Number of tasks waiting to be processed */
+    readonly pending: number;
+    /** Number of tasks currently being processed (0 or 1) */
+    readonly running: number;
+    /** Number of tasks completed since daemon start */
+    readonly completed: number;
+    /** Number of tasks that failed since daemon start */
+    readonly failed: number;
+}
+
 export interface HeartbeatMessage extends BaseMessage {
     readonly type: 'heartbeat';
     readonly payload: {
@@ -36,6 +52,8 @@ export interface HeartbeatMessage extends BaseMessage {
         readonly connectedClients: number;
         /** Monotonic tick counter */
         readonly tick: number;
+        /** Worker Engine queue status (Dual-Local Architecture) */
+        readonly workerStatus?: WorkerQueueStatus;
     };
 }
 
@@ -73,8 +91,8 @@ export interface ChatStreamDoneMessage extends BaseMessage {
         readonly requestId: string;
         /** Full accumulated response text */
         readonly fullText: string;
-        /** Which tier handled this request */
-        readonly tier: 'tier1' | 'tier2';
+        /** Which tier/engine handled this request */
+        readonly tier: 'tier1' | 'tier2' | 'worker';
         /** Model identifier used */
         readonly model: string;
     };
@@ -125,6 +143,29 @@ export interface SystemAlertMessage extends BaseMessage {
     readonly payload: {
         readonly id: string;
         readonly message: string;
+    };
+}
+
+// ─── Worker Engine Messages (Dual-Local Architecture) ────────────
+
+/** A heavy background task completed on the Worker Engine */
+export interface WorkerTaskCompletedMessage extends BaseMessage {
+    readonly type: 'worker_task_completed';
+    readonly payload: {
+        readonly taskId: string;
+        readonly description: string;
+        readonly taskType: string;
+        readonly resultLength: number;
+    };
+}
+
+/** A heavy background task failed on the Worker Engine */
+export interface WorkerTaskFailedMessage extends BaseMessage {
+    readonly type: 'worker_task_failed';
+    readonly payload: {
+        readonly taskId: string;
+        readonly description: string;
+        readonly error: string;
     };
 }
 
@@ -214,7 +255,9 @@ export type DaemonMessage =
     | ProactiveThoughtMessage
     | SystemAlertMessage
     | ApprovalRequestMessage
-    | ApprovalResolvedMessage;
+    | ApprovalResolvedMessage
+    | WorkerTaskCompletedMessage
+    | WorkerTaskFailedMessage;
 
 export type ClientMessage =
     | PingMessage

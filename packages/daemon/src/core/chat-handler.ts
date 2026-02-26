@@ -15,6 +15,7 @@ import { CoreMemory } from './core-memory.js';
 import { approvalGate, type ApprovalRequest } from './approval-gate.js';
 import { enqueueCommandInLane, CommandLane } from './task-queue.js';
 import { processMonitorEmitter } from './tools/process-manager.js';
+import { HeavyTaskQueue } from './heavy-task-queue.js';
 import type { HeartbeatManager } from './gateway/heartbeat.js';
 
 export class ChatHandler {
@@ -184,6 +185,7 @@ Return ONLY the JSON object. Do not explain.`;
         if (!isOnboarding && content.trim() !== '' && !this.forceTier1 && !tier) {
             const vaultTier1 = vaultConfig?.tier1;
             const powerClass = (vaultTier1 as any)?.power_class || 'bronze';
+            const workerEnabled = vaultConfig?.worker_engine?.enabled ?? false;
 
             console.log(`  🕵️‍♂️ [pre-router] Calculating heuristic complexity score...`);
             const score = calculateComplexityScore(content, messages || []);
@@ -191,19 +193,41 @@ Return ONLY the JSON object. Do not explain.`;
             if (score >= 40) {
                 targetTier = 'tier2';
             } else {
-                if (powerClass === 'bronze' || powerClass === 'silver') {
-                    // Even if score is low, if the hardware is very weak, maybe we still route to Tier 2?
-                    // Actually, the user asked: "If score >= 40: Route to askTier2. If score < 40: Route to askTier1."
-                    // Let's stick strictly to threshold logic.
-                }
                 targetTier = 'tier1';
             }
 
-            this.wsServer.broadcast({
-                type: 'log',
-                timestamp: new Date().toISOString(),
-                payload: { level: 'info', source: 'Router', message: `🧠 [Router]: Complexity Score ${score}/100 -> Routing to ${targetTier === 'tier1' ? 'Tier 1 (Local)' : 'Tier 2 (Cloud)'}` }
-            });
+            // ─── Dual-Local: Delegate heavy background tasks to Worker Queue ──
+            // If the Worker Engine is enabled and the score indicates heavy work,
+            // enqueue a background analysis task and let the Live Engine handle
+            // a quick acknowledgement instead of blocking the chat.
+            if (workerEnabled && score >= 60) {
+                const taskId = HeavyTaskQueue.enqueue({
+                    description: `Deep analysis: ${content.slice(0, 80)}...`,
+                    prompt: content,
+                    type: 'deep_analysis',
+                    onComplete: (result) => {
+                        // Notify user via WS when the worker finishes
+                        this.wsServer.broadcast({
+                            type: 'log',
+                            timestamp: new Date().toISOString(),
+                            payload: { level: 'info', source: 'Worker Engine', message: `🏗️ Background analysis complete. Result available.` }
+                        });
+                    },
+                });
+
+                this.wsServer.broadcast({
+                    type: 'log',
+                    timestamp: new Date().toISOString(),
+                    payload: { level: 'info', source: 'Router', message: `🧠 [Router]: Complexity Score ${score}/100 → Delegated to Worker Engine (background task ${taskId.slice(0, 12)})` }
+                });
+            } else {
+                const engineLabel = targetTier === 'tier1' ? 'Live Engine (Local)' : 'Tier 2 (Cloud)';
+                this.wsServer.broadcast({
+                    type: 'log',
+                    timestamp: new Date().toISOString(),
+                    payload: { level: 'info', source: 'Router', message: `🧠 [Router]: Complexity Score ${score}/100 → Routing to ${engineLabel}` }
+                });
+            }
         }
 
         // Fallback targetTier to tier1 just in case somehow it is undefined

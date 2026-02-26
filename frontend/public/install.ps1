@@ -76,6 +76,14 @@ Write-Host ">> Installing npm packages and building dependencies..." -Foreground
 npm install --no-audit --no-fund
 npm run build
 
+# 3b. Install Playwright Chromium browser binary (needed for web_read_page tool)
+Write-Host ">> Installing Playwright Chromium browser..." -ForegroundColor Yellow
+try {
+    npx --workspace=@redbusagent/daemon playwright install chromium
+} catch {
+    Write-Host "   ⚠️  Could not install Playwright Chromium. web_read_page will use fetch fallback." -ForegroundColor Red
+}
+
 # 4. Create global link for the CLI
 Write-Host ""
 Write-Host ">> Configuring global 'redbus' binary..." -ForegroundColor Yellow

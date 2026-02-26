@@ -48,6 +48,80 @@ function generateRequestId(): string {
     return `req-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+/** Formats tool arguments into a short human-readable summary for the chat log */
+function formatToolArgs(toolName: string, args: Record<string, unknown>): string {
+    try {
+        // Common patterns: show the most relevant arg in a compact way
+        if (args['url']) return `${args['url']}`;
+        if (args['query']) return `"${String(args['query']).slice(0, 60)}"`;
+        if (args['path']) return `${args['path']}`;
+        if (args['message']) return `"${String(args['message']).slice(0, 60)}"`;
+        if (args['input']) return `"${String(args['input']).slice(0, 60)}"`;
+        if (args['command']) return `$ ${String(args['command']).slice(0, 60)}`;
+
+        // Fallback: show first key=value pair
+        const keys = Object.keys(args);
+        if (keys.length === 0) return '';
+        const first = keys[0]!;
+        const val = String(args[first]).slice(0, 50);
+        return `${first}: ${val}`;
+    } catch {
+        return '';
+    }
+}
+
+/** Formats a tool result into a compact, friendly summary instead of raw JSON */
+function formatToolResultSummary(toolName: string, result: string, success: boolean): string {
+    if (!success) {
+        // For errors, extract the key message
+        try {
+            const parsed = JSON.parse(result);
+            const errMsg = parsed.error || parsed.message || result;
+            return String(errMsg).slice(0, 120);
+        } catch {
+            return result.slice(0, 120);
+        }
+    }
+
+    // Try to parse JSON results and extract meaningful info
+    try {
+        const parsed = JSON.parse(result);
+
+        // Handle { success: true, output: "..." } pattern
+        if (parsed.output) {
+            const output = String(parsed.output);
+            const firstLine = output.split('\n')[0] ?? '';
+            return firstLine.length > 100
+                ? firstLine.slice(0, 100) + '…'
+                : firstLine || 'done';
+        }
+
+        // Handle { success: true, text: "..." } pattern (web tools)
+        if (parsed.text) {
+            const text = String(parsed.text);
+            return text.length > 100 ? text.slice(0, 100) + '…' : text;
+        }
+
+        // Handle { success: true, message: "..." } pattern (memory tools)
+        if (parsed.message) return String(parsed.message).slice(0, 120);
+
+        // Handle arrays (search results, etc.)
+        if (Array.isArray(parsed)) return `${parsed.length} result${parsed.length !== 1 ? 's' : ''}`;
+
+        // Generic object: show key count
+        const keys = Object.keys(parsed);
+        if (keys.length <= 3) {
+            return keys.map(k => `${k}: ${String(parsed[k]).slice(0, 30)}`).join(' | ');
+        }
+        return `done (${keys.length} fields)`;
+    } catch {
+        // Plain text result
+        if (result.length <= 120) return result;
+        const firstLine = result.split('\n')[0] ?? '';
+        return firstLine.length > 100 ? firstLine.slice(0, 100) + '…' : firstLine;
+    }
+}
+
 // ─── Component ────────────────────────────────────────────────────
 
 export function Dashboard(): React.ReactElement {
@@ -397,27 +471,24 @@ export function Dashboard(): React.ReactElement {
                 addLog(`LLM Error: ${message.payload.error}`, 'red');
                 break;
 
-            case 'chat:tool:call':
+            case 'chat:tool:call': {
+                const argsSummary = formatToolArgs(message.payload.toolName, message.payload.args);
                 setChatLines((prev) => [
                     ...prev.slice(-(MAX_CHAT_LINES - 1)),
-                    `🔧 Using tool: ${message.payload.toolName}...`,
+                    `🔧 ${message.payload.toolName}${argsSummary ? ` → ${argsSummary}` : '...'}`,
                 ]);
                 addLog(`Tool call: ${message.payload.toolName}`, 'magenta');
                 break;
+            }
 
             case 'chat:tool:result': {
                 const icon = message.payload.success ? '✅' : '❌';
                 const status = message.payload.success ? 'success' : 'failed';
-
-                // Show a preview of the result (truncated)
-                const resultPreview = message.payload.result.length > 200
-                    ? message.payload.result.slice(0, 200) + '...'
-                    : message.payload.result;
+                const summary = formatToolResultSummary(message.payload.toolName, message.payload.result, message.payload.success);
 
                 setChatLines((prev) => [
-                    ...prev.slice(-(MAX_CHAT_LINES - 2)),
-                    `${icon} Tool [${message.payload.toolName}]: ${status}`,
-                    resultPreview,
+                    ...prev.slice(-(MAX_CHAT_LINES - 1)),
+                    `${icon} ${message.payload.toolName}: ${summary}`,
                 ]);
                 addLog(`Tool result: ${message.payload.toolName} — ${status}`, message.payload.success ? 'green' : 'red');
                 break;
@@ -431,6 +502,22 @@ export function Dashboard(): React.ReactElement {
             case 'approval:resolved':
                 setPendingApproval(null);
                 addLog(`Approval resolved: ${message.payload.approvalId} → ${message.payload.decision}`, 'green');
+                break;
+
+            case 'worker_task_completed':
+                setChatLines((prev) => [
+                    ...prev.slice(-(MAX_CHAT_LINES - 1)),
+                    `🏗️ Worker Engine completed: ${message.payload.description} (${message.payload.resultLength} chars)`,
+                ]);
+                addLog(`Worker done: ${message.payload.description} [${message.payload.taskType}]`, 'blue');
+                break;
+
+            case 'worker_task_failed':
+                setChatLines((prev) => [
+                    ...prev.slice(-(MAX_CHAT_LINES - 1)),
+                    `❌ Worker Engine failed: ${message.payload.description} — ${message.payload.error}`,
+                ]);
+                addLog(`Worker failed: ${message.payload.description}`, 'red');
                 break;
         }
     }, [addLog]);
