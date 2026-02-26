@@ -30,16 +30,16 @@ export interface FetchResult {
 
 const FALLBACK_MODELS: Record<Tier2Provider, ModelInfo[]> = {
     anthropic: [
-        { id: 'claude-sonnet-4-20250514', label: 'Claude Sonnet 4', hint: 'recomendado' },
-        { id: 'claude-3-5-haiku-20241022', label: 'Claude 3.5 Haiku', hint: 'rápido' },
+        { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6', hint: 'recomendado' },
+        { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5', hint: 'rápido' },
     ],
     google: [
-        { id: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash', hint: 'recomendado' },
-        { id: 'gemini-1.5-pro', label: 'Gemini 1.5 Pro' },
+        { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash', hint: 'recomendado' },
+        { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
     ],
     openai: [
-        { id: 'gpt-4o', label: 'GPT-4o', hint: 'recomendado' },
-        { id: 'gpt-4o-mini', label: 'GPT-4o Mini', hint: 'econômico' },
+        { id: 'gpt-5.2', label: 'GPT-5.2', hint: 'recomendado' },
+        { id: 'gpt-5.1', label: 'GPT-5.1', hint: 'econômico' },
     ],
 };
 
@@ -111,7 +111,7 @@ async function fetchOpenAIModels(apiKey: string): Promise<FetchResult> {
         const data = await res.json() as { data: OpenAIModel[] };
 
         // Filter to only chat-capable models (gpt-*, o1-*, o3-*, chatgpt-*)
-        const chatModelPrefixes = ['gpt-4', 'gpt-3.5', 'o1', 'o3', 'o4', 'chatgpt'];
+        const chatModelPrefixes = ['gpt-5', 'gpt-4', 'o1', 'o3', 'o4', 'chatgpt'];
         const models: ModelInfo[] = data.data
             .filter(m => chatModelPrefixes.some(prefix => m.id.startsWith(prefix)))
             .filter(m => !m.id.includes('instruct') && !m.id.includes('realtime') && !m.id.includes('audio'))
