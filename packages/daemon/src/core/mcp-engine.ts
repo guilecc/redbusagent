@@ -93,8 +93,6 @@ export class MCPEngine {
                 + (isWin ? ';' : ':') + '/usr/local/bin'
                 + (home ? (isWin ? ';' : ':') + `${home}/.local/bin` : '');
 
-            // Capture stderr so we can log the real error when a spawn fails.
-
             const transport = new StdioClientTransport({
                 command: shellCommand,
                 args: shellArgs,
@@ -106,7 +104,19 @@ export class MCPEngine {
                 },
             });
 
-            // After transport starts, hook into the underlying process stderr
+            // The SDK creates a PassThrough stream for stderr in the constructor
+            // (before start/connect), so we can attach a listener immediately.
+            // This ensures we capture stderr even if the process dies during connect().
+            if (transport.stderr) {
+                transport.stderr.on('data', (chunk: Buffer) => {
+                    stderrChunks.push(chunk);
+                    // Keep only last 8KB to avoid memory bloat
+                    while (stderrChunks.reduce((s, c) => s + c.length, 0) > 8192) {
+                        stderrChunks.shift();
+                    }
+                });
+            }
+
             transport.onerror = (err) => {
                 console.error(`[MCPEngine] Transport error for ${mcpId}:`, err);
             };
@@ -122,23 +132,9 @@ export class MCPEngine {
                 }
             );
 
+            // connect() calls transport.start() internally, which spawns the process
             await client.connect(transport);
-
-            // Capture stderr from the spawned process (if available)
-            const proc = (transport as any)._process;
-            if (proc?.stderr) {
-                proc.stderr.on('data', (chunk: Buffer) => {
-                    stderrChunks.push(chunk);
-                    // Keep only last 8KB to avoid memory bloat
-                    while (stderrChunks.reduce((s, c) => s + c.length, 0) > 8192) {
-                        stderrChunks.shift();
-                    }
-                });
-            }
-
             this.clients.set(mcpId, client);
-            // Store stderr ref for diagnostics on failure
-            (client as any)._stderrChunks = stderrChunks;
 
             // Fetch tools from the MCP server
             const toolsResponse = await client.listTools();
@@ -154,10 +150,15 @@ export class MCPEngine {
                 }
             }
         } catch (error) {
+            // Wait briefly for any remaining stderr data to arrive via the pipe
+            await new Promise(resolve => setTimeout(resolve, 500));
+
             // Dump captured stderr to help diagnose the failure
             if (stderrChunks.length > 0) {
                 const stderrText = Buffer.concat(stderrChunks).toString('utf-8').trim();
                 console.error(`[MCPEngine] stderr from MCP ${mcpId}:\n${stderrText}`);
+            } else {
+                console.error(`[MCPEngine] No stderr output captured from MCP ${mcpId} (process may have died before producing output)`);
             }
             console.error(`[MCPEngine] Failed to spawn MCP ${mcpId}:`, error);
         }
