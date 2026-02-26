@@ -66,6 +66,9 @@ export class MCPEngine {
     }
 
     private async spawnMCP(mcpId: string, command: string, args: string[], env: Record<string, string>): Promise<void> {
+        // Declared outside try so catch can access stderr diagnostics
+        const stderrChunks: Buffer[] = [];
+
         try {
             console.log(`[MCPEngine] Spawning MCP ${mcpId} with command: ${command} ${args.join(' ')}`);
 
@@ -90,16 +93,23 @@ export class MCPEngine {
                 + (isWin ? ';' : ':') + '/usr/local/bin'
                 + (home ? (isWin ? ';' : ':') + `${home}/.local/bin` : '');
 
+            // Capture stderr so we can log the real error when a spawn fails.
+
             const transport = new StdioClientTransport({
                 command: shellCommand,
                 args: shellArgs,
-                stderr: 'ignore', // Prevent MCP debug/info logs from spamming the daemon output
+                stderr: 'pipe',
                 env: {
                     ...(process.env as Record<string, string>),
                     PATH: extendedPath,
                     ...env, // Overwrite with Vault envs
                 },
             });
+
+            // After transport starts, hook into the underlying process stderr
+            transport.onerror = (err) => {
+                console.error(`[MCPEngine] Transport error for ${mcpId}:`, err);
+            };
 
             // The client name could be 'redbusagent'
             const client = new Client(
@@ -113,7 +123,22 @@ export class MCPEngine {
             );
 
             await client.connect(transport);
+
+            // Capture stderr from the spawned process (if available)
+            const proc = (transport as any)._process;
+            if (proc?.stderr) {
+                proc.stderr.on('data', (chunk: Buffer) => {
+                    stderrChunks.push(chunk);
+                    // Keep only last 8KB to avoid memory bloat
+                    while (stderrChunks.reduce((s, c) => s + c.length, 0) > 8192) {
+                        stderrChunks.shift();
+                    }
+                });
+            }
+
             this.clients.set(mcpId, client);
+            // Store stderr ref for diagnostics on failure
+            (client as any)._stderrChunks = stderrChunks;
 
             // Fetch tools from the MCP server
             const toolsResponse = await client.listTools();
@@ -129,6 +154,11 @@ export class MCPEngine {
                 }
             }
         } catch (error) {
+            // Dump captured stderr to help diagnose the failure
+            if (stderrChunks.length > 0) {
+                const stderrText = Buffer.concat(stderrChunks).toString('utf-8').trim();
+                console.error(`[MCPEngine] stderr from MCP ${mcpId}:\n${stderrText}`);
+            }
             console.error(`[MCPEngine] Failed to spawn MCP ${mcpId}:`, error);
         }
     }
