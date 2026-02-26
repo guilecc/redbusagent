@@ -1,23 +1,24 @@
 /**
- * @redbusagent/tui — Dashboard Component
+ * @redbusagent/tui — Dashboard (Slim Orchestrator)
  *
- * The main TUI interface with three areas:
- *  1. Header: Connection status + daemon info
- *  2. Chat Area: Streaming LLM responses + system logs
- *  3. Input: Text field for sending messages to the daemon
+ * Thin layout shell that composes modular sub-components:
+ *   StatusBar  — daemon state, heartbeat, uptime
+ *   ChatLog    — user/agent message history + streaming
+ *   ApprovalGate — HITL Y/N interceptor (renders when BLOCKED_WAITING_USER)
+ *   InputBox   — text input + slash command palette
+ *   SystemLog  — compact daemon event log
  *
- * Built with Ink (React for terminals) for composable, declarative UIs.
+ * All rendering is delegated; Dashboard owns state, WebSocket lifecycle,
+ * and message dispatch. Inspired by OpenClaw's modular TUI architecture.
  */
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Box, Text, useInput } from 'ink';
-import SelectInput from 'ink-select-input';
-import TextInput from 'ink-text-input';
 import type {
     DaemonMessage,
     HeartbeatMessage,
     ChatRequestMessage,
-    ProactiveThoughtMessage,
+    ApprovalRequestMessage,
 } from '@redbusagent/shared';
 import {
     APP_NAME,
@@ -33,35 +34,24 @@ import {
     performUpdate
 } from '@redbusagent/shared';
 import { TuiWsClient } from '../infra/ws-client.js';
+import { StatusBar } from './StatusBar.js';
+import { ChatLog, MAX_CHAT_LINES } from './ChatLog.js';
+import { SystemLog, MAX_LOG_ENTRIES } from './SystemLog.js';
+import type { LogEntry } from './SystemLog.js';
+import { ApprovalGate } from './ApprovalGate.js';
+import { InputBox } from './InputBox.js';
+import type { ActiveMenu } from './InputBox.js';
 
 // ─── Helpers ──────────────────────────────────────────────────────
-
-function formatUptime(ms: number): string {
-    const totalSeconds = Math.floor(ms / 1000);
-    const hours = Math.floor(totalSeconds / 3600);
-    const minutes = Math.floor((totalSeconds % 3600) / 60);
-    const seconds = totalSeconds % 60;
-    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
-}
 
 function generateRequestId(): string {
     return `req-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-// ─── Types ────────────────────────────────────────────────────────
-
-interface LogEntry {
-    readonly time: string;
-    readonly text: string;
-    readonly color: string;
-}
-
-const MAX_LOG_ENTRIES = 15;
-const MAX_CHAT_LINES = 30;
-
 // ─── Component ────────────────────────────────────────────────────
 
 export function Dashboard(): React.ReactElement {
+    // ── Core state ────────────────────────────────────────────
     const [connected, setConnected] = useState(false);
     const [lastHeartbeat, setLastHeartbeat] = useState<HeartbeatMessage | null>(null);
     const [logs, setLogs] = useState<LogEntry[]>([]);
@@ -71,22 +61,28 @@ export function Dashboard(): React.ReactElement {
     const [inputValue, setInputValue] = useState('');
     const [currentModel, setCurrentModel] = useState<string | null>(null);
     const [proactiveThought, setProactiveThought] = useState<{ text: string; status: 'thinking' | 'action' | 'done' } | null>(null);
-    const [isSlashMenuOpen, setIsSlashMenuOpen] = useState(false);
-    const [activeMenu, setActiveMenu] = useState<'main' | 'cloud' | 'cloud-models' | 'mcp-install-id' | 'mcp-install-env'>('main');
 
-    // MCP Installation State
+    // ── Slash menu state ──────────────────────────────────────
+    const [isSlashMenuOpen, setIsSlashMenuOpen] = useState(false);
+    const [activeMenu, setActiveMenu] = useState<ActiveMenu>('main');
+
+    // ── MCP Installation State ────────────────────────────────
     const [mcpInputStr, setMcpInputStr] = useState('');
     const [mcpTargetId, setMcpTargetId] = useState('');
     const [mcpEnvQueue, setMcpEnvQueue] = useState<string[]>([]);
     const [mcpCurrentEnvKey, setMcpCurrentEnvKey] = useState('');
     const [mcpCollectedEnv, setMcpCollectedEnv] = useState<Record<string, string>>({});
 
+    // ── Cloud/Model state ─────────────────────────────────────
     const [isFetchingModels, setIsFetchingModels] = useState(false);
     const [cloudModels, setCloudModels] = useState<{ label: string, value: string, hint?: string, id: string }[]>([]);
     const [selectedProvider, setSelectedProvider] = useState<Tier2Provider | null>(null);
     const [isOnboarding, setIsOnboarding] = useState(!PersonaManager.exists());
     const [updateAvailable, setUpdateAvailable] = useState<string | null>(null);
     const [isUpdating, setIsUpdating] = useState(false);
+
+    // ── Approval Gate state ───────────────────────────────────
+    const [pendingApproval, setPendingApproval] = useState<ApprovalRequestMessage | null>(null);
 
     const [defaultTier, setDefaultTier] = useState<1 | 2>(() => {
         const config = Vault.read();
@@ -95,6 +91,9 @@ export function Dashboard(): React.ReactElement {
 
     const clientRef = useRef<TuiWsClient | null>(null);
     const currentRequestIdRef = useRef<string | null>(null);
+
+    // Is the approval gate active? (blocks standard input)
+    const isApprovalActive = pendingApproval !== null;
 
     // ── Logging ───────────────────────────────────────────────
 
@@ -227,7 +226,22 @@ export function Dashboard(): React.ReactElement {
         addLog(`Sent to Tier ${currentTierForLog}: "${finalMessage.slice(0, 50)}${finalMessage.length > 50 ? '...' : ''}"`, 'cyan');
     }, [isStreaming, addLog, isOnboarding, defaultTier]);
 
+    // ── Approval Gate Handler ─────────────────────────────────
+    const handleApprovalRespond = useCallback((approvalId: string, decision: 'allow-once' | 'deny') => {
+        clientRef.current?.send({
+            type: 'approval:response',
+            timestamp: new Date().toISOString(),
+            payload: { approvalId, decision },
+        });
+        setPendingApproval(null);
+        addLog(`Approval ${approvalId}: ${decision}`, decision === 'allow-once' ? 'green' : 'red');
+    }, [addLog]);
+
+    // ── Input Handler (locked when approval gate is active) ──
     useInput((input, key) => {
+        // When approval gate is active, ApprovalGate component handles Y/N via its own useInput
+        if (isApprovalActive) return;
+
         if (isSlashMenuOpen) {
             if (key.escape) {
                 setIsSlashMenuOpen(false);
@@ -408,366 +422,233 @@ export function Dashboard(): React.ReactElement {
                 addLog(`Tool result: ${message.payload.toolName} — ${status}`, message.payload.success ? 'green' : 'red');
                 break;
             }
+
+            case 'approval:request':
+                setPendingApproval(message);
+                addLog(`Approval requested: ${message.payload.toolName} (${message.payload.reason})`, 'yellow');
+                break;
+
+            case 'approval:resolved':
+                setPendingApproval(null);
+                addLog(`Approval resolved: ${message.payload.approvalId} → ${message.payload.decision}`, 'green');
+                break;
         }
     }, [addLog]);
 
-    // ── Render ────────────────────────────────────────────────
+    // ── Slash Menu Callbacks ─────────────────────────────────
+
+    const handleMenuSelect = useCallback((value: string) => {
+        if (value === 'close') {
+            setIsSlashMenuOpen(false);
+        } else if (value === 'mcp-install') {
+            setActiveMenu('mcp-install-id');
+            setMcpInputStr('');
+        } else if (value === 'switch-cloud') {
+            setActiveMenu('cloud');
+        } else if (value === 'toggle-tier') {
+            const nextTier = defaultTier === 1 ? 2 : 1;
+            const config = Vault.read();
+            if (nextTier === 2 && config?.tier2_enabled === false) {
+                setChatLines((prev) => [
+                    ...prev.slice(-(MAX_CHAT_LINES - 1)),
+                    `❌ Tier 2 Cloud is disabled. Run redbus config to configure an API key, or continue using Tier 1.`
+                ]);
+                setIsSlashMenuOpen(false);
+                return;
+            }
+            setDefaultTier(nextTier);
+            const modeText = nextTier === 1 ? 'Tier 1 (Local)' : 'Tier 2 (Cloud)';
+            const warning = nextTier === 2 ? ' Warning: API costs will now apply.' : '';
+            setChatLines((prev) => [
+                ...prev.slice(-(MAX_CHAT_LINES - 1)),
+                `🔄 Default routing switched to ${modeText}.${warning}`
+            ]);
+            clientRef.current?.send({
+                type: 'system:command',
+                timestamp: new Date().toISOString(),
+                payload: { command: 'set-default-tier', args: { value: nextTier } }
+            });
+            setIsSlashMenuOpen(false);
+        } else if (value === 'update') {
+            setIsSlashMenuOpen(false);
+            setIsUpdating(true);
+            setChatLines((prev) => [
+                ...prev.slice(-(MAX_CHAT_LINES - 1)),
+                `🔄 Downloading and installing new version... This may take a while.`
+            ]);
+            performUpdate().then(() => {
+                setChatLines((prev) => [
+                    ...prev.slice(-(MAX_CHAT_LINES - 1)),
+                    `✅ Update successfully completed! Please restart Redbus Agent by pressing Ctrl+C and starting again.`
+                ]);
+                setIsUpdating(false);
+                setUpdateAvailable(null);
+            }).catch((err) => {
+                setChatLines((prev) => [
+                    ...prev.slice(-(MAX_CHAT_LINES - 1)),
+                    `❌ Update failed: ${err.message}`
+                ]);
+                setIsUpdating(false);
+            });
+        } else {
+            clientRef.current?.send({
+                type: 'system:command',
+                timestamp: new Date().toISOString(),
+                payload: { command: value as any }
+            });
+            setIsSlashMenuOpen(false);
+        }
+    }, [defaultTier]);
+
+    const handleCloudProviderSelect = useCallback(async (value: string) => {
+        if (value === 'back') {
+            setActiveMenu('main');
+        } else {
+            const provider = value as Tier2Provider;
+            setSelectedProvider(provider);
+            setActiveMenu('cloud-models');
+            setIsFetchingModels(true);
+            try {
+                const config = Vault.read();
+                const result = await fetchTier2Models(provider, {
+                    apiKey: config?.tier2?.apiKey,
+                    authToken: config?.tier2?.authToken
+                });
+                setCloudModels(result.models as any);
+            } catch {
+                setCloudModels([]);
+            } finally {
+                setIsFetchingModels(false);
+            }
+        }
+    }, []);
+
+    const handleCloudModelSelect = useCallback((value: string) => {
+        if (value === 'back') {
+            setActiveMenu('cloud');
+        } else {
+            clientRef.current?.send({
+                type: 'system:command',
+                timestamp: new Date().toISOString(),
+                payload: { command: 'switch-cloud', args: { provider: selectedProvider, model: value } }
+            });
+            setIsSlashMenuOpen(false);
+        }
+    }, [selectedProvider]);
+
+    const handleMcpInputSubmit = useCallback((val: string) => {
+        const trimmed = val.trim();
+        if (!trimmed) return;
+
+        const suggestion = getMCPSuggestion(trimmed);
+        setMcpTargetId(trimmed);
+        setMcpCollectedEnv({});
+
+        if (suggestion && suggestion.requiredEnvVars && suggestion.requiredEnvVars.length > 0) {
+            setMcpEnvQueue([...suggestion.requiredEnvVars]);
+            setMcpCurrentEnvKey(suggestion.requiredEnvVars[0]!);
+            setMcpInputStr('');
+            setActiveMenu('mcp-install-env');
+        } else {
+            let command = '';
+            let args: string[] = [];
+            let mcpId = trimmed;
+            if (suggestion) {
+                command = suggestion.command;
+                args = suggestion.args;
+                mcpId = suggestion.id;
+            } else {
+                const parts = trimmed.split(' ');
+                command = parts[0]!;
+                args = parts.slice(1);
+                mcpId = `custom-${Math.random().toString(36).substring(2, 8)}`;
+            }
+            const config = Vault.read();
+            Vault.write({ ...config!, mcps: { ...(config?.mcps || {}), [mcpId]: { command, args, env: {} } } });
+            setChatLines(prev => [...prev.slice(-(MAX_CHAT_LINES - 1)), `✅ MCP ${mcpId} installed to Vault. Restart daemon to apply.`]);
+            setIsSlashMenuOpen(false);
+        }
+    }, []);
+
+    const handleMcpEnvSubmit = useCallback((val: string) => {
+        const newCollected = { ...mcpCollectedEnv, [mcpCurrentEnvKey]: val.trim() };
+        setMcpCollectedEnv(newCollected);
+
+        const nextQueue = mcpEnvQueue.slice(1);
+        if (nextQueue.length > 0) {
+            setMcpEnvQueue(nextQueue);
+            setMcpCurrentEnvKey(nextQueue[0]!);
+            setMcpInputStr('');
+        } else {
+            const suggestion = getMCPSuggestion(mcpTargetId)!;
+            const config = Vault.read();
+            Vault.write({ ...config!, mcps: { ...(config?.mcps || {}), [suggestion.id]: { command: suggestion.command, args: suggestion.args, env: newCollected } } });
+            setChatLines(prev => [...prev.slice(-(MAX_CHAT_LINES - 1)), `✅ Suggested MCP ${suggestion.id} installed to Vault. Restart daemon to apply.`]);
+            setIsSlashMenuOpen(false);
+        }
+    }, [mcpCollectedEnv, mcpCurrentEnvKey, mcpEnvQueue, mcpTargetId]);
+
+    // ── Render (Modular Composition) ──────────────────────────
 
     return (
         <Box flexDirection="column" padding={1}>
-            {/* ── Header ──────────────────────────────────────────── */}
+            {/* ── App Header ──────────────────────────────────────── */}
             <Box borderStyle="double" borderColor="red" paddingX={2} justifyContent="space-between">
                 <Box>
-                    <Text bold color="red">
-                        🔴 {APP_NAME}
-                    </Text>
+                    <Text bold color="red">🔴 {APP_NAME}</Text>
                     <Text color="gray"> v{APP_VERSION}</Text>
                     {updateAvailable && (
                         <Text color="yellow" bold> [UPDATE v{updateAvailable} AVAIL]</Text>
                     )}
                 </Box>
-                <Box gap={2}>
-                    <Text color={connected ? 'green' : 'yellow'}>
-                        {connected ? '● Connected' : '○ Disconnected'}
-                    </Text>
-                    {lastHeartbeat && (
-                        <Text color="gray">
-                            PID:{lastHeartbeat.payload.pid} ⏱{formatUptime(lastHeartbeat.payload.uptimeMs)}
-                        </Text>
-                    )}
-                    {currentModel && (
-                        <Text color="magenta">
-                            🧠 {currentModel}
-                        </Text>
-                    )}
-                </Box>
             </Box>
 
-            {/* ── Chat Area ───────────────────────────────────────── */}
-            <Box
-                flexDirection="column"
-                marginTop={1}
-                borderStyle="round"
-                borderColor="cyan"
-                paddingX={1}
-                paddingY={0}
-                minHeight={10}
-            >
-                <Text bold color="cyan" underline>
-                    Chat
-                </Text>
-                {chatLines.length === 0 && !streamingText ? (
-                    <Text color="gray" italic>
-                        Type a message below and press Enter...
-                    </Text>
-                ) : (
-                    <>
-                        {chatLines.map((line, i) => (
-                            <Text key={i} wrap="wrap">
-                                {line.startsWith('🧑') ? (
-                                    <Text color="white" bold>{line}</Text>
-                                ) : line.startsWith('🔴') ? (
-                                    <Text color="red" bold>{line}</Text>
-                                ) : line.startsWith('🔧') ? (
-                                    <Text color="magenta" bold>{line}</Text>
-                                ) : line.startsWith('✅') ? (
-                                    <Text color="green">{line}</Text>
-                                ) : line.startsWith('❌') ? (
-                                    <Text color="red">{line}</Text>
-                                ) : (
-                                    <Text color="white">{line}</Text>
-                                )}
-                            </Text>
-                        ))}
-                        {streamingText && (
-                            <Text color="green" wrap="wrap">
-                                {streamingText}
-                                <Text color="yellow" bold>▊</Text>
-                            </Text>
-                        )}
-                    </>
-                )}
-                {isStreaming && !streamingText && (
-                    <Text color="yellow" italic>
-                        ⏳ Thinking...
-                    </Text>
-                )}
-                {isUpdating && (
-                    <Text color="cyan" italic>
-                        🔄 Updating system... Please wait.
-                    </Text>
-                )}
-            </Box>
+            {/* ── StatusBar: Daemon State + Heartbeat ─────────────── */}
+            <StatusBar
+                connected={connected}
+                heartbeat={lastHeartbeat}
+                currentModel={currentModel}
+            />
 
-            {/* ── Input ───────────────────────────────────────────── */}
-            <Box
-                marginTop={1}
-                borderStyle="single"
-                borderColor={isStreaming ? 'yellow' : 'green'}
-                paddingX={1}
-            >
-                <Text color={isStreaming ? 'yellow' : 'green'} bold>
-                    {isStreaming ? '⏳' : '❯'}{' '}
-                </Text>
-                <Text>
-                    {inputValue}
-                    {!isStreaming && !isSlashMenuOpen && <Text color="green" bold>▊</Text>}
-                </Text>
+            {/* ── ChatLog: Conversation History ───────────────────── */}
+            <ChatLog
+                chatLines={chatLines}
+                streamingText={streamingText}
+                isStreaming={isStreaming}
+                isUpdating={isUpdating}
+            />
 
-                {isSlashMenuOpen && (
-                    <Box
-                        flexDirection="column"
-                        position="absolute"
-                        marginTop={-10}
-                        marginLeft={2}
-                        borderStyle="bold"
-                        borderColor="yellow"
-                        paddingX={1}
-                    >
-                        <Text bold color="yellow">
-                            {activeMenu === 'main' ? '🚀 COMMAND PALETTE' :
-                                activeMenu === 'cloud' ? '☁️ SELECT CLOUD TIER 2' :
-                                    activeMenu.startsWith('mcp') ? '🔌 INSTALL MCP SERVER' : ''}
-                        </Text>
+            {/* ── ApprovalGate: HITL Y/N Interceptor ──────────────── */}
+            <ApprovalGate
+                pending={pendingApproval}
+                onRespond={handleApprovalRespond}
+                active={isApprovalActive}
+            />
 
-                        {activeMenu === 'main' && (
-                            <SelectInput
-                                items={[
-                                    { label: `🔄 /toggle-tier    - Current: Tier ${defaultTier} (${defaultTier === 1 ? 'Local' : 'Cloud'})`, value: 'toggle-tier' },
-                                    { label: '🤖 /auto-route     - Restore Cognitive Routing', value: 'auto-route' },
-                                    { label: '☁️  /switch-cloud  - Change Tier 2 Provider', value: 'switch-cloud' },
-                                    { label: '🔌 /mcp install    - Install new MCP Server', value: 'mcp-install' },
-                                    { label: '🔄 /update          - Install New Version', value: 'update' },
-                                    { label: '📊 /status        - Daemon & Model Status', value: 'status' },
-                                    { label: '❌ Close Menu', value: 'close' },
-                                ]}
-                                onSelect={(item) => {
-                                    if (item.value === 'close') {
-                                        setIsSlashMenuOpen(false);
-                                    } else if (item.value === 'mcp-install') {
-                                        setActiveMenu('mcp-install-id');
-                                        setMcpInputStr('');
-                                    } else if (item.value === 'switch-cloud') {
-                                        setActiveMenu('cloud');
-                                    } else if (item.value === 'toggle-tier') {
-                                        const nextTier = defaultTier === 1 ? 2 : 1;
+            {/* ── InputBox: Text Input + Slash Menu ───────────────── */}
+            <InputBox
+                inputValue={inputValue}
+                isStreaming={isStreaming}
+                isSlashMenuOpen={isSlashMenuOpen}
+                locked={isApprovalActive}
+                activeMenu={activeMenu}
+                defaultTier={defaultTier}
+                isFetchingModels={isFetchingModels}
+                cloudModels={cloudModels}
+                mcpInputStr={mcpInputStr}
+                mcpCurrentEnvKey={mcpCurrentEnvKey}
+                onMenuSelect={handleMenuSelect}
+                onCloudProviderSelect={handleCloudProviderSelect}
+                onCloudModelSelect={handleCloudModelSelect}
+                onMcpInputChange={setMcpInputStr}
+                onMcpInputSubmit={handleMcpInputSubmit}
+                onMcpEnvSubmit={handleMcpEnvSubmit}
+            />
 
-                                        const config = Vault.read();
-                                        if (nextTier === 2 && config?.tier2_enabled === false) {
-                                            // Optional constraint enforcement at TUI level too to avoid ghost states
-                                            setChatLines((prev) => [
-                                                ...prev.slice(-(MAX_CHAT_LINES - 1)),
-                                                `❌ Tier 2 Cloud is disabled. Run redbus config to configure an API key, or continue using Tier 1.`
-                                            ]);
-                                            setIsSlashMenuOpen(false);
-                                            return;
-                                        }
+            {/* ── SystemLog: Compact Event Log ────────────────────── */}
+            <SystemLog logs={logs} displayCount={5} />
 
-                                        setDefaultTier(nextTier);
-                                        const modeText = nextTier === 1 ? 'Tier 1 (Local)' : 'Tier 2 (Cloud)';
-                                        const warning = nextTier === 2 ? ' Warning: API costs will now apply.' : '';
-                                        setChatLines((prev) => [
-                                            ...prev.slice(-(MAX_CHAT_LINES - 1)),
-                                            `🔄 Default routing switched to ${modeText}.${warning}`
-                                        ]);
-                                        clientRef.current?.send({
-                                            type: 'system:command',
-                                            timestamp: new Date().toISOString(),
-                                            payload: { command: 'set-default-tier', args: { value: nextTier } }
-                                        });
-                                        setIsSlashMenuOpen(false);
-                                    } else if (item.value === 'update') {
-                                        setIsSlashMenuOpen(false);
-                                        setIsUpdating(true);
-                                        setChatLines((prev) => [
-                                            ...prev.slice(-(MAX_CHAT_LINES - 1)),
-                                            `🔄 Downloading and installing new version... This may take a while.`
-                                        ]);
-                                        performUpdate().then(() => {
-                                            setChatLines((prev) => [
-                                                ...prev.slice(-(MAX_CHAT_LINES - 1)),
-                                                `✅ Update successfully completed! Please restart Redbus Agent by pressing Ctrl+C and starting again.`
-                                            ]);
-                                            setIsUpdating(false);
-                                            setUpdateAvailable(null);
-                                        }).catch((err) => {
-                                            setChatLines((prev) => [
-                                                ...prev.slice(-(MAX_CHAT_LINES - 1)),
-                                                `❌ Update failed: ${err.message}`
-                                            ]);
-                                            setIsUpdating(false);
-                                        });
-                                    } else {
-                                        clientRef.current?.send({
-                                            type: 'system:command',
-                                            timestamp: new Date().toISOString(),
-                                            payload: { command: item.value as any }
-                                        });
-                                        setIsSlashMenuOpen(false);
-                                    }
-                                }}
-                            />
-                        )}
-
-                        {activeMenu === 'mcp-install-id' && (
-                            <Box flexDirection="column">
-                                <Text>Enter MCP Name (from catalog) or Command (e.g. npx -y ...):</Text>
-                                <TextInput
-                                    value={mcpInputStr}
-                                    onChange={setMcpInputStr}
-                                    onSubmit={(val) => {
-                                        const trimmed = val.trim();
-                                        if (!trimmed) return;
-
-                                        const suggestion = getMCPSuggestion(trimmed);
-                                        setMcpTargetId(trimmed);
-                                        setMcpCollectedEnv({});
-
-                                        if (suggestion && suggestion.requiredEnvVars && suggestion.requiredEnvVars.length > 0) {
-                                            setMcpEnvQueue([...suggestion.requiredEnvVars]);
-                                            setMcpCurrentEnvKey(suggestion.requiredEnvVars[0]!);
-                                            setMcpInputStr('');
-                                            setActiveMenu('mcp-install-env');
-                                        } else {
-                                            let command = '';
-                                            let args: string[] = [];
-                                            let mcpId = trimmed;
-
-                                            if (suggestion) {
-                                                command = suggestion.command;
-                                                args = suggestion.args;
-                                                mcpId = suggestion.id;
-                                            } else {
-                                                const parts = trimmed.split(' ');
-                                                command = parts[0]!;
-                                                args = parts.slice(1);
-                                                mcpId = `custom-${Math.random().toString(36).substring(2, 8)}`;
-                                            }
-
-                                            const config = Vault.read();
-                                            Vault.write({ ...config!, mcps: { ...(config?.mcps || {}), [mcpId]: { command, args, env: {} } } });
-
-                                            setChatLines(prev => [...prev.slice(-(MAX_CHAT_LINES - 1)), `✅ MCP ${mcpId} installed to Vault. Restart daemon to apply.`]);
-                                            setIsSlashMenuOpen(false);
-                                        }
-                                    }}
-                                />
-                                <Text dimColor color="gray">Press Enter to submit</Text>
-                            </Box>
-                        )}
-
-                        {activeMenu === 'mcp-install-env' && (
-                            <Box flexDirection="column">
-                                <Text>Enter value for environment variable <Text color="cyan">{mcpCurrentEnvKey}</Text>:</Text>
-                                <TextInput
-                                    value={mcpInputStr}
-                                    onChange={setMcpInputStr}
-                                    onSubmit={(val) => {
-                                        const newCollected = { ...mcpCollectedEnv, [mcpCurrentEnvKey]: val.trim() };
-                                        setMcpCollectedEnv(newCollected);
-
-                                        const nextQueue = mcpEnvQueue.slice(1);
-                                        if (nextQueue.length > 0) {
-                                            setMcpEnvQueue(nextQueue);
-                                            setMcpCurrentEnvKey(nextQueue[0]!);
-                                            setMcpInputStr('');
-                                        } else {
-                                            const suggestion = getMCPSuggestion(mcpTargetId)!;
-                                            const config = Vault.read();
-                                            Vault.write({ ...config!, mcps: { ...(config?.mcps || {}), [suggestion.id]: { command: suggestion.command, args: suggestion.args, env: newCollected } } });
-
-                                            setChatLines(prev => [...prev.slice(-(MAX_CHAT_LINES - 1)), `✅ Suggested MCP ${suggestion.id} installed to Vault. Restart daemon to apply.`]);
-                                            setIsSlashMenuOpen(false);
-                                        }
-                                    }}
-                                />
-                            </Box>
-                        )}
-                        {activeMenu === 'cloud' && (
-                            <SelectInput
-                                items={[
-                                    { label: '🟣 Anthropic', value: 'anthropic' },
-                                    { label: '🔵 Google (Gemini)', value: 'google' },
-                                    { label: '⚪ OpenAI', value: 'openai' },
-                                    { label: '⬅️ Back', value: 'back' },
-                                ]}
-                                onSelect={async (item) => {
-                                    if (item.value === 'back') {
-                                        setActiveMenu('main');
-                                    } else {
-                                        const provider = item.value as Tier2Provider;
-                                        setSelectedProvider(provider);
-                                        setActiveMenu('cloud-models');
-                                        setIsFetchingModels(true);
-
-                                        try {
-                                            const config = Vault.read();
-                                            const result = await fetchTier2Models(provider, {
-                                                apiKey: config?.tier2?.apiKey,
-                                                authToken: config?.tier2?.authToken
-                                            });
-                                            setCloudModels(result.models as any);
-                                        } catch (e) {
-                                            setCloudModels([]);
-                                        } finally {
-                                            setIsFetchingModels(false);
-                                        }
-                                    }
-                                }}
-                            />
-                        )}
-                        {activeMenu === 'cloud-models' && (
-                            isFetchingModels ? (
-                                <Text color="yellow">⏳ Fetching available models...</Text>
-                            ) : (
-                                <SelectInput
-                                    items={[
-                                        ...cloudModels.map(m => ({ label: m.label + (m.hint ? ` (${m.hint})` : ''), value: m.id })),
-                                        { label: '⬅️ Back', value: 'back' }
-                                    ]}
-                                    onSelect={(item) => {
-                                        if (item.value === 'back') {
-                                            setActiveMenu('cloud');
-                                        } else {
-                                            clientRef.current?.send({
-                                                type: 'system:command',
-                                                timestamp: new Date().toISOString(),
-                                                payload: {
-                                                    command: 'switch-cloud',
-                                                    args: { provider: selectedProvider, model: item.value }
-                                                }
-                                            });
-                                            setIsSlashMenuOpen(false);
-                                        }
-                                    }}
-                                />
-                            )
-                        )}
-                        <Text dimColor color="gray"> Esc: cancel </Text>
-                    </Box>
-                )}
-            </Box>
-
-            {/* ── System Log (compact) ────────────────────────────── */}
-            <Box
-                flexDirection="column"
-                marginTop={1}
-                borderStyle="single"
-                borderColor="gray"
-                paddingX={1}
-            >
-                <Text bold color="gray" underline>
-                    System Log
-                </Text>
-                {logs.slice(-5).map((entry, i) => (
-                    <Text key={i}>
-                        <Text color="gray" dimColor>[{entry.time}] </Text>
-                        <Text color={entry.color as never} dimColor>{entry.text}</Text>
-                    </Text>
-                ))}
-            </Box>
-
-            {/* ── Background Proactive Thoughts Panel ─────────────────────── */}
+            {/* ── Proactive Thoughts ──────────────────────────────── */}
             {proactiveThought && (
                 <Box
                     marginTop={1}
@@ -778,16 +659,14 @@ export function Dashboard(): React.ReactElement {
                     <Text bold color={proactiveThought.status === 'thinking' ? 'magenta' : 'green'}>
                         {proactiveThought.status === 'thinking' ? '⏳ [Background Process: Thinking] ' : '⚡ [Background Process: Acting] '}
                     </Text>
-                    <Text italic color="gray">
-                        {proactiveThought.text}
-                    </Text>
+                    <Text italic color="gray">{proactiveThought.text}</Text>
                 </Box>
             )}
 
             {/* ── Footer ──────────────────────────────────────────── */}
             <Box marginTop={1} gap={2}>
                 <Text color="gray" italic dimColor>
-                    Enter: send  •  Ctrl+C: exit
+                    {isApprovalActive ? 'Y: approve  •  N: deny  •  Esc: deny' : 'Enter: send  •  /: menu  •  Ctrl+C: exit'}
                 </Text>
             </Box>
         </Box>

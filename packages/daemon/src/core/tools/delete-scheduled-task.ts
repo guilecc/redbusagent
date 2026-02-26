@@ -2,20 +2,20 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import { TaskScheduler } from '../scheduler.js';
 
-export const deleteScheduledTaskTool = tool({
-    description: "Deletes a scheduled task, timer, alarm, or active cronjob by its ID. Use this when the user asks to cancel, explode, or remove a task.",
+export const removeScheduledTaskTool = tool({
+    description: "Removes a scheduled cron job by its ID or human-friendly alias. Use this when the user asks to cancel, stop, or remove a recurring task.",
     inputSchema: z.object({
-        taskId: z.string().describe("The ID of the task to delete")
+        id_or_alias: z.string().describe("The job ID (UUID) or human-friendly alias to remove."),
     }),
-    execute: async ({ taskId }: { taskId: string }) => {
+    execute: async ({ id_or_alias }: { id_or_alias: string }) => {
         try {
-            const success = TaskScheduler.deleteTask(taskId);
+            const success = TaskScheduler.deleteTask(id_or_alias);
             if (success) {
-                return `Task ${taskId} removed successfully.`;
+                return `Cron job "${id_or_alias}" removed successfully.`;
             }
-            return `Failed to remove task ${taskId}. Double check if the ID is valid.`;
+            return `No cron job found matching "${id_or_alias}". Use list_scheduled_tasks to see active jobs.`;
         } catch (err: any) {
-            return `Failed to delete task: ${err.message}`;
+            return `Failed to remove job: ${err.message}`;
         }
     }
 });

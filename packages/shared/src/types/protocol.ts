@@ -15,12 +15,27 @@ export interface BaseMessage {
 
 // ─── Server → Client Messages ─────────────────────────────────────
 
+/** Global daemon state machine states */
+export type DaemonState = 'IDLE' | 'THINKING' | 'EXECUTING_TOOL' | 'BLOCKED_WAITING_USER';
+
 export interface HeartbeatMessage extends BaseMessage {
     readonly type: 'heartbeat';
     readonly payload: {
         readonly uptimeMs: number;
         readonly pid: number;
         readonly port: number;
+        /** Current global state machine state */
+        readonly state: DaemonState;
+        /** Number of tasks actively executing across all lanes */
+        readonly activeTasks: number;
+        /** Total tasks waiting in all queue lanes */
+        readonly pendingTasks: number;
+        /** Whether HITL approval is currently blocking */
+        readonly awaitingApproval: boolean;
+        /** Number of connected WS clients */
+        readonly connectedClients: number;
+        /** Monotonic tick counter */
+        readonly tick: number;
     };
 }
 
@@ -113,6 +128,36 @@ export interface SystemAlertMessage extends BaseMessage {
     };
 }
 
+// ─── Approval Gate Messages (HITL) ────────────────────────────────
+
+/** Daemon requests user approval for a destructive/intrusive tool */
+export interface ApprovalRequestMessage extends BaseMessage {
+    readonly type: 'approval:request';
+    readonly payload: {
+        /** Unique approval ID (matches ExecApprovalRecord.id) */
+        readonly approvalId: string;
+        /** Tool requesting approval */
+        readonly toolName: string;
+        /** Human-readable description of the action */
+        readonly description: string;
+        /** Why approval is needed */
+        readonly reason: 'destructive' | 'intrusive';
+        /** Tool arguments for context */
+        readonly args: Record<string, unknown>;
+        /** When this approval expires (epoch ms) */
+        readonly expiresAtMs: number;
+    };
+}
+
+/** Daemon signals an approval was resolved (by any client or expiry) */
+export interface ApprovalResolvedMessage extends BaseMessage {
+    readonly type: 'approval:resolved';
+    readonly payload: {
+        readonly approvalId: string;
+        readonly decision: 'allow-once' | 'allow-always' | 'deny' | 'expired';
+    };
+}
+
 // ─── Client → Server Messages ─────────────────────────────────────
 
 export interface PingMessage extends BaseMessage {
@@ -146,6 +191,15 @@ export interface SystemCommandMessage extends BaseMessage {
     };
 }
 
+/** User responds to an approval request (Y/N) */
+export interface ApprovalResponseMessage extends BaseMessage {
+    readonly type: 'approval:response';
+    readonly payload: {
+        readonly approvalId: string;
+        readonly decision: 'allow-once' | 'deny';
+    };
+}
+
 // ─── Discriminated Unions ─────────────────────────────────────────
 
 export type DaemonMessage =
@@ -158,12 +212,15 @@ export type DaemonMessage =
     | ChatToolCallMessage
     | ChatToolResultMessage
     | ProactiveThoughtMessage
-    | SystemAlertMessage;
+    | SystemAlertMessage
+    | ApprovalRequestMessage
+    | ApprovalResolvedMessage;
 
 export type ClientMessage =
     | PingMessage
     | ChatRequestMessage
-    | SystemCommandMessage;
+    | SystemCommandMessage
+    | ApprovalResponseMessage;
 
 /** All possible message types flowing through the WebSocket */
 export type ProtocolMessage = DaemonMessage | ClientMessage;

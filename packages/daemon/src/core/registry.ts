@@ -7,9 +7,9 @@ import { memorizeTool } from './tools/memorize.js';
 import { searchMemoryTool } from './tools/search-memory.js';
 import { forgetMemoryTool } from './tools/forget-memory.js';
 import { searchMemoryAllTool } from './tools/search-memory-all.js';
-import { scheduleTaskTool } from './tools/schedule-task.js';
+import { scheduleRecurringTaskTool } from './tools/schedule-task.js';
 import { listScheduledTasksTool } from './tools/list-scheduled-tasks.js';
-import { deleteScheduledTaskTool } from './tools/delete-scheduled-task.js';
+import { removeScheduledTaskTool } from './tools/delete-scheduled-task.js';
 import { webSearchTool } from './tools/web-search.js';
 import { webReadPageTool } from './tools/web-read-page.js';
 import { webInteractTool } from './tools/web-interact.js';
@@ -27,6 +27,7 @@ import { installMcpTool } from './tools/install-mcp.js';
 import { Forge } from './forge.js';
 import { Vault } from '@redbusagent/shared';
 import { WhatsAppChannel } from '../channels/whatsapp.js';
+import { approvalGate } from './approval-gate.js';
 
 export class CapabilityRegistry {
     /**
@@ -73,9 +74,9 @@ export class CapabilityRegistry {
             search_memory: searchMemoryTool,
             forget_memory: forgetMemoryTool,
             search_memory_all: searchMemoryAllTool,
-            schedule_task: scheduleTaskTool,
+            schedule_recurring_task: scheduleRecurringTaskTool,
             list_scheduled_tasks: listScheduledTasksTool,
-            delete_scheduled_task: deleteScheduledTaskTool,
+            remove_scheduled_task: removeScheduledTaskTool,
             web_search: webSearchTool,
             web_read_page: webReadPageTool,
             web_interact: webInteractTool,
@@ -115,7 +116,7 @@ export class CapabilityRegistry {
   - Archival Memory: Long-term vector DB. Auto-RAG retrieves relevant chunks automatically. Use search_memory for deep searches.
   - Distilled Wisdom: Cloud wisdom from past Tier 2 interactions is auto-injected.
 ${hasWhatsapp ? `- 📱 WhatsApp: You are connected to the user's WhatsApp. You can proactively send them messages using the send_whatsapp_message tool.` : ''}
-- ⏱️ Task Scheduler: You can schedule, list, and delete recurring jobs using schedule_task, list_scheduled_tasks, delete_scheduled_task.
+- ⏱️ Cron Scheduler: You can schedule, list, and remove recurring jobs using schedule_recurring_task, list_scheduled_tasks, remove_scheduled_task. Jobs are persisted to disk and survive daemon restarts. Cron triggers inject synthetic prompts into the TaskQueue — they never interrupt active LLM streams.
 - 🔄 Background Processes: You can start long-running commands (like servers) using start_background_process. The system will watch the logs and notify you if it crashes so you can fix it automatically. Use kill_background_process to stop them.
 - 👁️ Visual UI Debugging: You have access to a headless browser with vision capabilities. If a user asks you to check a layout, verify a visual bug, or "look" at a UI, use visual_inspect_page. DO NOT rely on text DOM scraping for visual issues.
 - 🌐 Web: You can browse the internet headless using web_search, web_read_page, and web_interact.
@@ -125,7 +126,15 @@ ${hasWhatsapp ? `- 📱 WhatsApp: You are connected to the user's WhatsApp. You 
 - 💻 System Shell: You have direct terminal access. You can execute OS commands via the execute_shell_command tool.
 - 🔨 Forge (Dual-Language): You can write and execute **Node.js** (.js) and **Python** (.py) tools. For Python, dependencies are installed via pip into an isolated venv at \`${Forge.venvDir}\`. Use .py files for data science, ML, scraping with Python libs, etc. Use .js files for Node.js tasks. Your tools and workspace are physically located at: \`${Forge.dir}\`. You currently have ${forgedTools.length} custom tools forged${forgedTools.length > 0 ? `: ${forgedNames}` : '.'}
 - 🔌 MCP (Model Context Protocol): You are connected to MCP servers exposing ${mcpCount} external tools dynamically.
-- 🧩 MCP Discovery & Install: You can discover and install new MCP servers at runtime using install_mcp. Workflow: (1) Use web_search to find MCPs (e.g. "MCP server for X site:github.com", "npm @modelcontextprotocol/server-*", "registry.modelcontextprotocol.io"). (2) Use web_read_page to read the MCP's README for the correct command/args. (3) Ask the user for any required API keys/tokens. (4) Call install_mcp with the id, name, command, args, and env. The MCP will be activated immediately and its tools will become available.`;
+- 🧩 MCP Discovery & Install: You can discover and install new MCP servers at runtime using install_mcp. Workflow: (1) Use web_search to find MCPs (e.g. "MCP server for X site:github.com", "npm @modelcontextprotocol/server-*", "registry.modelcontextprotocol.io"). (2) Use web_read_page to read the MCP's README for the correct command/args. (3) Ask the user for any required API keys/tokens. (4) Call install_mcp with the id, name, command, args, and env. The MCP will be activated immediately and its tools will become available.
+- 🔒 Approval Gates: The following tools require explicit user approval before execution:
+${Object.entries(approvalGate.getToolFlags()).map(([name, flags]) => {
+            const reasons = [];
+            if (flags.destructive) reasons.push('destructive');
+            if (flags.intrusive) reasons.push('intrusive');
+            return `  - ${name} (${reasons.join(', ')})`;
+        }).join('\n')}
+  When you call a flagged tool, execution pauses until the user approves via the TUI. Do NOT call flagged tools unless strictly necessary.`;
     }
 }
 

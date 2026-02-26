@@ -57,10 +57,10 @@ function App() {
                     </h1>
                     <div className="space-y-4">
                         <p className="text-2xl md:text-3xl font-medium tracking-tight text-white/80 max-w-3xl mx-auto">
-                            Just the parts I actually want, powered by a heuristic router that balances local and cloud models so you keep your money.
+                            Just playing with names up there — this is actually <span className="text-red-500 font-bold">truly inspired</span>, even though it's not a fork.
                         </p>
-                        <p className="text-lg md:text-xl font-medium tracking-tight text-white/50 max-w-2xl mx-auto">
-                            Yes, it's an imitation. I built it from scratch anyway.
+                        <p className="text-base md:text-lg text-white/40 max-w-2xl mx-auto">
+                            All inspirations are credited in the code. ;)
                         </p>
                     </div>
 
@@ -98,7 +98,7 @@ function App() {
                 <div className="max-w-6xl mx-auto px-6">
                     <div className="mb-20">
                         <h2 className="text-5xl md:text-6xl font-black tracking-tighter uppercase border-l-8 border-red-600 pl-6">
-                            No Bullshit.<br />Just Features.
+                            What's<br />Under the Hood.
                         </h2>
                     </div>
 
@@ -106,47 +106,47 @@ function App() {
                         <FeatureCard
                             icon={<Terminal size={28} strokeWidth={2.5} />}
                             title="Full System Shell"
-                            desc="Reads, writes, executes. Bash or PowerShell. A built-in security gate intercepts sensitive system commands and explicitly asks your authorization."
+                            desc="Reads, writes, and executes — Bash or PowerShell. A built-in security gate catches sensitive commands and asks for your OK before running them."
                         />
                         <FeatureCard
                             icon={<MessageSquare size={28} strokeWidth={2.5} />}
                             title="WhatsApp Bridge"
-                            desc="Control your dev machine from your phone, anywhere. Background daemon keeps the session alive natively."
+                            desc="Talk to your dev machine from your phone, wherever you are. A background daemon keeps the session alive so it's always ready."
                         />
                         <FeatureCard
                             icon={<Globe size={28} strokeWidth={2.5} />}
                             title="Browser & MCP"
-                            desc="Headless Playwright interaction out of the box, plus full native support for Universal Model Context Protocol (MCP) servers like Scrapling."
+                            desc="Headless Playwright interaction out of the box, plus native support for Model Context Protocol (MCP) servers like Scrapling."
                         />
                         <FeatureCard
                             icon={<Database size={28} strokeWidth={2.5} />}
                             title="MemGPT-Style Engine"
-                            desc="Integrated LanceDB on-disk vector DB with dynamic core memory management. It actually remembers what you did yesterday."
+                            desc="On-disk vector DB with LanceDB and dynamic core memory. It actually remembers what you did yesterday — and why."
                         />
                         <FeatureCard
                             icon={<Shield size={28} strokeWidth={2.5} />}
                             title="AES-256 Vault"
-                            desc="Your API keys, encrypted locally. Nothing goes out. Pure paranoia mode."
+                            desc="API keys encrypted locally. Nothing leaves your machine. Sleep well."
                         />
                         <FeatureCard
                             icon={<Play size={28} strokeWidth={2.5} />}
                             title="Cognitive Router"
-                            desc="Stop wasting cloud tokens on simple tasks. The heuristic router analyzes complexity in real-time: trivial work runs free on local models, hard problems go to the cloud."
+                            desc="Why burn cloud tokens on easy stuff? The heuristic router figures out complexity in real-time — simple tasks stay local and free, tough ones go to the cloud."
                         />
                         <FeatureCard
                             icon={<Brain size={28} strokeWidth={2.5} />}
                             title="Knowledge Distillation"
-                            desc="The local Ollama model actively learns from Claude and Gemini. High-value cloud responses are captured and injected as few-shot memory for on-the-fly cognitive upgrades without fine-tuning."
+                            desc="Your local Ollama model learns from Claude and Gemini on the fly. High-quality cloud answers become few-shot memory — cognitive upgrades without any fine-tuning."
                         />
                         <FeatureCard
                             icon={<Camera size={28} strokeWidth={2.5} />}
                             title="Multimodal Vision"
-                            desc="Playwright doesn't just read the DOM anymore. The agent takes full-page Base64 screenshots and sends them to Tier 2 models for visual debugging and true contextual understanding."
+                            desc="Playwright takes full-page screenshots and sends them to Tier 2 models for visual debugging. It doesn't just read the DOM — it sees the page."
                         />
                         <FeatureCard
                             icon={<UserCircle size={28} strokeWidth={2.5} />}
                             title="Dynamic Personas"
-                            desc="No hardcoded system prompts. Define the agent's name, context, and operational behavior on the fly during onboarding. The persona lives in the vault and dictates everything."
+                            desc="No hardcoded prompts. Define name, context, and behavior during onboarding. The persona lives in the vault and shapes everything the agent does."
                         />
                     </div>
                 </div>
