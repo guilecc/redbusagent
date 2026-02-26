@@ -47,15 +47,22 @@ Write-Host "✔️ Dependencies OK ($NodeVersionCheck, git, npm, ollama)" -Foreg
 Write-Host ">> Downloading Redbus Agent..." -ForegroundColor Yellow
 
 if (Test-Path $InstallDir) {
-    Write-Host "Directory $InstallDir already exists. Updating to the latest version..."
-    Set-Location $InstallDir
-    git fetch origin
-    git reset --hard origin/$Branch
-    # Always clean build artifacts on update to avoid stale cache issues
-    Write-Host ">> Cleaning previous build artifacts..." -ForegroundColor Yellow
-    Get-ChildItem -Path "packages" -Recurse -Include "dist","*.tsbuildinfo" -Directory -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-    Get-ChildItem -Path "packages" -Recurse -Include "*.tsbuildinfo" -File -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
-    if (Test-Path "frontend\dist") { Remove-Item -Recurse -Force "frontend\dist" -ErrorAction SilentlyContinue }
+    if (Test-Path "$InstallDir\.git") {
+        Write-Host "Directory $InstallDir already exists. Updating to the latest version..."
+        Set-Location $InstallDir
+        git fetch origin
+        git reset --hard origin/$Branch
+        # Always clean build artifacts on update to avoid stale cache issues
+        Write-Host ">> Cleaning previous build artifacts..." -ForegroundColor Yellow
+        Get-ChildItem -Path "packages" -Recurse -Include "dist","*.tsbuildinfo" -Directory -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+        Get-ChildItem -Path "packages" -Recurse -Include "*.tsbuildinfo" -File -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+        if (Test-Path "frontend\dist") { Remove-Item -Recurse -Force "frontend\dist" -ErrorAction SilentlyContinue }
+    } else {
+        Write-Host "Directory $InstallDir exists but is not a valid git repository. Re-installing from scratch..." -ForegroundColor Yellow
+        Remove-Item -Recurse -Force $InstallDir
+        git clone -b $Branch $RepoUrl $InstallDir
+        Set-Location $InstallDir
+    }
 } else {
     Write-Host "Cloning repository to $InstallDir..."
     git clone -b $Branch $RepoUrl $InstallDir

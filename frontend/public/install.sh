@@ -78,13 +78,20 @@ echo ""
 echo -e "${YELLOW}>> Downloading Redbus Agent...${NC}"
 
 if [ -d "$INSTALL_DIR" ]; then
-    echo -e "Directory $INSTALL_DIR already exists. Updating to the latest version..."
-    cd "$INSTALL_DIR"
-    git fetch origin
-    git reset --hard origin/$BRANCH
-    # Always clean build artifacts on update to avoid stale cache issues
-    echo -e "${YELLOW}>> Cleaning previous build artifacts...${NC}"
-    rm -rf packages/*/dist packages/*/*.tsbuildinfo frontend/dist 2>/dev/null || true
+    if [ -d "$INSTALL_DIR/.git" ]; then
+        echo -e "Directory $INSTALL_DIR already exists. Updating to the latest version..."
+        cd "$INSTALL_DIR"
+        git fetch origin
+        git reset --hard origin/$BRANCH
+        # Always clean build artifacts on update to avoid stale cache issues
+        echo -e "${YELLOW}>> Cleaning previous build artifacts...${NC}"
+        rm -rf packages/*/dist packages/*/*.tsbuildinfo frontend/dist 2>/dev/null || true
+    else
+        echo -e "${YELLOW}Directory $INSTALL_DIR exists but is not a valid git repository. Re-installing from scratch...${NC}"
+        rm -rf "$INSTALL_DIR"
+        git clone -b $BRANCH "$REPO_URL" "$INSTALL_DIR"
+        cd "$INSTALL_DIR"
+    fi
 else
     echo -e "Cloning repository to $INSTALL_DIR..."
     git clone -b $BRANCH "$REPO_URL" "$INSTALL_DIR"
