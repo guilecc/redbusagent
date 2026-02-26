@@ -46,12 +46,38 @@ function getPersonaContext(): string {
 import { OllamaManager } from './ollama-manager.js';
 
 function createTier1Model(): LanguageModel {
-    const { model } = getTier1Config();
+    const { model, power_class } = getTier1Config();
+
+    // ── Ollama Inference Optimizer ──
+    // Inject hardware-aware options into every Ollama API request via custom fetch.
+    // These options are Ollama-native and NOT part of the OpenAI-compatible spec,
+    // so we intercept the request body and inject them transparently.
+    const bronzeOptions: Record<string, unknown> = power_class === 'bronze'
+        ? {
+            num_thread: 8,    // Pin to physical cores — avoids context-switching overhead
+            num_ctx: 4096,    // Cap context window — saves GBs of VRAM
+            num_gpu: 99,      // Force all layers into VRAM — fail fast rather than silent CPU fallback
+        }
+        : {};
+
     const ollama = createOpenAI({
         baseURL: `${OllamaManager.baseUrl}/v1`,
         apiKey: 'ollama',
+        fetch: async (url, init) => {
+            if (init?.body && typeof init.body === 'string') {
+                try {
+                    const body = JSON.parse(init.body);
+                    body.keep_alive = '60m'; // Prevent model unloading between messages
+                    if (Object.keys(bronzeOptions).length > 0) {
+                        body.options = { ...body.options, ...bronzeOptions };
+                    }
+                    init = { ...init, body: JSON.stringify(body) };
+                } catch { /* non-JSON body, pass through */ }
+            }
+            return globalThis.fetch(url, init);
+        },
     });
-    // Padrão que definimos para puxar é llama3.2:1b se local não for estritamente configurado
+
     const targetModel = model === 'llama3' ? 'llama3.2:1b' : model;
     return ollama(targetModel);
 }

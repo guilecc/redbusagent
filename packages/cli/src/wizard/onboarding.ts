@@ -43,6 +43,8 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
         recommendedTier1Model = 'gemma2:27b';
     } else if (powerClass === 'silver') {
         recommendedTier1Model = 'qwen2.5-coder:14b';
+    } else if (powerClass === 'bronze') {
+        recommendedTier1Model = 'hf.co/bartowski/Qwen2.5-Coder-7B-Instruct-GGUF:IQ3_M';
     }
 
     let hardwareMessage = `🖥️  ${pc.bold(gpuName)}${vramGB > 0 ? ` (${pc.bold(`${vramGB}GB VRAM`)})` : ''} | ${pc.bold(`${systemRamGB}GB RAM`)}\n` +
@@ -226,11 +228,17 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
             }
         }
 
-        // Bronze options
-        const LOCAL_MODELS: Array<{ value: string; label: string; hint: string }> = [
-            { value: 'qwen2.5-coder:7b', label: '💻 qwen2.5-coder:7b', hint: 'Excellent for code (~8GB RAM)' },
-            { value: 'llama3.1:8b', label: '🧠 llama3.1:8b', hint: 'General, great reasoning (~8GB RAM)' },
-        ];
+        // Bronze options — ultra-compressed IQ3_M for ≤4GB VRAM
+        const LOCAL_MODELS: Array<{ value: string; label: string; hint: string }> = powerClass === 'bronze'
+            ? [
+                { value: 'hf.co/bartowski/Qwen2.5-Coder-7B-Instruct-GGUF:IQ3_M', label: '⚡ Qwen2.5-Coder 7B (IQ3_M)', hint: 'Ultra-compressed IQ3_M model. Fits strictly inside 4GB VRAM for 10x faster GPU execution (~3.2GB)' },
+                { value: 'qwen2.5-coder:7b', label: '💻 qwen2.5-coder:7b', hint: 'Standard Q4 quantization (~4.7GB, may spill to CPU)' },
+                { value: 'llama3.1:8b', label: '🧠 llama3.1:8b', hint: 'General reasoning (~4.7GB, may spill to CPU)' },
+            ]
+            : [
+                { value: 'qwen2.5-coder:7b', label: '💻 qwen2.5-coder:7b', hint: 'Excellent for code (~8GB RAM)' },
+                { value: 'llama3.1:8b', label: '🧠 llama3.1:8b', hint: 'General, great reasoning (~8GB RAM)' },
+            ];
 
         // Silver options
         if (powerClass === 'silver' || powerClass === 'gold' || powerClass === 'platinum') {

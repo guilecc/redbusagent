@@ -76,6 +76,7 @@ export class MemoryManager {
             body: JSON.stringify({
                 model: 'nomic-embed-text',
                 prompt: text,
+                keep_alive: '60m',
             }),
         });
 
