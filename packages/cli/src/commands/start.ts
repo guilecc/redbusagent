@@ -1,8 +1,11 @@
 /**
- * @redbusagent/cli — Start Command
+ * @redbusagent/cli — Start Command (TUI-only thin client)
  *
- * Spawns the Daemon as a background process and the TUI in the foreground.
- * If the Vault is not configured, automatically runs the onboarding wizard.
+ * Launches ONLY the TUI client, which connects to an already-running Daemon
+ * via WebSocket. The Daemon must be started separately with `redbus daemon`.
+ *
+ * If the Daemon is offline, the TUI will show:
+ *   "❌ Daemon is offline. Run 'redbus daemon' in another terminal."
  *
  * Usage: redbus start
  */
@@ -39,86 +42,24 @@ export async function startCommand(): Promise<void> {
     }
 
     const tsx = resolveTsx();
-    const daemonEntry = resolve(PROJECT_ROOT, 'packages/daemon/src/main.ts');
     const tuiEntry = resolve(PROJECT_ROOT, 'packages/tui/src/main.tsx');
 
-    // ── Start Daemon in background ────────────────────────────
-    console.log(pc.dim('  🔄 Starting daemon...'));
+    console.log(pc.dim('  🖥️  Starting TUI client...\n'));
 
-    const daemonProcess = spawn(tsx, [daemonEntry], {
-        stdio: ['ignore', 'pipe', 'pipe'],
-        cwd: PROJECT_ROOT,
-        env: { ...process.env },
-    });
-
-    // Capture daemon output for status
-    let daemonReady = false;
-
-    daemonProcess.stdout?.on('data', (data: Buffer) => {
-        const text = data.toString();
-        if (text.includes('Daemon is ready')) {
-            daemonReady = true;
-        }
-        // Show daemon boot logs
-        if (!daemonReady) {
-            process.stdout.write(pc.dim(text));
-        }
-    });
-
-    daemonProcess.stderr?.on('data', (data: Buffer) => {
-        process.stderr.write(pc.red(data.toString()));
-    });
-
-    // Wait for daemon to be ready
-    await new Promise<void>((resolve) => {
-        const check = setInterval(() => {
-            if (daemonReady) {
-                clearInterval(check);
-                resolve();
-            }
-        }, 100);
-
-        // Timeout after 10s
-        setTimeout(() => {
-            clearInterval(check);
-            resolve();
-        }, 10_000);
-    });
-
-    // Stop piping daemon output
-    daemonProcess.stdout?.removeAllListeners('data');
-    daemonProcess.stderr?.removeAllListeners('data');
-
-    console.log(pc.dim('  🖥️  Starting TUI...\n'));
-
-    // ── Start TUI in foreground ───────────────────────────────
+    // ── Start TUI in foreground (thin client) ─────────────────
     const tuiProcess = spawn(tsx, [tuiEntry], {
         stdio: 'inherit',
         cwd: PROJECT_ROOT,
         env: { ...process.env },
     });
 
-    // When TUI exits, kill daemon and exit
+    // When TUI exits, just exit — do NOT kill the daemon
     tuiProcess.on('exit', (code) => {
-        daemonProcess.kill('SIGTERM');
         process.exit(code ?? 0);
     });
 
-    // If daemon crashes, notify and exit
-    daemonProcess.on('exit', (code) => {
-        if (code !== null && code !== 0) {
-            console.error(pc.red(`\n❌ Daemon exited with code ${code}`));
-            tuiProcess.kill();
-            process.exit(code);
-        }
-    });
-
-    // Handle Ctrl+C
+    // Handle Ctrl+C — forward to TUI only
     process.on('SIGINT', () => {
         tuiProcess.kill('SIGINT');
-        setTimeout(() => {
-            daemonProcess.kill('SIGTERM');
-            process.exit(0);
-        }, 500);
     });
 }
