@@ -8,10 +8,9 @@
  * Flow: Provider → Credentials → Fetch Models (live) → Select Model → Ollama → Save
  */
 
-import os from 'node:os';
 import * as p from '@clack/prompts';
 import pc from 'picocolors';
-import { Vault, type VaultTier2Config, type VaultTier1Config, type Tier1PowerClass, type Tier2Provider, fetchTier2Models, SUGGESTED_MCPS, getMCPSuggestion } from '@redbusagent/shared';
+import { Vault, type VaultTier2Config, type VaultTier1Config, type Tier1PowerClass, type Tier2Provider, fetchTier2Models, SUGGESTED_MCPS, getMCPSuggestion, inspectHardwareProfile } from '@redbusagent/shared';
 import { WhatsAppChannel } from '@redbusagent/daemon/dist/channels/whatsapp.js';
 
 // ─── Wizard ───────────────────────────────────────────────────────
@@ -28,35 +27,35 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
         );
     }
 
-    // ── Step 0: Hardware Detection ──────────────────────────────
+    // ── Step 0: Hardware Detection (VRAM-based) ───────────────
 
-    const totalRAM = os.totalmem();
-    const ramGB = Math.round(totalRAM / (1024 * 1024 * 1024));
-    let powerClass: Tier1PowerClass = 'bronze';
+    const hwSpinner = p.spinner();
+    hwSpinner.start('Detecting hardware profile (GPU/VRAM)...');
+    const hwProfile = await inspectHardwareProfile();
+    hwSpinner.stop('Hardware detected!');
+
+    const { gpuName, vramGB, systemRamGB, powerClass } = hwProfile;
+
     let recommendedTier1Model = 'qwen2.5-coder:7b';
-
-    if (ramGB >= 62) {
-        powerClass = 'platinum';
+    if (powerClass === 'platinum') {
         recommendedTier1Model = 'llama3.3:70b';
-    } else if (ramGB >= 30) {
-        powerClass = 'gold';
+    } else if (powerClass === 'gold') {
         recommendedTier1Model = 'gemma2:27b';
-    } else if (ramGB >= 14) {
-        powerClass = 'silver';
+    } else if (powerClass === 'silver') {
         recommendedTier1Model = 'qwen2.5-coder:14b';
     }
 
-    let hardwareMessage = `Detected RAM: ${pc.bold(`${ramGB} GB`)}\n` +
+    let hardwareMessage = `🖥️  ${pc.bold(gpuName)}${vramGB > 0 ? ` (${pc.bold(`${vramGB}GB VRAM`)})` : ''} | ${pc.bold(`${systemRamGB}GB RAM`)}\n` +
         `Processing Class: ${pc.bold(pc.yellow(powerClass.toUpperCase()))}\n` +
         `Recommended Local Model: ${pc.bold(pc.cyan(recommendedTier1Model))}`;
 
     if (powerClass === 'gold') {
-        hardwareMessage += `\n\n${pc.green('Excellent hardware detected (32GB+ RAM). We recommend 20B-35B parameter models like Gemma 2 or Command R.')}`;
+        hardwareMessage += `\n\n${pc.green('Excellent GPU detected (12GB+ VRAM). We recommend 20B-35B parameter models like Gemma 2 or Command R.')}`;
     } else if (powerClass === 'platinum') {
-        hardwareMessage += `\n\n${pc.green('Workstation-grade hardware detected (64GB+ RAM). You can run 70B+ parameter models like Llama 3.3. You likely will not need a Cloud API.')}`;
+        hardwareMessage += `\n\n${pc.green('Workstation-grade GPU detected (24GB+ VRAM). You can run 70B+ parameter models like Llama 3.3. You likely will not need a Cloud API.')}`;
     }
 
-    p.note(hardwareMessage, '💻 Local Hardware Analysis');
+    p.note(hardwareMessage, '🖥️ Hardware Profile');
 
     let skipTier2 = false;
 
@@ -349,6 +348,11 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
         owner_phone_number: ownerPhoneNumber,
         credentials,
         sessions,
+        hardware_profile: {
+            gpu_name: hwProfile.gpuName,
+            vram_gb: hwProfile.vramGB,
+            system_ram_gb: hwProfile.systemRamGB,
+        },
     });
 
     await new Promise(r => setTimeout(r, 500));
@@ -404,6 +408,11 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
             owner_phone_number: ownerPhoneNumber,
             credentials,
             sessions,
+            hardware_profile: {
+                gpu_name: hwProfile.gpuName,
+                vram_gb: hwProfile.vramGB,
+                system_ram_gb: hwProfile.systemRamGB,
+            },
         });
 
         p.log.success(`🛡️  Firewall activated for: ${pc.bold(ownerPhoneNumber)}@c.us`);
@@ -441,6 +450,11 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
             owner_phone_number: undefined,
             credentials,
             sessions,
+            hardware_profile: {
+                gpu_name: hwProfile.gpuName,
+                vram_gb: hwProfile.vramGB,
+                system_ram_gb: hwProfile.systemRamGB,
+            },
         });
 
         if (hadSession || existingConfig?.owner_phone_number) {

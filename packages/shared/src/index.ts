@@ -11,6 +11,7 @@ export * from './persona/persona-manager.js';
 export * from './utils/model-fetcher.js';
 export * from './mcp-catalog.js';
 export * from './utils/updater.js';
+export * from './hardware/hardware.js';
 
 // Setup global overrides
 import './utils/suppress-warnings.js';

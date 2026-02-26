@@ -71,6 +71,15 @@ export interface VaultConfig {
      * GOD MODE: Allows agent to execute OS terminal commands without user supervision.
      */
     readonly shell_god_mode?: boolean;
+    /**
+     * Detected hardware profile persisted during onboarding.
+     * Used by the Router to make informed routing decisions.
+     */
+    readonly hardware_profile?: {
+        readonly gpu_name: string;
+        readonly vram_gb: number;
+        readonly system_ram_gb: number;
+    };
 }
 
 
