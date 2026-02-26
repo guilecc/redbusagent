@@ -160,7 +160,17 @@ export class OllamaManager {
     }
 
     private static async ensureModels(): Promise<void> {
-        const REQUIRED_MODELS = ['llama3.2:1b', 'nomic-embed-text'];
+        // Read the user's configured Tier 1 model from the Vault instead of hardcoding.
+        // Only pull the configured model + the embedding model (nomic-embed-text).
+        const config = Vault.read();
+        const configuredModel = config?.tier1?.model;
+
+        // Only require the embedding model. The user's Tier 1 model is pulled during onboarding.
+        // If it's already present, this is a no-op.
+        const REQUIRED_MODELS: string[] = ['nomic-embed-text'];
+        if (configuredModel) {
+            REQUIRED_MODELS.push(configuredModel);
+        }
 
         try {
             const res = await fetch(`http://127.0.0.1:${this.port}/api/tags`);
