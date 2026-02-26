@@ -1,6 +1,7 @@
 {
     "extends": "../../tsconfig.base.json",
     "compilerOptions": {
+        "baseUrl": ".",
         "paths": {
             "@redbusagent/shared": ["../shared/src/index.ts"]
         },
