@@ -94,9 +94,6 @@ if [ -d "$INSTALL_DIR" ]; then
         cd "$INSTALL_DIR"
         git fetch origin
         git reset --hard origin/$BRANCH
-        # Always clean build artifacts on update to avoid stale cache issues
-        echo -e "${YELLOW}>> Cleaning previous build artifacts...${NC}"
-        rm -rf packages/*/dist packages/*/*.tsbuildinfo frontend/dist 2>/dev/null || true
     else
         echo -e "${YELLOW}Directory $INSTALL_DIR exists but is not a valid git repository. Re-installing from scratch...${NC}"
         rm -rf "$INSTALL_DIR"
@@ -114,6 +111,11 @@ echo ""
 
 echo -e "${YELLOW}>> Installing npm packages and building dependencies...${NC}"
 npm install --no-audit --no-fund
+
+# Always clean build artifacts before building to avoid TS6305 stale .tsbuildinfo issues
+echo -e "${YELLOW}>> Cleaning build artifacts...${NC}"
+rm -rf packages/*/dist packages/*/*.tsbuildinfo frontend/dist 2>/dev/null || true
+
 npm run build
 
 # 4. Create global link for the CLI
