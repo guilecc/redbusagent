@@ -38,17 +38,18 @@ fi
 if [ "$(uname)" != "Darwin" ] && command -v apt-get &> /dev/null; then
     echo -e "${YELLOW}>> Installing browser dependencies for WhatsApp...${NC}"
     sudo apt-get update -qq 2>/dev/null || true
-    # Try standard package names first, then t64 variants (Ubuntu 24.04+)
-    if ! sudo apt-get install -y -qq \
-        libatk1.0-0 libatk-bridge2.0-0 libcups2 libxdamage1 \
-        libxrandr2 libgbm1 libpango-1.0-0 libcairo2 libasound2 \
-        libnspr4 libnss3 libxcomposite1 libxfixes3 libxkbcommon0 2>&1; then
-        echo -e "${YELLOW}   Retrying with alternative package names (Ubuntu 24.04+)...${NC}"
-        sudo apt-get install -y -qq \
-            libatk1.0-0t64 libatk-bridge2.0-0t64 libcups2t64 libxdamage1 \
-            libxrandr2t64 libgbm1 libpango-1.0-0t64 libcairo2t64 libasound2t64 \
-            libnspr4 libnss3t64 libxcomposite1 libxfixes3 libxkbcommon0 2>&1 || \
-            echo -e "${RED}   ⚠️  Could not install some browser dependencies. WhatsApp may not work.${NC}"
+    # Install each package individually, trying t64 variant if standard name fails (Ubuntu 24.04+)
+    BROWSER_DEPS="libatk1.0-0 libatk-bridge2.0-0 libcups2 libxdamage1 libxrandr2 libgbm1 libpango-1.0-0 libcairo2 libasound2 libnspr4 libnss3 libxcomposite1 libxfixes3 libxkbcommon0"
+    FAILED_DEPS=""
+    for pkg in $BROWSER_DEPS; do
+        if ! sudo apt-get install -y -qq "$pkg" 2>/dev/null; then
+            if ! sudo apt-get install -y -qq "${pkg}t64" 2>/dev/null; then
+                FAILED_DEPS="$FAILED_DEPS $pkg"
+            fi
+        fi
+    done
+    if [ -n "$FAILED_DEPS" ]; then
+        echo -e "${RED}   ⚠️  Could not install:${FAILED_DEPS}. WhatsApp may not work.${NC}"
     fi
 fi
 
