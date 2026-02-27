@@ -13,6 +13,34 @@ import pc from 'picocolors';
 import { Vault, type VaultTier2Config, type VaultTier1Config, type VaultLiveEngineConfig, type VaultWorkerEngineConfig, type Tier1PowerClass, type Tier2Provider, type EngineProvider, fetchTier2Models, SUGGESTED_MCPS, getMCPSuggestion, inspectHardwareProfile } from '@redbusagent/shared';
 import { WhatsAppChannel } from '@redbusagent/daemon/dist/channels/whatsapp.js';
 
+// ─── Helper: RunPod Serverless Configuration ─────────────────────
+
+async function configureRunpod(engineLabel: string): Promise<{ provider: 'runpod'; apiKey: string; endpointId: string; model: string } | null> {
+    const apiKey = await p.password({
+        message: `Paste your RunPod API key:`,
+        validate: (v) => { if (!v || v.trim().length < 10) return 'Invalid key.'; },
+    });
+    if (p.isCancel(apiKey)) return null;
+
+    const endpointId = await p.text({
+        message: `Paste your RunPod Serverless Endpoint ID:`,
+        placeholder: 'e.g. abc123def456',
+        validate: (v) => { if (!v || v.trim().length < 5) return 'Invalid endpoint ID.'; },
+    });
+    if (p.isCancel(endpointId)) return null;
+
+    const model = await p.text({
+        message: `Which Ollama model is deployed on this RunPod worker?`,
+        placeholder: 'gemma3:27b',
+        initialValue: 'gemma3:27b',
+        validate: (v) => { if (!v || v.trim().length < 2) return 'Invalid model name.'; },
+    });
+    if (p.isCancel(model)) return null;
+
+    p.log.success(`🚀 ${engineLabel}: RunPod Serverless — ${pc.bold(model as string)} (endpoint: ${(endpointId as string).slice(0, 8)}...)`);
+    return { provider: 'runpod', apiKey: (apiKey as string).trim(), endpointId: (endpointId as string).trim(), model: (model as string).trim() };
+}
+
 // ─── Helper: Cloud Provider Configuration ────────────────────────
 
 async function configureCloudProvider(engineLabel: string): Promise<{ provider: Tier2Provider; apiKey: string; model: string } | null> {
@@ -220,6 +248,7 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
         options: [
             { value: 'local' as const, label: '💻 Local (Ollama)', hint: `GPU/VRAM — ${vramGB}GB available${powerClass === 'bronze' ? ' (limited)' : ''}` },
             { value: 'cloud' as const, label: '☁️  Cloud API', hint: 'Anthropic, Google, or OpenAI' },
+            { value: 'runpod' as const, label: '🚀 RunPod Serverless (Ollama)', hint: 'Cloud GPU running your own Ollama models' },
         ],
         initialValue: 'local' as const,
     });
@@ -229,8 +258,25 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
     let tier1Config: VaultTier1Config;
     let tier2Config: VaultTier2Config;
     let skipTier2 = true;
+    let runpodApiKey: string | undefined;
 
-    if (liveEngineType === 'cloud') {
+    if (liveEngineType === 'runpod') {
+        // ── Live Engine: RunPod Serverless Configuration ──────
+        const result = await configureRunpod('Live Engine');
+        if (!result) return false;
+        runpodApiKey = result.apiKey;
+
+        liveEngineConfig = {
+            enabled: true,
+            provider: 'runpod',
+            url: '',
+            model: result.model,
+            apiKey: result.apiKey,
+            runpod_endpoint_id: result.endpointId,
+        };
+        tier1Config = { enabled: false, url: 'http://127.0.0.1:11434', model: 'none', power_class: powerClass };
+        tier2Config = { provider: 'anthropic', model: 'none', apiKey: '' };
+    } else if (liveEngineType === 'cloud') {
         // ── Live Engine: Cloud Configuration ──────────────────
         const result = await configureCloudProvider('Live Engine');
         if (!result) return false;
@@ -334,6 +380,7 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
         options: [
             { value: 'local' as const, label: '💻 Local (Ollama on CPU)', hint: `${systemRamGB}GB RAM, ${cpuCount} cores — GPU stays free` },
             { value: 'cloud' as const, label: '☁️  Cloud API', hint: 'Anthropic, Google, or OpenAI' },
+            { value: 'runpod' as const, label: '🚀 RunPod Serverless (Ollama)', hint: 'Cloud GPU running your own Ollama models' },
             { value: 'disabled' as const, label: '⏸️  Disabled', hint: 'Skip Worker Engine for now' },
         ],
         initialValue: systemRamGB >= 16 ? 'local' as const : 'disabled' as const,
@@ -342,7 +389,21 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
 
     let workerEngineConfig: VaultWorkerEngineConfig;
 
-    if (workerEngineType === 'cloud') {
+    if (workerEngineType === 'runpod') {
+        const result = await configureRunpod('Worker Engine');
+        if (!result) return false;
+        if (!runpodApiKey) runpodApiKey = result.apiKey;
+        workerEngineConfig = {
+            enabled: true,
+            provider: 'runpod',
+            url: '',
+            model: result.model,
+            apiKey: result.apiKey,
+            num_threads: recommendedThreads,
+            num_ctx: 8192,
+            runpod_endpoint_id: result.endpointId,
+        };
+    } else if (workerEngineType === 'cloud') {
         const result = await configureCloudProvider('Worker Engine');
         if (!result) return false;
         workerEngineConfig = {
@@ -435,6 +496,7 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
             vram_gb: hwProfile.vramGB,
             system_ram_gb: hwProfile.systemRamGB,
         },
+        ...(runpodApiKey ? { runpod_api_key: runpodApiKey } : {}),
     });
 
     await new Promise(r => setTimeout(r, 500));
@@ -497,6 +559,7 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
                 vram_gb: hwProfile.vramGB,
                 system_ram_gb: hwProfile.systemRamGB,
             },
+            ...(runpodApiKey ? { runpod_api_key: runpodApiKey } : {}),
         });
 
         p.log.success(`🛡️  Firewall activated for: ${pc.bold(ownerPhoneNumber)}@c.us`);
@@ -541,6 +604,7 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
                 vram_gb: hwProfile.vramGB,
                 system_ram_gb: hwProfile.systemRamGB,
             },
+            ...(runpodApiKey ? { runpod_api_key: runpodApiKey } : {}),
         });
 
         if (hadSession || existingConfig?.owner_phone_number) {
@@ -631,13 +695,17 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
     });
     p.log.success(`✅ God Mode: ${shellGodMode ? pc.red('ACTIVATED') : pc.green('Secured with HITL')}.`);
 
-    const liveLabel = liveEngineConfig.provider && liveEngineConfig.provider !== 'ollama'
-        ? `${liveEngineConfig.provider}/${liveEngineConfig.model} (Cloud)`
-        : `${liveEngineConfig.model} (Local/GPU)`;
+    const liveLabel = liveEngineConfig.provider === 'runpod'
+        ? `🚀 ${liveEngineConfig.model} (RunPod Serverless)`
+        : liveEngineConfig.provider && liveEngineConfig.provider !== 'ollama'
+            ? `${liveEngineConfig.provider}/${liveEngineConfig.model} (Cloud)`
+            : `${liveEngineConfig.model} (Local/GPU)`;
     const workerLabel = !workerEngineConfig.enabled ? 'disabled'
-        : workerEngineConfig.provider && workerEngineConfig.provider !== 'ollama'
-            ? `${workerEngineConfig.provider}/${workerEngineConfig.model} (Cloud)`
-            : `${workerEngineConfig.model} (Local/CPU, ${workerEngineConfig.num_threads} threads)`;
+        : workerEngineConfig.provider === 'runpod'
+            ? `🚀 ${workerEngineConfig.model} (RunPod Serverless)`
+            : workerEngineConfig.provider && workerEngineConfig.provider !== 'ollama'
+                ? `${workerEngineConfig.provider}/${workerEngineConfig.model} (Cloud)`
+                : `${workerEngineConfig.model} (Local/CPU, ${workerEngineConfig.num_threads} threads)`;
 
     p.note(
         `⚡ Live Engine: ${pc.bold(pc.cyan(liveLabel))}\n` +

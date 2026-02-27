@@ -7,7 +7,7 @@ import { runOnboardingWizard } from '../wizard/onboarding.js';
 
 // ─── Reset Categories ────────────────────────────────────────────
 
-export type ResetCategory = 'memory' | 'whatsapp' | 'mcps' | 'persona' | 'configuration' | 'forged_tools' | 'everything';
+export type ResetCategory = 'memory' | 'whatsapp' | 'mcps' | 'persona' | 'engines' | 'configuration' | 'forged_tools' | 'everything';
 
 interface ResetResult {
     category: ResetCategory;
@@ -24,8 +24,9 @@ export function executeReset(categories: ResetCategory[]): ResetResult[] {
     const results: ResetResult[] = [];
 
     // If 'everything' is selected, expand to all individual categories
+    const ALL_CATEGORIES: ResetCategory[] = ['memory', 'whatsapp', 'mcps', 'persona', 'engines', 'configuration', 'forged_tools'];
     const effective = categories.includes('everything')
-        ? ['memory', 'whatsapp', 'mcps', 'persona', 'configuration', 'forged_tools'] as ResetCategory[]
+        ? ALL_CATEGORIES
         : categories;
 
     for (const cat of effective) {
@@ -66,6 +67,18 @@ export function executeReset(categories: ResetCategory[]): ResetResult[] {
             }
             case 'persona': {
                 deleteFile('persona.json', result);
+                break;
+            }
+            case 'engines': {
+                // Clear LLM engine/tier config without nuking the entire config
+                const config = Vault.read();
+                if (config) {
+                    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+                    const { live_engine, worker_engine, tier1, tier2, tier2_enabled, default_chat_tier, hardware_profile, ...rest } = config;
+                    Vault.write(rest as typeof config);
+                    Vault.clearCache();
+                    result.filesDeleted.push('config.json [live_engine, worker_engine, tier1, tier2, hardware_profile cleared]');
+                }
                 break;
             }
             case 'configuration': {
@@ -114,8 +127,9 @@ function deleteDir(name: string, result: ResetResult): void {
  * Builds a human-readable summary of what will be deleted for a set of categories.
  */
 export function buildResetPreview(categories: ResetCategory[]): string {
+    const ALL_CATEGORIES: ResetCategory[] = ['memory', 'whatsapp', 'mcps', 'persona', 'engines', 'configuration', 'forged_tools'];
     const effective = categories.includes('everything')
-        ? ['memory', 'whatsapp', 'mcps', 'persona', 'configuration', 'forged_tools'] as ResetCategory[]
+        ? ALL_CATEGORIES
         : categories;
 
     const lines: string[] = [];
@@ -134,9 +148,13 @@ export function buildResetPreview(categories: ResetCategory[]): string {
             case 'persona':
                 lines.push('👤 Persona: persona.json (name, personality, guidelines)');
                 break;
+            case 'engines':
+                lines.push('🤖 Engines (LLMs): Live Engine, Worker Engine, Tier 1/2, hardware profile');
+                lines.push('    → Keeps MCPs, persona, memory, credentials intact');
+                break;
             case 'configuration':
                 lines.push('⚙️  Configuration: config.json, .masterkey, cron_jobs.json, daemon.pid');
-                lines.push('    → Live Engine, Worker Engine, Cloud API keys, all model selections');
+                lines.push('    → Includes engines, API keys, ALL settings — full wipe');
                 break;
             case 'forged_tools':
                 lines.push('🔨 Forged Tools: forge/ directory, tools-registry.json');
@@ -243,7 +261,8 @@ export async function resetCommand(): Promise<void> {
             { value: 'whatsapp' as ResetCategory, label: '📱 WhatsApp Session', hint: 'auth_whatsapp/, owner phone' },
             { value: 'mcps' as ResetCategory, label: '🔌 MCPs', hint: 'All installed MCP server configs' },
             { value: 'persona' as ResetCategory, label: '👤 Persona', hint: 'persona.json' },
-            { value: 'configuration' as ResetCategory, label: '⚙️  Configuration (Vault)', hint: 'config.json, .masterkey, cron_jobs, API keys' },
+            { value: 'engines' as ResetCategory, label: '🤖 Engines (LLMs)', hint: 'Live Engine, Worker Engine, model selections — keeps the rest' },
+            { value: 'configuration' as ResetCategory, label: '⚙️  Configuration (Full Vault)', hint: 'config.json, .masterkey, cron_jobs — wipes everything' },
             { value: 'forged_tools' as ResetCategory, label: '🔨 Forged Tools', hint: 'forge/ directory, tools-registry.json' },
             { value: 'everything' as ResetCategory, label: '💀 EVERYTHING', hint: 'Nuclear option — deletes all of the above' },
         ],
@@ -287,9 +306,9 @@ export async function resetCommand(): Promise<void> {
     }
     p.log.success(`Cleared ${totalFiles} file(s) and ${totalDirs} director(ies).`);
 
-    // If configuration was reset, offer to reconfigure
-    if (categories.includes('configuration') || categories.includes('everything')) {
-        p.log.info('Configuration was cleared. Let\'s set up again.');
+    // If engines or full configuration was reset, offer to reconfigure
+    if (categories.includes('engines') || categories.includes('configuration') || categories.includes('everything')) {
+        p.log.info('Engine/model configuration was cleared. Let\'s set up again.');
         const success = await runOnboardingWizard();
         process.exit(success ? 0 : 1);
     }

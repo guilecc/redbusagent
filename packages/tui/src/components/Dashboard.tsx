@@ -190,8 +190,15 @@ export function Dashboard(): React.ReactElement {
         return config?.default_chat_tier ?? 2;
     });
 
+    // ── Ephemeral tool activity indicators ──────────────────
+    const [activeTools, setActiveTools] = useState<string[]>([]);
+
     const clientRef = useRef<TuiWsClient | null>(null);
     const currentRequestIdRef = useRef<string | null>(null);
+
+    // ── Streaming typewriter buffer ───────────────────────
+    const streamBufferRef = useRef<string>('');
+    const streamDrainTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
     // Is the approval gate active? (blocks standard input)
     const isApprovalActive = pendingApproval !== null;
@@ -332,7 +339,10 @@ export function Dashboard(): React.ReactElement {
         ]);
 
         // Reset streaming state
+        streamBufferRef.current = '';
+        stopDrain();
         setStreamingText('');
+        setActiveTools([]);
         setIsStreaming(true);
 
         // Send to daemon
@@ -403,6 +413,47 @@ export function Dashboard(): React.ReactElement {
             setInputValue((prev) => prev + input);
         }
     });
+
+    // ── Streaming typewriter drain effect ───────────────────
+    // Drains the buffer at a natural pace (~40 chars per tick, every 30ms ≈ ~1300 chars/sec).
+    // If buffer is small or model is slow, characters pass through nearly instantly.
+    const DRAIN_INTERVAL_MS = 30;
+    const DRAIN_CHARS_PER_TICK = 40;
+
+    const startDrain = useCallback(() => {
+        if (streamDrainTimerRef.current) return; // already running
+        streamDrainTimerRef.current = setInterval(() => {
+            const buf = streamBufferRef.current;
+            if (buf.length === 0) return;
+
+            // Drain a chunk from the buffer
+            const chunkSize = Math.min(DRAIN_CHARS_PER_TICK, buf.length);
+            const chunk = buf.slice(0, chunkSize);
+            streamBufferRef.current = buf.slice(chunkSize);
+            setStreamingText((prev) => prev + chunk);
+        }, DRAIN_INTERVAL_MS);
+    }, []);
+
+    const stopDrain = useCallback(() => {
+        if (streamDrainTimerRef.current) {
+            clearInterval(streamDrainTimerRef.current);
+            streamDrainTimerRef.current = null;
+        }
+    }, []);
+
+    const flushBuffer = useCallback(() => {
+        const remaining = streamBufferRef.current;
+        if (remaining) {
+            setStreamingText((prev) => prev + remaining);
+            streamBufferRef.current = '';
+        }
+        stopDrain();
+    }, [stopDrain]);
+
+    // Cleanup drain on unmount
+    useEffect(() => {
+        return () => stopDrain();
+    }, [stopDrain]);
 
     // ── WebSocket Connection ──────────────────────────────────
 
@@ -495,12 +546,18 @@ export function Dashboard(): React.ReactElement {
                 break;
 
             case 'chat:stream:chunk':
-                setStreamingText((prev) => prev + message.payload.delta);
+                // Push delta into buffer; drain effect renders it progressively
+                streamBufferRef.current += message.payload.delta;
+                startDrain();
                 break;
 
             case 'chat:stream:done': {
                 setIsStreaming(false);
                 setCurrentModel(message.payload.model);
+                // Flush any remaining buffer immediately
+                flushBuffer();
+                // Clear ephemeral tool indicators
+                setActiveTools([]);
                 // Move streaming text to permanent chat lines
                 setStreamingText((currentStreaming) => {
                     if (currentStreaming) {
@@ -518,6 +575,8 @@ export function Dashboard(): React.ReactElement {
 
             case 'chat:error':
                 setIsStreaming(false);
+                flushBuffer();
+                setActiveTools([]);
                 setChatLines((prev) => [
                     ...prev.slice(-(MAX_CHAT_LINES - 1)),
                     `❌ Error: ${message.payload.error}`,
@@ -526,35 +585,27 @@ export function Dashboard(): React.ReactElement {
                 break;
 
             case 'chat:tool:call': {
+                // Ephemeral: add to activeTools (transient indicators, not permanent chat)
                 const activityLabel = getToolActivityLabel(message.payload.toolName);
-                setChatLines((prev) => [
-                    ...prev.slice(-(MAX_CHAT_LINES - 1)),
-                    activityLabel,
-                ]);
+                setActiveTools((prev) => [...prev, activityLabel]);
                 addLog(`Tool call: ${message.payload.toolName}`, 'magenta');
                 break;
             }
 
             case 'chat:tool:result': {
                 const status = message.payload.success ? 'success' : 'failed';
+                const resultActivityLabel = getToolActivityLabel(message.payload.toolName);
                 if (!message.payload.success) {
-                    // Only show errors visually — successes are silent in chat
+                    // Failed: remove ephemeral indicator, add permanent error to chat
+                    setActiveTools((prev) => prev.filter((l) => l !== resultActivityLabel));
                     const summary = formatToolResultSummary(message.payload.toolName, message.payload.result, false);
                     setChatLines((prev) => [
                         ...prev.slice(-(MAX_CHAT_LINES - 1)),
                         `❌ ${message.payload.toolName}: ${summary}`,
                     ]);
                 } else {
-                    // Replace the "registrando na memória..." with a done indicator
-                    setChatLines((prev) => {
-                        const lastLine = prev[prev.length - 1] ?? '';
-                        const activityLabel = getToolActivityLabel(message.payload.toolName);
-                        // If the last line is the activity label, replace it with done version
-                        if (lastLine === activityLabel) {
-                            return [...prev.slice(0, -1), activityLabel.replace('...', ' ✓')];
-                        }
-                        return prev;
-                    });
+                    // Success: just remove the ephemeral indicator silently
+                    setActiveTools((prev) => prev.filter((l) => l !== resultActivityLabel));
                 }
                 addLog(`Tool result: ${message.payload.toolName} — ${status}`, message.payload.success ? 'green' : 'red');
                 break;
@@ -776,6 +827,7 @@ export function Dashboard(): React.ReactElement {
                 streamingText={streamingText}
                 isStreaming={isStreaming}
                 isUpdating={isUpdating}
+                activeTools={activeTools}
             />
 
             {/* ── ApprovalGate: HITL Y/N Interceptor ──────────────── */}

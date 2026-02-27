@@ -34,6 +34,7 @@ export interface LiveEngineConfig {
     power_class?: string;
     provider: EngineProvider;
     apiKey?: string;
+    runpod_endpoint_id?: string;
 }
 
 export function getLiveEngineConfig(): LiveEngineConfig {
@@ -46,7 +47,8 @@ export function getLiveEngineConfig(): LiveEngineConfig {
             enabled: config.live_engine.enabled ?? true,
             power_class: config.live_engine.power_class,
             provider: config.live_engine.provider ?? 'ollama',
-            apiKey: config.live_engine.apiKey,
+            apiKey: config.live_engine.apiKey ?? config?.runpod_api_key,
+            runpod_endpoint_id: config.live_engine.runpod_endpoint_id,
         };
     }
     const t1 = getTier1Config();
@@ -63,6 +65,7 @@ export interface WorkerEngineConfig {
     num_ctx: number;
     provider: EngineProvider;
     apiKey?: string;
+    runpod_endpoint_id?: string;
 }
 
 export function getWorkerEngineConfig(): WorkerEngineConfig {
@@ -74,7 +77,8 @@ export function getWorkerEngineConfig(): WorkerEngineConfig {
         num_threads: config?.worker_engine?.num_threads ?? 8,
         num_ctx: config?.worker_engine?.num_ctx ?? 8192,
         provider: config?.worker_engine?.provider ?? 'ollama',
-        apiKey: config?.worker_engine?.apiKey,
+        apiKey: config?.worker_engine?.apiKey ?? config?.runpod_api_key,
+        runpod_endpoint_id: config?.worker_engine?.runpod_endpoint_id,
     };
 }
 

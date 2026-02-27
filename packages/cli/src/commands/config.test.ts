@@ -70,7 +70,14 @@ beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), 'redbus-reset-test-'));
     // Seed a full vault structure
     seedFile('config.json', JSON.stringify({
-        version: 1, tier2: {}, tier1: {},
+        version: 1,
+        tier2: { provider: 'anthropic', model: 'claude-sonnet-4-20250514', apiKey: 'sk-test' },
+        tier2_enabled: true,
+        tier1: { enabled: true, url: 'http://127.0.0.1:11434', model: 'llama3.2:3b', power_class: 'bronze' },
+        default_chat_tier: 1,
+        live_engine: { enabled: true, provider: 'ollama', url: 'http://127.0.0.1:11434', model: 'gemma3:4b' },
+        worker_engine: { enabled: true, provider: 'ollama', url: 'http://127.0.0.1:11434', model: 'gemma3:27b' },
+        hardware_profile: { gpu_name: 'RTX 4090', vram_gb: 24, system_ram_gb: 64 },
         mcps: { github: { command: 'npx', args: [], env: {} } },
         owner_phone_number: '5511999999999',
     }));
@@ -135,6 +142,24 @@ describe('executeReset', () => {
         expect(exists('core-memory.md')).toBe(true);
     });
 
+    it('engines: clears LLM config fields but keeps the rest', () => {
+        executeReset(['engines']);
+        expect(exists('config.json')).toBe(true);
+        const config = JSON.parse(readFileSync(join(tempDir, 'config.json'), 'utf-8'));
+        // Engine/tier fields must be gone
+        expect(config.live_engine).toBeUndefined();
+        expect(config.worker_engine).toBeUndefined();
+        expect(config.tier1).toBeUndefined();
+        expect(config.tier2).toBeUndefined();
+        expect(config.tier2_enabled).toBeUndefined();
+        expect(config.default_chat_tier).toBeUndefined();
+        expect(config.hardware_profile).toBeUndefined();
+        // Everything else must survive
+        expect(config.mcps).toBeDefined();
+        expect(config.owner_phone_number).toBe('5511999999999');
+        expect(config.version).toBe(1);
+    });
+
     it('configuration: clears config.json, .masterkey, cron_jobs, daemon.pid', () => {
         executeReset(['configuration']);
         expect(exists('config.json')).toBe(false);
@@ -156,7 +181,7 @@ describe('executeReset', () => {
 
     it('everything: expands to all categories', () => {
         const results = executeReset(['everything']);
-        expect(results).toHaveLength(6);
+        expect(results).toHaveLength(7);
         expect(exists('core-memory.md')).toBe(false);
         expect(exists('auth_whatsapp')).toBe(false);
         expect(exists('persona.json')).toBe(false);
@@ -182,6 +207,7 @@ describe('buildResetPreview', () => {
         expect(preview).toContain('WhatsApp');
         expect(preview).toContain('MCPs');
         expect(preview).toContain('Persona');
+        expect(preview).toContain('Engines');
         expect(preview).toContain('Configuration');
         expect(preview).toContain('Forged Tools');
     });

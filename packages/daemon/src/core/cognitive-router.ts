@@ -27,6 +27,7 @@ import {
     getLiveEngineConfig,
     getWorkerEngineConfig,
 } from '../infra/llm-config.js';
+import { executeRunpodOllama } from './engines/runpod-ollama.js';
 import { getSystemPromptTier1, getSystemPromptTier1Gold, getSystemPromptTier2 } from './system-prompt.js';
 import { calculateComplexityScore } from './heuristic-router.js';
 import { PersonaManager } from '@redbusagent/shared';
@@ -92,7 +93,8 @@ function createTier1Model(): LanguageModel {
     const liveConfig = getLiveEngineConfig();
 
     // ── Hybrid: If Live Engine is a cloud provider, use cloud model factory ──
-    if (liveConfig.provider && liveConfig.provider !== 'ollama') {
+    // RunPod is handled separately at the routing level (askTier1), not here.
+    if (liveConfig.provider && liveConfig.provider !== 'ollama' && liveConfig.provider !== 'runpod') {
         if (!liveConfig.apiKey) throw new Error(`Live Engine (${liveConfig.provider}) requires an API key. Run: redbus config`);
         return createCloudModel(liveConfig.provider, liveConfig.apiKey, liveConfig.model);
     }
@@ -167,7 +169,8 @@ export function createWorkerModel(): LanguageModel {
     const workerConfig = getWorkerEngineConfig();
 
     // ── Hybrid: If Worker Engine is a cloud provider, use cloud model factory ──
-    if (workerConfig.provider && workerConfig.provider !== 'ollama') {
+    // RunPod is handled separately at the routing level (askWorkerEngine), not here.
+    if (workerConfig.provider && workerConfig.provider !== 'ollama' && workerConfig.provider !== 'runpod') {
         if (!workerConfig.apiKey) throw new Error(`Worker Engine (${workerConfig.provider}) requires an API key. Run: redbus config`);
         return createCloudModel(workerConfig.provider, workerConfig.apiKey, workerConfig.model);
     }
@@ -328,6 +331,41 @@ export async function askTier1(
 
     // ─── Transcript: Log user turn ───
     Transcript.append({ role: 'user', content: prompt, meta: { tier: 'tier1', model: modelName } });
+
+    // ─── RunPod Serverless Interception ───────────────────────────
+    const liveConfig = getLiveEngineConfig();
+    if (liveConfig.provider === 'runpod') {
+        try {
+            const runpodResult = await executeRunpodOllama({
+                model: liveConfig.model,
+                messages,
+                system: systemPromptContext,
+                options: { num_ctx: 8192 },
+                apiKey: liveConfig.apiKey,
+                endpointId: liveConfig.runpod_endpoint_id,
+            });
+
+            // Pipe tool calls through callbacks
+            if (runpodResult.toolCalls) {
+                for (const tc of runpodResult.toolCalls) {
+                    callbacks.onToolCall?.(tc.function.name, tc.function.arguments);
+                }
+            }
+
+            // Simulate streaming by sending the full content as a single chunk
+            if (runpodResult.content) {
+                callbacks.onChunk(runpodResult.content);
+            }
+
+            Transcript.append({ role: 'assistant', content: runpodResult.content, meta: { tier: 'tier1', model: runpodResult.model } });
+            callbacks.onDone(runpodResult.content);
+            return { tier: 'tier1', model: runpodResult.model };
+        } catch (err) {
+            const error = err instanceof Error ? err : new Error(String(err));
+            callbacks.onError(error);
+            return { tier: 'tier1', model: liveConfig.model };
+        }
+    }
 
     // 🔄 Tool Loop Detection: track tool call history for this request
     const toolCallHistory: ToolCallHistoryEntry[] = [];
@@ -786,6 +824,27 @@ export async function askWorkerEngine(prompt: string): Promise<{ result: string;
     const workerConfig = getWorkerEngineConfig();
     if (!workerConfig.enabled) {
         throw new Error('Worker Engine is not enabled. Run: redbus config');
+    }
+
+    // ─── RunPod Serverless Interception ───────────────────────────
+    if (workerConfig.provider === 'runpod') {
+        console.log(`  🏗️ [worker] Processing on RunPod (${workerConfig.model})...`);
+        try {
+            const runpodResult = await executeRunpodOllama({
+                model: workerConfig.model,
+                messages: [{ role: 'user', content: prompt }],
+                system: 'You are a background worker AI. Execute the task precisely. Return only the result, no conversational fluff.',
+                options: { num_ctx: workerConfig.num_ctx },
+                apiKey: workerConfig.apiKey,
+                endpointId: workerConfig.runpod_endpoint_id,
+            });
+            console.log(`  🏗️ [worker] RunPod completed: ${runpodResult.content.length} chars`);
+            return { result: runpodResult.content, model: runpodResult.model };
+        } catch (err) {
+            const error = err instanceof Error ? err : new Error(String(err));
+            console.error(`  ❌ [worker] RunPod exception: ${error.message}`);
+            throw error;
+        }
     }
 
     const model = createWorkerModel();

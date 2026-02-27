@@ -17,6 +17,8 @@ export interface ChatLogProps {
     readonly streamingText: string;
     readonly isStreaming: boolean;
     readonly isUpdating: boolean;
+    /** Ephemeral tool activity labels shown during execution, disappear on completion */
+    readonly activeTools?: readonly string[];
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────
@@ -36,7 +38,7 @@ function getLineColor(line: string): { color: string; bold: boolean; dim: boolea
 
 // ─── Component ────────────────────────────────────────────────────
 
-export function ChatLog({ chatLines, streamingText, isStreaming, isUpdating }: ChatLogProps): React.ReactElement {
+export function ChatLog({ chatLines, streamingText, isStreaming, isUpdating, activeTools = [] }: ChatLogProps): React.ReactElement {
     return (
         <Box
             flexDirection="column"
@@ -62,6 +64,12 @@ export function ChatLog({ chatLines, streamingText, isStreaming, isUpdating }: C
                             </Text>
                         );
                     })}
+                    {/* Ephemeral tool activity indicators */}
+                    {activeTools.map((label, i) => (
+                        <Text key={`tool-${i}`} color="magenta" italic wrap="wrap">
+                            {label}
+                        </Text>
+                    ))}
                     {streamingText && (
                         <Text color="green" wrap="wrap">
                             {streamingText}
