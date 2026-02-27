@@ -70,6 +70,33 @@ function formatToolArgs(toolName: string, args: Record<string, unknown>): string
     }
 }
 
+/** Maps internal tier protocol values to user-friendly engine labels */
+function tierToEngineLabel(tier: string): string {
+    switch (tier) {
+        case 'tier1': return 'Live Engine';
+        case 'tier2': return 'Cloud Engine';
+        case 'worker': return 'Worker Engine';
+        default: return tier;
+    }
+}
+
+/** Maps tool names to user-friendly action labels for the chat display */
+function getToolActivityLabel(toolName: string): string {
+    if (toolName.startsWith('core_memory_') || toolName === 'memorize') return '💭 registrando na memória...';
+    if (toolName === 'search_memory' || toolName === 'search_memory_all') return '🔍 buscando na memória...';
+    if (toolName === 'forget_memory') return '🗑️ removendo da memória...';
+    if (toolName.startsWith('web_') || toolName === 'visual_inspect_page') return '🌐 acessando a web...';
+    if (toolName === 'create_and_run_tool') return '🔨 forjando ferramenta...';
+    if (toolName === 'run_shell_command' || toolName === 'start_background_process') return '⚙️ executando comando...';
+    if (toolName === 'read_file' || toolName === 'write_file' || toolName === 'edit_file_blocks') return '📄 manipulando arquivo...';
+    if (toolName === 'install_mcp') return '🔌 instalando MCP...';
+    if (toolName === 'send_whatsapp_message') return '📱 enviando mensagem...';
+    if (toolName === 'schedule_recurring_task') return '⏰ agendando tarefa...';
+    if (toolName === 'update_persona') return '👤 atualizando persona...';
+    // MCP or forged tools
+    return `🔧 usando ${toolName}...`;
+}
+
 /** Formats a tool result into a compact, friendly summary instead of raw JSON */
 function formatToolResultSummary(toolName: string, result: string, success: boolean): string {
     if (!success) {
@@ -479,13 +506,13 @@ export function Dashboard(): React.ReactElement {
                     if (currentStreaming) {
                         setChatLines((prev) => [
                             ...prev.slice(-(MAX_CHAT_LINES - 2)),
-                            `🔴 redbusagent [${message.payload.tier}/${message.payload.model}]:`,
+                            `🔴 redbusagent [${tierToEngineLabel(message.payload.tier)}/${message.payload.model}]:`,
                             currentStreaming,
                         ]);
                     }
                     return '';
                 });
-                addLog(`Full response via ${message.payload.tier}/${message.payload.model}`, 'green');
+                addLog(`Full response via ${tierToEngineLabel(message.payload.tier)}/${message.payload.model}`, 'green');
                 break;
             }
 
@@ -499,24 +526,36 @@ export function Dashboard(): React.ReactElement {
                 break;
 
             case 'chat:tool:call': {
-                const argsSummary = formatToolArgs(message.payload.toolName, message.payload.args);
+                const activityLabel = getToolActivityLabel(message.payload.toolName);
                 setChatLines((prev) => [
                     ...prev.slice(-(MAX_CHAT_LINES - 1)),
-                    `🔧 ${message.payload.toolName}${argsSummary ? ` → ${argsSummary}` : '...'}`,
+                    activityLabel,
                 ]);
                 addLog(`Tool call: ${message.payload.toolName}`, 'magenta');
                 break;
             }
 
             case 'chat:tool:result': {
-                const icon = message.payload.success ? '✅' : '❌';
                 const status = message.payload.success ? 'success' : 'failed';
-                const summary = formatToolResultSummary(message.payload.toolName, message.payload.result, message.payload.success);
-
-                setChatLines((prev) => [
-                    ...prev.slice(-(MAX_CHAT_LINES - 1)),
-                    `${icon} ${message.payload.toolName}: ${summary}`,
-                ]);
+                if (!message.payload.success) {
+                    // Only show errors visually — successes are silent in chat
+                    const summary = formatToolResultSummary(message.payload.toolName, message.payload.result, false);
+                    setChatLines((prev) => [
+                        ...prev.slice(-(MAX_CHAT_LINES - 1)),
+                        `❌ ${message.payload.toolName}: ${summary}`,
+                    ]);
+                } else {
+                    // Replace the "registrando na memória..." with a done indicator
+                    setChatLines((prev) => {
+                        const lastLine = prev[prev.length - 1] ?? '';
+                        const activityLabel = getToolActivityLabel(message.payload.toolName);
+                        // If the last line is the activity label, replace it with done version
+                        if (lastLine === activityLabel) {
+                            return [...prev.slice(0, -1), activityLabel.replace('...', ' ✓')];
+                        }
+                        return prev;
+                    });
+                }
                 addLog(`Tool result: ${message.payload.toolName} — ${status}`, message.payload.success ? 'green' : 'red');
                 break;
             }

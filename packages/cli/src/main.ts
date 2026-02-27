@@ -26,6 +26,7 @@ ${pc.bold('Commands:')}
   ${pc.yellow('start')}    Starts the interactive TUI (connects to running daemon)
   ${pc.yellow('stop')}     Stops the running daemon
   ${pc.yellow('config')}   Opens the configuration wizard
+  ${pc.yellow('reset')}    Granular reset (memory, config, tools, etc.)
   ${pc.yellow('channel')}  Manages Extra Channels (e.g. whatsapp)
   ${pc.yellow('update')}   Downloads and installs the latest Redbus version
   ${pc.yellow('help')}     Shows this message
@@ -70,6 +71,12 @@ export async function main(args: string[]): Promise<void> {
         case 'channel': {
             const { channelCommand } = await import('./commands/channel.js');
             await channelCommand(args.slice(1));
+            break;
+        }
+
+        case 'reset': {
+            const { resetCommand } = await import('./commands/config.js');
+            await resetCommand();
             break;
         }
 

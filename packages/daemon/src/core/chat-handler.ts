@@ -55,11 +55,11 @@ export class ChatHandler {
             this.wsServer.broadcast({
                 type: 'log',
                 timestamp: new Date().toISOString(),
-                payload: { level: 'error', source: 'The Watcher', message: `Background loop '${alias}' crashed. Engaging auto-recovery (Tier 2)...` }
+                payload: { level: 'error', source: 'The Watcher', message: `Background loop '${alias}' crashed. Engaging auto-recovery (Cloud Engine)...` }
             });
 
             // Feed the synthetic prompt silently back into the router
-            // Note: Since score for "error" and "edit_file_blocks" is +40, it will naturally hit Tier 2.
+            // Note: Since score for "error" and "edit_file_blocks" is +40, it will naturally hit Cloud Engine.
             await this.handleChatRequest('system', {
                 type: 'chat:request',
                 timestamp: new Date().toISOString(),
@@ -221,7 +221,7 @@ Return ONLY the JSON object. Do not explain.`;
                     payload: { level: 'info', source: 'Router', message: `🧠 [Router]: Complexity Score ${score}/100 → Delegated to Worker Engine (background task ${taskId.slice(0, 12)})` }
                 });
             } else {
-                const engineLabel = targetTier === 'tier1' ? 'Live Engine (Local)' : 'Tier 2 (Cloud)';
+                const engineLabel = targetTier === 'tier1' ? 'Live Engine (Local)' : 'Cloud Engine';
                 this.wsServer.broadcast({
                     type: 'log',
                     timestamp: new Date().toISOString(),

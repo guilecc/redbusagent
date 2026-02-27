@@ -510,7 +510,7 @@ export async function askTier1(
         }
     }
 
-    callbacks.onDone("Tier 1 maximum tool execution steps limit reached.");
+    callbacks.onDone("Live Engine maximum tool execution steps limit reached.");
     return { tier: 'tier1', model: modelName };
 }
 
@@ -523,7 +523,7 @@ export async function askTier2(
 ): Promise<CognitiveRouterResult> {
     const validation = validateTier2Config();
     if (!validation.valid) {
-        callbacks.onError(new Error(validation.error ?? 'Tier 2 config invalid'));
+        callbacks.onError(new Error(validation.error ?? 'Cloud Engine config invalid'));
         const config = getTier2Config();
         return { tier: 'tier2', model: config?.model ?? 'unknown' };
     }

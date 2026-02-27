@@ -5,6 +5,151 @@ import pc from 'picocolors';
 import { Vault } from '@redbusagent/shared';
 import { runOnboardingWizard } from '../wizard/onboarding.js';
 
+// ─── Reset Categories ────────────────────────────────────────────
+
+export type ResetCategory = 'memory' | 'whatsapp' | 'mcps' | 'persona' | 'configuration' | 'forged_tools' | 'everything';
+
+interface ResetResult {
+    category: ResetCategory;
+    filesDeleted: string[];
+    dirsDeleted: string[];
+}
+
+/**
+ * Executes a granular reset for the given categories.
+ * Returns an array of results describing what was deleted.
+ * This function is pure logic (no prompts) — testable in isolation.
+ */
+export function executeReset(categories: ResetCategory[]): ResetResult[] {
+    const results: ResetResult[] = [];
+
+    // If 'everything' is selected, expand to all individual categories
+    const effective = categories.includes('everything')
+        ? ['memory', 'whatsapp', 'mcps', 'persona', 'configuration', 'forged_tools'] as ResetCategory[]
+        : categories;
+
+    for (const cat of effective) {
+        const result: ResetResult = { category: cat, filesDeleted: [], dirsDeleted: [] };
+
+        switch (cat) {
+            case 'memory': {
+                // Core Working Memory
+                deleteFile('core-memory.md', result);
+                // Cognitive Map
+                deleteFile('cognitive-map.json', result);
+                // Archival Memory (LanceDB)
+                deleteDir('memory', result);
+                // Transcript history
+                deleteDir('transcripts', result);
+                // Alerts
+                deleteFile('alerts.json', result);
+                break;
+            }
+            case 'whatsapp': {
+                deleteDir('auth_whatsapp', result);
+                // Also clear owner_phone_number from config if it exists
+                const config = Vault.read();
+                if (config?.owner_phone_number) {
+                    Vault.write({ ...config, owner_phone_number: undefined });
+                    Vault.clearCache();
+                }
+                break;
+            }
+            case 'mcps': {
+                const config = Vault.read();
+                if (config && config.mcps && Object.keys(config.mcps).length > 0) {
+                    Vault.write({ ...config, mcps: {} });
+                    Vault.clearCache();
+                    result.filesDeleted.push('config.json [mcps section cleared]');
+                }
+                break;
+            }
+            case 'persona': {
+                deleteFile('persona.json', result);
+                break;
+            }
+            case 'configuration': {
+                deleteFile('config.json', result);
+                deleteFile('.masterkey', result);
+                deleteFile('cron_jobs.json', result);
+                deleteFile('daemon.pid', result);
+                Vault.clearCache();
+                break;
+            }
+            case 'forged_tools': {
+                deleteDir('forge', result);
+                // Reset registry to empty instead of deleting (preserves structure)
+                const registryPath = join(Vault.dir, 'tools-registry.json');
+                if (existsSync(registryPath)) {
+                    writeFileSync(registryPath, JSON.stringify({ version: 1, tools: [] }, null, 2));
+                    result.filesDeleted.push('tools-registry.json [reset to empty]');
+                }
+                break;
+            }
+        }
+
+        results.push(result);
+    }
+
+    return results;
+}
+
+function deleteFile(name: string, result: ResetResult): void {
+    const fullPath = join(Vault.dir, name);
+    if (existsSync(fullPath)) {
+        rmSync(fullPath, { force: true });
+        result.filesDeleted.push(name);
+    }
+}
+
+function deleteDir(name: string, result: ResetResult): void {
+    const fullPath = join(Vault.dir, name);
+    if (existsSync(fullPath)) {
+        rmSync(fullPath, { recursive: true, force: true });
+        result.dirsDeleted.push(name + '/');
+    }
+}
+
+/**
+ * Builds a human-readable summary of what will be deleted for a set of categories.
+ */
+export function buildResetPreview(categories: ResetCategory[]): string {
+    const effective = categories.includes('everything')
+        ? ['memory', 'whatsapp', 'mcps', 'persona', 'configuration', 'forged_tools'] as ResetCategory[]
+        : categories;
+
+    const lines: string[] = [];
+
+    for (const cat of effective) {
+        switch (cat) {
+            case 'memory':
+                lines.push('🧠 Memory: core-memory.md, memory/ (LanceDB), cognitive-map.json, transcripts/, alerts.json');
+                break;
+            case 'whatsapp':
+                lines.push('📱 WhatsApp: auth_whatsapp/ session, owner phone number');
+                break;
+            case 'mcps':
+                lines.push('🔌 MCPs: All installed MCP server configurations');
+                break;
+            case 'persona':
+                lines.push('👤 Persona: persona.json (name, personality, guidelines)');
+                break;
+            case 'configuration':
+                lines.push('⚙️  Configuration: config.json, .masterkey, cron_jobs.json, daemon.pid');
+                lines.push('    → Live Engine, Worker Engine, Cloud API keys, all model selections');
+                break;
+            case 'forged_tools':
+                lines.push('🔨 Forged Tools: forge/ directory, tools-registry.json');
+                break;
+        }
+    }
+
+    return lines.join('\n');
+}
+
+
+// ─── Interactive Config Command ───────────────────────────────────
+
 export async function configCommand(): Promise<void> {
     // Step 1: State Detection
     if (!Vault.exists()) {
@@ -22,8 +167,7 @@ export async function configCommand(): Promise<void> {
             { value: 'reconfigure', label: '🔄 Reconfigure AI Providers (Keep Memory and Tools)', hint: 'Keys only' },
             { value: 'install_mcp', label: '🔌 Install MCP Extensions (Model Context Protocol)', hint: 'GitHub, Scrapling, etc.' },
             { value: 'remove_mcp', label: '🗑️ Remove MCP Extensions', hint: 'Uninstall active MCPs' },
-            { value: 'wipe_brain', label: '🧠 Wipe Brain (Obliterate ALL agent state)', hint: 'Memory, Persona, Tools, MCPs, Core Memory' },
-            { value: 'factory_reset', label: '🔥 Factory Reset (Delete EVERYTHING, including MCPs)', hint: 'Careful!' },
+            { value: 'reset', label: '🔄 Reset (Selective or Full)', hint: 'Choose what to clear' },
             { value: 'exit', label: '🚪 Cancel / Exit' },
         ],
     });
@@ -75,94 +219,80 @@ export async function configCommand(): Promise<void> {
             }
             Vault.write(updatedConfig);
 
-            p.log.success(`${count} MCP extension(s) successfully removed. Press Ctrl+C to return to terminal.`);
+            p.log.success(`${count} MCP extension(s) successfully removed.`);
             process.exit(0);
             break;
         }
 
-        case 'wipe_brain': {
-            const confirm = await p.confirm({
-                message: 'Are you sure you want to obliterate ALL agent state (memory, persona, core memory, MCPs, forged tools)? This action is irreversible.',
-                initialValue: false,
-            });
-            if (!confirm || p.isCancel(confirm)) {
-                p.log.info('Operation cancelled.');
-                process.exit(0);
-            }
-
-            const s = p.spinner();
-            s.start('Obliterating brain (memory, persona, tools, core memory)...');
-
-            // Delete all state directories
-            const STATE_DIRS = ['memory', 'forge', 'auth_whatsapp'];
-            for (const dir of STATE_DIRS) {
-                rmSync(join(Vault.dir, dir), { recursive: true, force: true });
-            }
-
-            // Delete all state files
-            const STATE_FILES = ['persona.json', 'core-memory.md', 'daemon.pid'];
-            for (const file of STATE_FILES) {
-                const fullPath = join(Vault.dir, file);
-                if (existsSync(fullPath)) {
-                    rmSync(fullPath, { force: true });
-                }
-            }
-
-            // Reset tools-registry.json and cognitive-map.json
-            writeFileSync(join(Vault.dir, 'tools-registry.json'), JSON.stringify({ version: 1, tools: [] }, null, 2));
-            writeFileSync(join(Vault.dir, 'cognitive-map.json'), JSON.stringify([], null, 2));
-
-            // Remove installed MCPs from the Vault config
-            const config = Vault.read();
-            if (config) {
-                Vault.write({ ...config, mcps: {} });
-            }
-
-            s.stop('Brain obliterated!');
-            p.log.success('Total wipe complete: memory, persona, core memory, forged tools, MCPs, WhatsApp session — all destroyed. The agent will start as a blank slate on the next boot.');
-            process.exit(0);
-            break;
-        }
-
-        case 'factory_reset': {
-            const confirm = await p.confirm({
-                message: 'WARNING: This will delete ALL configuration, keys and memory. Continue?',
-                initialValue: false,
-            });
-            if (!confirm || p.isCancel(confirm)) {
-                p.log.info('Operation cancelled.');
-                process.exit(0);
-            }
-
-            const s = p.spinner();
-            s.start('Starting Factory Reset...');
-
-            // Delete only user data — preserve the application structure (node_modules, packages, .git, bin, etc.)
-            const USER_DATA = [
-                'config.json',
-                '.masterkey',
-                'memory',
-                'forge',
-                'auth_whatsapp',
-                'tools-registry.json',
-                'cognitive-map.json',
-                'core-memory.md',
-                'persona.json',
-                'daemon.pid',
-            ];
-            for (const entry of USER_DATA) {
-                const fullPath = join(Vault.dir, entry);
-                if (existsSync(fullPath)) {
-                    rmSync(fullPath, { recursive: true, force: true });
-                }
-            }
-
-            s.stop('Factory Reset complete.');
-            p.log.success('Everything clean! Let\'s configure again from scratch.');
-
-            const success = await runOnboardingWizard();
-            process.exit(success ? 0 : 1);
+        case 'reset': {
+            await resetCommand();
             break;
         }
     }
+}
+
+/**
+ * Interactive granular reset — can be called directly via `redbus reset`
+ * or from the config menu.
+ */
+export async function resetCommand(): Promise<void> {
+    const selected = await p.multiselect({
+        message: 'Select what you want to reset:',
+        options: [
+            { value: 'memory' as ResetCategory, label: '🧠 Memory', hint: 'Core memory, archival memory, transcripts, alerts' },
+            { value: 'whatsapp' as ResetCategory, label: '📱 WhatsApp Session', hint: 'auth_whatsapp/, owner phone' },
+            { value: 'mcps' as ResetCategory, label: '🔌 MCPs', hint: 'All installed MCP server configs' },
+            { value: 'persona' as ResetCategory, label: '👤 Persona', hint: 'persona.json' },
+            { value: 'configuration' as ResetCategory, label: '⚙️  Configuration (Vault)', hint: 'config.json, .masterkey, cron_jobs, API keys' },
+            { value: 'forged_tools' as ResetCategory, label: '🔨 Forged Tools', hint: 'forge/ directory, tools-registry.json' },
+            { value: 'everything' as ResetCategory, label: '💀 EVERYTHING', hint: 'Nuclear option — deletes all of the above' },
+        ],
+        required: true,
+    });
+
+    if (p.isCancel(selected)) {
+        p.log.info('Operation cancelled.');
+        process.exit(0);
+    }
+
+    const categories = selected as ResetCategory[];
+
+    // Show preview of what will be deleted
+    const preview = buildResetPreview(categories);
+    p.log.warn('The following will be permanently deleted:\n' + preview);
+
+    const confirmed = await p.confirm({
+        message: 'This action is irreversible. Continue?',
+        initialValue: false,
+    });
+
+    if (!confirmed || p.isCancel(confirmed)) {
+        p.log.info('Reset cancelled.');
+        process.exit(0);
+    }
+
+    const s = p.spinner();
+    s.start('Resetting selected categories...');
+
+    const results = executeReset(categories);
+
+    s.stop('Reset complete!');
+
+    // Summary
+    let totalFiles = 0;
+    let totalDirs = 0;
+    for (const r of results) {
+        totalFiles += r.filesDeleted.length;
+        totalDirs += r.dirsDeleted.length;
+    }
+    p.log.success(`Cleared ${totalFiles} file(s) and ${totalDirs} director(ies).`);
+
+    // If configuration was reset, offer to reconfigure
+    if (categories.includes('configuration') || categories.includes('everything')) {
+        p.log.info('Configuration was cleared. Let\'s set up again.');
+        const success = await runOnboardingWizard();
+        process.exit(success ? 0 : 1);
+    }
+
+    process.exit(0);
 }
