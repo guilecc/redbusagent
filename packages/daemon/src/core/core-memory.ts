@@ -9,7 +9,7 @@
  * eliminating the need for the LLM to actively decide to call search_memory.
  *
  * Max size: ~1000 tokens ≈ 4000 characters. The Heartbeat Compressor
- * periodically reviews and compresses this file using Tier 1.
+ * periodically reviews and compresses this file using the Live Engine.
  */
 
 import { join } from 'node:path';

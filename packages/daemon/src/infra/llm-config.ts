@@ -13,26 +13,7 @@ import { Vault, type VaultConfig, type Tier2Provider, type EngineProvider } from
 // Re-export the type for convenience
 export type { Tier2Provider, EngineProvider };
 
-// ─── Tier 1 (Legacy compat — redirects to Live Engine) ────────────
-
-export function getTier1Config(): { url: string; model: string; enabled: boolean; power_class?: string } {
-    const config = Vault.read();
-    // Legacy: if live_engine is configured, use it; otherwise fall back to tier1
-    if (config?.live_engine) {
-        return {
-            url: config.live_engine.url ?? '',
-            model: config.live_engine.model ?? 'gemini-2.5-flash',
-            enabled: config.live_engine.enabled ?? true,
-            power_class: config.live_engine.power_class ?? 'gold', // Cloud models are always "gold" class
-        };
-    }
-    return {
-        url: config?.tier1?.url ?? '',
-        model: config?.tier1?.model ?? 'gemini-2.5-flash',
-        enabled: config?.tier1?.enabled ?? true,
-        power_class: config?.tier1?.power_class ?? 'gold',
-    };
-}
+// ─── Live Engine Config (primary) ─────────────────────────────────
 
 // ─── Live Engine (real-time chat — local or cloud) ────────────────
 
@@ -60,8 +41,13 @@ export function getLiveEngineConfig(): LiveEngineConfig {
         };
     }
     // Legacy fallback: use tier1 if live_engine not configured
-    const t1 = getTier1Config();
-    return { ...t1, provider: config?.tier1 ? 'ollama' : 'google' };
+    return {
+        url: config?.tier1?.url ?? '',
+        model: config?.tier1?.model ?? 'gemini-2.5-flash',
+        enabled: config?.tier1?.enabled ?? true,
+        power_class: config?.tier1?.power_class ?? 'gold',
+        provider: config?.tier1 ? 'ollama' : 'google',
+    };
 }
 
 // ─── Worker Engine (background heavy tasks — local or cloud) ──────

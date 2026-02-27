@@ -2,7 +2,7 @@
  * @redbusagent/shared — Hardware Inspector
  *
  * Detects GPU/VRAM capabilities using `systeminformation` and derives
- * the Tier 1 power class based on available VRAM (not system RAM).
+ * the power class based on available VRAM (not system RAM).
  *
  * Apple Silicon (M1/M2/M3/M4) uses unified memory architecture,
  * so VRAM = system RAM for those machines.
@@ -16,7 +16,7 @@
 
 import os from 'node:os';
 import { execSync } from 'node:child_process';
-import type { Tier1PowerClass } from '../vault/vault.js';
+import type { PowerClass } from '../vault/vault.js';
 
 // ─── Types ────────────────────────────────────────────────────────
 
@@ -28,7 +28,7 @@ export interface HardwareProfile {
     /** Total system RAM in GB */
     systemRamGB: number;
     /** Power class derived from VRAM thresholds */
-    powerClass: Tier1PowerClass;
+    powerClass: PowerClass;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────
@@ -48,7 +48,7 @@ function getAppleChipName(): string {
     }
 }
 
-function classifyVRAM(vramGB: number): Tier1PowerClass {
+function classifyVRAM(vramGB: number): PowerClass {
     if (vramGB >= 24) return 'platinum';
     if (vramGB >= 12) return 'gold';
     if (vramGB >= 6) return 'silver';

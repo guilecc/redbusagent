@@ -143,7 +143,7 @@ export class TaskScheduler {
                     payload: {
                         requestId: `cron-${record.id}-${Date.now()}`,
                         content: `[SCHEDULED TASK: ${record.alias}] ${record.prompt}`,
-                        tier: 'tier2',
+                        tier: 'cloud',
                         isOnboarding: false,
                     },
                 });

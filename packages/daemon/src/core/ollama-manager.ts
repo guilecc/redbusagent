@@ -160,12 +160,12 @@ export class OllamaManager {
     }
 
     private static async ensureModels(): Promise<void> {
-        // Read the user's configured Tier 1 model from the Vault instead of hardcoding.
+        // Read the user's configured Live Engine model from the Vault instead of hardcoding.
         // Only pull the configured model + the embedding model (nomic-embed-text).
         const config = Vault.read();
-        const configuredModel = config?.tier1?.model;
+        const configuredModel = config?.live_engine?.model ?? config?.tier1?.model;
 
-        // Only require the embedding model. The user's Tier 1 model is pulled during onboarding.
+        // Only require the embedding model. The user's Live Engine model is pulled during onboarding.
         // If it's already present, this is a no-op.
         const REQUIRED_MODELS: string[] = ['nomic-embed-text'];
         if (configuredModel) {

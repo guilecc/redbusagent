@@ -134,7 +134,7 @@ Quando um cron job dispara, ele injeta uma mensagem sintética na fila de tarefa
 
 /**
  * Generates the Core Working Memory block for system prompt injection.
- * This is prepended to EVERY LLM call — both Tier 1 and Tier 2.
+ * This is prepended to EVERY LLM call — both Live and Cloud engines.
  */
 function getCoreMemoryBlock(): string {
    const content = CoreMemory.read();
@@ -190,14 +190,14 @@ O momento atual é: ${new Date().toLocaleString()}.
 }
 
 /**
- * System prompt for Tier 1 (local) operations — bronze/silver.
+ * System prompt for Live Engine — compact version.
  * Includes Core Working Memory + compact transcript context (2000 char budget).
  */
-export function getSystemPromptTier1(): string {
+export function getSystemPromptLive(): string {
    const coreMemBlock = getCoreMemoryBlock();
 
-   // ─── Tier 1 Transcript Context (smaller budget: 2000 chars) ──
-   const recentTurns = Transcript.getRecentContext(Transcript.contextBudgetCharsTier1);
+   // ─── Live Engine Transcript Context (smaller budget: 2000 chars) ──
+   const recentTurns = Transcript.getRecentContext(Transcript.contextBudgetCharsLive);
    const transcriptBlock = recentTurns.length > 0
        ? `\n--- RECENT CONVERSATION (last ${recentTurns.length} turns) ---\n` +
          recentTurns.map(t => `[${t.role}]: ${t.content}`).join('\n') +
@@ -218,14 +218,14 @@ ${coreMemBlock}${transcriptBlock}`;
 }
 
 /**
- * System prompt for Tier 1 Gold/Platinum (high-end local models: 32b+).
+ * System prompt for Live Engine Gold/Platinum (cloud or high-end models).
  * Condensed self-awareness covering architecture, memory, scheduling, and tools.
- * Uses Tier 1 transcript budget (2000 chars) but adds architectural grounding.
+ * Uses Live Engine transcript budget (2000 chars) but adds architectural grounding.
  */
-export function getSystemPromptTier1Gold(): string {
+export function getSystemPromptLiveGold(): string {
    const coreMemBlock = getCoreMemoryBlock();
 
-   const recentTurns = Transcript.getRecentContext(Transcript.contextBudgetCharsTier1);
+   const recentTurns = Transcript.getRecentContext(Transcript.contextBudgetCharsLive);
    const transcriptBlock = recentTurns.length > 0
        ? `\n--- RECENT CONVERSATION (last ${recentTurns.length} turns) ---\n` +
          recentTurns.map(t => `[${t.role}]: ${t.content}`).join('\n') +

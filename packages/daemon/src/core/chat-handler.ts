@@ -8,7 +8,7 @@
 import type { DaemonWsServer } from '../infra/ws-server.js';
 import type { ChatRequestMessage } from '@redbusagent/shared';
 import { PersonaManager, Vault } from '@redbusagent/shared';
-import { askTier1, askTier2 } from './cognitive-router.js';
+import { askLive, askTier2 } from './cognitive-router.js';
 import { getLiveEngineConfig } from '../infra/llm-config.js';
 import { resolveSenderRole } from './tool-policy.js';
 import { calculateComplexityScore } from './heuristic-router.js';
@@ -20,7 +20,7 @@ import { HeavyTaskQueue } from './heavy-task-queue.js';
 import type { HeartbeatManager } from './gateway/heartbeat.js';
 
 export class ChatHandler {
-    private forceTier1 = false;
+    private forceLive = false;
     private heartbeat: HeartbeatManager | null = null;
 
     constructor(private readonly wsServer: DaemonWsServer) {
@@ -41,7 +41,7 @@ export class ChatHandler {
             this.wsServer.broadcast({
                 type: 'chat:stream:done',
                 timestamp: new Date().toISOString(),
-                payload: { requestId: request.id, fullText: '', tier: 'tier1', model: 'system' }
+                payload: { requestId: request.id, fullText: '', tier: 'live', model: 'system' }
             });
         });
 
@@ -77,8 +77,8 @@ export class ChatHandler {
         this.heartbeat = hb;
     }
 
-    setForceTier1(enabled: boolean): void {
-        this.forceTier1 = enabled;
+    setForceLive(enabled: boolean): void {
+        this.forceLive = enabled;
     }
 
     async handleChatRequest(
@@ -89,7 +89,7 @@ export class ChatHandler {
         let { content, tier, isOnboarding, messages } = message.payload;
 
         const vaultConfig = Vault.read();
-        let targetTier = this.forceTier1 ? 'tier1' : tier;
+        let targetTier = this.forceLive ? 'live' : tier;
 
         // ─── Generalized Approval Gate Interception ──────────────────
         if (approvalGate.hasPendingRequests()) {
@@ -108,18 +108,18 @@ export class ChatHandler {
             this.wsServer.broadcast({
                 type: 'chat:stream:done',
                 timestamp: new Date().toISOString(),
-                payload: { requestId, fullText: '', tier: 'tier1', model: 'system' }
+                payload: { requestId, fullText: '', tier: 'live', model: 'system' }
             });
             return;
         }
 
         // Reset flag after use
-        this.forceTier1 = false;
+        this.forceLive = false;
 
         // Special handling for onboarding
         if (isOnboarding) {
             console.log(`  👤 [onboarding] Parsing persona from user input...`);
-            const askFnOnboarding = targetTier === 'tier1' ? askTier1 : askTier2;
+            const askFnOnboarding = targetTier === 'live' ? askLive : askTier2;
             const onboardingPrompt = `The user is describing their desired agent persona. 
 User response: "${content}"
 
@@ -178,12 +178,12 @@ Return ONLY the JSON object. Do not explain.`;
 
         // Trivial escape hatch force-routing to Live Engine (Slash Command menu equivalent)
         if (content.trim().toLowerCase().startsWith('/local')) {
-            targetTier = 'tier1';
+            targetTier = 'live';
             content = content.replace(/^\/local\s*/i, '');
         }
 
         // ─── Intent Classifier Pre-flight ─────────────────────────────────────
-        if (!isOnboarding && content.trim() !== '' && !this.forceTier1 && !tier) {
+        if (!isOnboarding && content.trim() !== '' && !this.forceLive && !tier) {
             // Cloud-First: all models are treated as full-capability
             const powerClass = 'gold';
             const workerEnabled = vaultConfig?.worker_engine?.enabled ?? false;
@@ -192,9 +192,9 @@ Return ONLY the JSON object. Do not explain.`;
             const score = calculateComplexityScore(content, messages || []);
 
             if (score >= 40) {
-                targetTier = 'tier2';
+                targetTier = 'cloud';
             } else {
-                targetTier = 'tier1';
+                targetTier = 'live';
             }
 
             // ─── Dual-Cloud: Delegate heavy background tasks to Worker Queue ──
@@ -223,7 +223,7 @@ Return ONLY the JSON object. Do not explain.`;
                 });
             } else {
                 let engineLabel: string;
-                if (targetTier === 'tier1') {
+                if (targetTier === 'live') {
                     const liveConf = getLiveEngineConfig();
                     const providerLabel = liveConf.provider ?? 'Cloud';
                     engineLabel = `Live Engine (${providerLabel}/${liveConf.model})`;
@@ -239,7 +239,7 @@ Return ONLY the JSON object. Do not explain.`;
         }
 
         // Fallback targetTier to Live Engine just in case somehow it is undefined
-        targetTier = targetTier || 'tier1';
+        targetTier = targetTier || 'live';
 
         console.log(`  🧠 [${targetTier}] Processing request ${requestId.slice(0, 8)}... from ${clientId}`);
 
@@ -290,8 +290,8 @@ Return ONLY the JSON object. Do not explain.`;
                 const senderRole = resolveSenderRole(clientId);
                 this.heartbeat?.setThinking(true);
                 try {
-                    if (targetTier === 'tier1') {
-                        result = await askTier1(content, callbacks, messages, senderRole);
+                    if (targetTier === 'live') {
+                        result = await askLive(content, callbacks, messages, senderRole);
                     } else {
                         result = await askTier2(content, callbacks, undefined, messages, senderRole);
                     }

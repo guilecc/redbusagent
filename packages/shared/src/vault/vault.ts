@@ -36,13 +36,17 @@ export interface VaultTier2Config {
     readonly authToken?: string;
 }
 
-export type Tier1PowerClass = 'bronze' | 'silver' | 'gold' | 'platinum';
+/** Power class for engine capability classification */
+export type PowerClass = 'bronze' | 'silver' | 'gold' | 'platinum';
+/** @deprecated Use PowerClass instead */
+export type Tier1PowerClass = PowerClass;
 
+/** @deprecated Legacy config — use VaultLiveEngineConfig instead */
 export interface VaultTier1Config {
     readonly enabled: boolean;
     readonly url: string;
     readonly model: string;
-    readonly power_class?: Tier1PowerClass;
+    readonly power_class?: PowerClass;
 }
 
 // ─── Dual-Cloud Architecture: Live Engine + Worker Engine ──────────
@@ -58,7 +62,7 @@ export interface VaultLiveEngineConfig {
     readonly provider?: EngineProvider;
     readonly url: string;
     readonly model: string;
-    readonly power_class?: Tier1PowerClass;
+    readonly power_class?: PowerClass;
     /** API key for cloud providers */
     readonly apiKey?: string;
     /** RunPod Serverless endpoint ID (only when provider === 'runpod') */
@@ -91,7 +95,8 @@ export interface VaultConfig {
     readonly version: number;
     readonly tier2_enabled?: boolean;
     readonly tier2: VaultTier2Config;
-    readonly tier1: VaultTier1Config;
+    /** @deprecated Legacy — use live_engine instead */
+    readonly tier1?: VaultTier1Config;
 
     // ─── Dual-Cloud Architecture ────────────────────────────────
     /** Live Engine: Fast, low-latency cloud model for real-time chat */
@@ -236,7 +241,7 @@ export class Vault {
         try { this.cacheMtimeMs = statSync(CONFIG_FILE).mtimeMs; } catch { /* ignore */ }
     }
 
-    /** Check if vault has valid Tier 2 credentials */
+    /** Check if vault has valid credentials */
     static isConfigured(): boolean {
         const config = this.read();
 
@@ -286,12 +291,7 @@ export class Vault {
                 model: 'claude-sonnet-4-20250514',
                 ...overrides?.tier2,
             },
-            tier1: {
-                enabled: false,
-                url: '',
-                model: 'none',
-                ...overrides?.tier1,
-            },
+            // tier1 intentionally omitted — legacy field
             live_engine: {
                 enabled: true,
                 provider: 'google',

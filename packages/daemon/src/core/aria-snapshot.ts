@@ -507,7 +507,7 @@ export async function captureSemanticSnapshot(
     const maxChars = options.maxChars ?? SNAPSHOT_MAX_CHARS;
 
     try {
-        // Tier 1: Try private Playwright _snapshotForAI API first
+        // Try private Playwright _snapshotForAI API first
         let rawSnapshot: string | undefined;
 
         try {

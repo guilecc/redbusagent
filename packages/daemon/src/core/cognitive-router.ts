@@ -19,7 +19,6 @@ import { createAnthropic } from '@ai-sdk/anthropic';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 
 import {
-    getTier1Config,
     getTier2Config,
     getTier2ApiKey,
     validateTier2Config,
@@ -27,8 +26,8 @@ import {
     getLiveEngineConfig,
     getWorkerEngineConfig,
 } from '../infra/llm-config.js';
-import { executeRunpodOllama } from './engines/runpod-ollama.js';
-import { getSystemPromptTier1Gold, getSystemPromptTier2 } from './system-prompt.js';
+// RunPod is now handled as a standard OpenAI-compatible provider in createCloudModel
+import { getSystemPromptLiveGold, getSystemPromptTier2 } from './system-prompt.js';
 import { PersonaManager } from '@redbusagent/shared';
 import { MemoryManager } from './memory-manager.js';
 import { ToolRegistry } from './tool-registry.js';
@@ -67,7 +66,7 @@ function getPersonaContext(): string {
 // ─── Provider Factory ─────────────────────────────────────────────
 
 /** Creates a cloud LanguageModel from a provider name + apiKey + model */
-function createCloudModel(provider: string, apiKey: string, model: string): LanguageModel {
+function createCloudModel(provider: string, apiKey: string, model: string, opts?: { runpodEndpointId?: string }): LanguageModel {
     switch (provider) {
         case 'anthropic': {
             const anthropic = createAnthropic({ apiKey });
@@ -81,17 +80,28 @@ function createCloudModel(provider: string, apiKey: string, model: string): Lang
             const openai = createOpenAI({ apiKey });
             return openai(model);
         }
+        case 'runpod': {
+            // RunPod Serverless exposes an OpenAI-compatible API via vLLM.
+            // Standard baseURL: https://api.runpod.ai/v2/{endpoint-id}/openai/v1
+            const endpointId = opts?.runpodEndpointId;
+            if (!endpointId) throw new Error('RunPod requires an endpoint ID. Run: redbus config');
+            const runpod = createOpenAI({
+                baseURL: `https://api.runpod.ai/v2/${endpointId}/openai/v1`,
+                apiKey,
+            });
+            return runpod(model);
+        }
         default:
             throw new Error(`Unknown cloud provider: ${provider}`);
     }
 }
 
-function createTier1Model(): LanguageModel {
+function createLiveModel(): LanguageModel {
     const liveConfig = getLiveEngineConfig();
 
     // Cloud-First: All Live Engine providers go through cloud model factory.
-    // RunPod is handled separately at the routing level (askTier1), not here.
-    if (liveConfig.provider && liveConfig.provider !== 'runpod') {
+    // RunPod is now a standard OpenAI-compatible provider (no special interception needed).
+    if (liveConfig.provider) {
         if (liveConfig.provider !== 'ollama' && !liveConfig.apiKey) {
             throw new Error(`Live Engine (${liveConfig.provider}) requires an API key. Run: redbus config`);
         }
@@ -103,7 +113,9 @@ function createTier1Model(): LanguageModel {
             });
             return ollama(liveConfig.model);
         }
-        return createCloudModel(liveConfig.provider, liveConfig.apiKey!, liveConfig.model);
+        return createCloudModel(liveConfig.provider, liveConfig.apiKey!, liveConfig.model, {
+            runpodEndpointId: liveConfig.runpod_endpoint_id,
+        });
     }
 
     // Default: use Google provider
@@ -147,10 +159,12 @@ export function createWorkerModel(): LanguageModel {
     const workerConfig = getWorkerEngineConfig();
 
     // Cloud-First: Worker Engine uses cloud provider APIs.
-    // RunPod is handled separately at the routing level (askWorkerEngine).
-    if (workerConfig.provider && workerConfig.provider !== 'ollama' && workerConfig.provider !== 'runpod') {
+    // RunPod is now a standard OpenAI-compatible provider (no special interception needed).
+    if (workerConfig.provider && workerConfig.provider !== 'ollama') {
         if (!workerConfig.apiKey) throw new Error(`Worker Engine (${workerConfig.provider}) requires an API key. Run: redbus config`);
-        return createCloudModel(workerConfig.provider, workerConfig.apiKey, workerConfig.model);
+        return createCloudModel(workerConfig.provider, workerConfig.apiKey, workerConfig.model, {
+            runpodEndpointId: workerConfig.runpod_endpoint_id,
+        });
     }
 
     // Legacy Ollama fallback (not recommended in cloud-first architecture)
@@ -180,13 +194,13 @@ export interface StreamCallbacks {
 }
 
 export interface CognitiveRouterResult {
-    tier: 'tier1' | 'tier2' | 'worker';
+    tier: 'live' | 'cloud' | 'worker';
     model: string;
 }
 
 // ─── Public API ───────────────────────────────────────────────────
 
-export async function askTier1(
+export async function askLive(
     prompt: string,
     callbacks: StreamCallbacks,
     messagesFromClient?: any[],
@@ -194,7 +208,7 @@ export async function askTier1(
 ): Promise<CognitiveRouterResult> {
     const liveEngineConf = getLiveEngineConfig();
     const modelName = liveEngineConf.model;
-    const model = createTier1Model();
+    const model = createLiveModel();
 
     // ──── Auto-RAG Pre-flight Injection ────
     const ragResult = await AutoRAG.enrich(prompt);
@@ -207,7 +221,7 @@ export async function askTier1(
     const filteredTools = senderRole === 'owner' ? tools : applyToolPolicy(tools as Record<string, unknown>, senderRole) as typeof tools;
 
     // ─── System Prompt Construction (full context for cloud models) ────
-    let systemPromptContext = getPersonaContext() + getSystemPromptTier1Gold();
+    let systemPromptContext = getPersonaContext() + getSystemPromptLiveGold();
     systemPromptContext += `\n\n${PROACTIVE_DIRECTIVE}\n\n${CapabilityRegistry.getCapabilityManifest()}`;
 
     // Cloud Wisdom injection
@@ -220,7 +234,7 @@ export async function askTier1(
             });
         }
     } catch (err) {
-        console.error('  ❌ [tier1] Failed to retrieve cloud wisdom:', err);
+        console.error('  ❌ [live] Failed to retrieve cloud wisdom:', err);
     }
 
     // 📚 Skills injection — load relevant skill instructions
@@ -228,10 +242,10 @@ export async function askTier1(
         const skillPrompt = await getRelevantSkillPrompt(prompt);
         if (skillPrompt) {
             systemPromptContext += skillPrompt;
-            console.log(`  📚 [tier1] Skill prompt injected`);
+            console.log(`  📚 [live] Skill prompt injected`);
         }
     } catch (err) {
-        console.error('  ❌ [tier1] Failed to load skills:', err);
+        console.error('  ❌ [live] Failed to load skills:', err);
     }
 
     let messages: any[];
@@ -254,42 +268,7 @@ export async function askTier1(
     }
 
     // ─── Transcript: Log user turn ───
-    Transcript.append({ role: 'user', content: prompt, meta: { tier: 'tier1', model: modelName } });
-
-    // ─── RunPod Serverless Interception ───────────────────────────
-    const liveConfig = getLiveEngineConfig();
-    if (liveConfig.provider === 'runpod') {
-        try {
-            const runpodResult = await executeRunpodOllama({
-                model: liveConfig.model,
-                messages,
-                system: systemPromptContext,
-                options: { num_ctx: 8192 },
-                apiKey: liveConfig.apiKey,
-                endpointId: liveConfig.runpod_endpoint_id,
-            });
-
-            // Pipe tool calls through callbacks
-            if (runpodResult.toolCalls) {
-                for (const tc of runpodResult.toolCalls) {
-                    callbacks.onToolCall?.(tc.function.name, tc.function.arguments);
-                }
-            }
-
-            // Simulate streaming by sending the full content as a single chunk
-            if (runpodResult.content) {
-                callbacks.onChunk(runpodResult.content);
-            }
-
-            Transcript.append({ role: 'assistant', content: runpodResult.content, meta: { tier: 'tier1', model: runpodResult.model } });
-            callbacks.onDone(runpodResult.content);
-            return { tier: 'tier1', model: runpodResult.model };
-        } catch (err) {
-            const error = err instanceof Error ? err : new Error(String(err));
-            callbacks.onError(error);
-            return { tier: 'tier1', model: liveConfig.model };
-        }
-    }
+    Transcript.append({ role: 'user', content: prompt, meta: { tier: 'live', model: modelName } });
 
     // 🔄 Tool Loop Detection: track tool call history for this request
     const toolCallHistory: ToolCallHistoryEntry[] = [];
@@ -307,7 +286,7 @@ export async function askTier1(
                 messages,
                 tools: filteredTools,
                 onError: ({ error }) => {
-                    console.error('  ❌ [tier1] streamText onError:', error);
+                    console.error('  ❌ [live] streamText onError:', error);
                 },
             });
 
@@ -340,10 +319,10 @@ export async function askTier1(
                     }
                 } else if (part.type === 'tool-call') {
                     nativeToolUsed = true;
-                    console.log(`  🔧 [tier1] Native Tool call: ${part.toolName}`);
+                    console.log(`  🔧 [live] Native Tool call: ${part.toolName}`);
                     callbacks.onToolCall?.(part.toolName, part.input as Record<string, unknown>);
                 } else if (part.type === 'tool-result') {
-                    console.log(`  🔧 [tier1] Native Tool result: ${part.toolName}`);
+                    console.log(`  🔧 [live] Native Tool result: ${part.toolName}`);
                     callbacks.onToolResult?.(
                         part.toolName,
                         typeof part.output === 'object' && part.output !== null && 'success' in part.output
@@ -354,7 +333,7 @@ export async function askTier1(
                             : JSON.stringify(part.output, null, 2),
                     );
                 } else if (part.type === 'error') {
-                    console.error('  ❌ [tier1] Stream error event:', part.error);
+                    console.error('  ❌ [live] Stream error event:', part.error);
                     callbacks.onError(part.error instanceof Error ? part.error : new Error(String(part.error)));
                 }
             }
@@ -384,20 +363,20 @@ export async function askTier1(
                         rawToolCall = parsed;
                     }
                 } catch (e) {
-                    console.warn('  ⚠️ [tier1] Falha ao fazer parse do JSON bruto (Interceptor):', e);
+                    console.warn('  ⚠️ [live] Falha ao fazer parse do JSON bruto (Interceptor):', e);
                 }
             }
 
             // 2. The Invisible Execution Loop
             if (rawToolCall) {
-                console.log(`  🔧 [tier1] Raw JSON Tool Call Interceptado: ${rawToolCall.name}`);
+                console.log(`  🔧 [live] Raw JSON Tool Call Interceptado: ${rawToolCall.name}`);
                 callbacks.onToolCall?.(rawToolCall.name, rawToolCall.arguments || {});
 
                 // ─── Transcript: Log tool call ───
                 Transcript.append({
                     role: 'tool-call',
                     content: JSON.stringify(rawToolCall.arguments || {}),
-                    meta: { toolName: rawToolCall.name, tier: 'tier1', model: modelName },
+                    meta: { toolName: rawToolCall.name, tier: 'live', model: modelName },
                 });
 
                 const toolFn = (tools as any)[rawToolCall.name];
@@ -426,7 +405,7 @@ export async function askTier1(
                     meta: {
                         toolName: rawToolCall.name,
                         success,
-                        tier: 'tier1',
+                        tier: 'live',
                         model: modelName,
                         durationMs: toolDuration,
                         ...(!success ? { error: toolOutput.slice(0, 200) } : {}),
@@ -443,10 +422,10 @@ export async function askTier1(
                 });
                 const loopCheck = detectToolCallLoop(toolCallHistory, rawToolCall.name, rawToolCall.arguments || {});
                 if (loopCheck.stuck) {
-                    console.warn(`  🚨 [tier1] Loop detected (${loopCheck.detector}): ${loopCheck.message}`);
+                    console.warn(`  🚨 [live] Loop detected (${loopCheck.detector}): ${loopCheck.message}`);
                     callbacks.onChunk(`\n⚠️ Loop detected: ${loopCheck.message}. Breaking out.\n`);
                     callbacks.onDone(`Loop circuit breaker activated: ${loopCheck.message}`);
-                    return { tier: 'tier1', model: modelName };
+                    return { tier: 'live', model: modelName };
                 }
 
                 messages.push({ role: 'assistant', content: fullText });
@@ -461,19 +440,19 @@ export async function askTier1(
 
             const finalText = isJsonMode && !rawToolCall && !nativeToolUsed ? fullText.trim() : fullText;
             // ─── Transcript: Log assistant turn ───
-            Transcript.append({ role: 'assistant', content: finalText, meta: { tier: 'tier1', model: modelName } });
+            Transcript.append({ role: 'assistant', content: finalText, meta: { tier: 'live', model: modelName } });
             callbacks.onDone(finalText);
-            return { tier: 'tier1', model: modelName };
+            return { tier: 'live', model: modelName };
 
         } catch (err) {
             const error = err instanceof Error ? err : new Error(String(err));
             callbacks.onError(error);
-            return { tier: 'tier1', model: modelName };
+            return { tier: 'live', model: modelName };
         }
     }
 
     callbacks.onDone("Live Engine maximum tool execution steps limit reached.");
-    return { tier: 'tier1', model: modelName };
+    return { tier: 'live', model: modelName };
 }
 
 export async function askTier2(
@@ -487,7 +466,7 @@ export async function askTier2(
     if (!validation.valid) {
         callbacks.onError(new Error(validation.error ?? 'Cloud Engine config invalid'));
         const config = getTier2Config();
-        return { tier: 'tier2', model: config?.model ?? 'unknown' };
+        return { tier: 'cloud', model: config?.model ?? 'unknown' };
     }
 
     // ──── Auto-RAG Pre-flight Injection ────
@@ -556,7 +535,7 @@ export async function askTier2(
         console.log(`  🧠 [tier2] Calling ${config.provider}/${config.model} with ${Object.keys(tools).length} tools (AutoRAG: ${ragResult.chunksFound} chunks)`);
 
         // ─── Transcript: Log user turn ───
-        Transcript.append({ role: 'user', content: prompt, meta: { tier: 'tier2', model: config.model } });
+        Transcript.append({ role: 'user', content: prompt, meta: { tier: 'cloud', model: config.model } });
 
         let messages: any[];
         if (messagesFromClient && messagesFromClient.length > 0) {
@@ -610,7 +589,7 @@ export async function askTier2(
                 console.log(`  📦 [tier2] Compaction applied: ${compacted.originalTokens} → ${compacted.finalTokens} tokens`);
             } else {
                 callbacks.onError(new Error(`Context window exceeded (${guard.usedTokens}/${guard.maxTokens} tokens). Please start a new conversation.`));
-                return { tier: 'tier2', model: config.model };
+                return { tier: 'cloud', model: config.model };
             }
         } else if (guard.action === 'compact') {
             console.log(`  ⚠️ [tier2] Context window warning: ${guard.remainingTokens} tokens remaining. Consider compaction soon.`);
@@ -653,7 +632,7 @@ export async function askTier2(
                     Transcript.append({
                         role: 'tool-call',
                         content: JSON.stringify(part.input),
-                        meta: { toolName: part.toolName, tier: 'tier2', model: config.model },
+                        meta: { toolName: part.toolName, tier: 'cloud', model: config.model },
                     });
                     callbacks.onToolCall?.(
                         part.toolName,
@@ -680,7 +659,7 @@ export async function askTier2(
                         meta: {
                             toolName: part.toolName,
                             success: toolSuccess,
-                            tier: 'tier2',
+                            tier: 'cloud',
                             model: config.model,
                             durationMs: toolDurationMs,
                             ...(!toolSuccess ? { error: toolOutput.slice(0, 200) } : {}),
@@ -724,15 +703,15 @@ export async function askTier2(
         }
 
         // ─── Transcript: Log assistant turn ───
-        Transcript.append({ role: 'assistant', content: fullText, meta: { tier: 'tier2', model: config.model } });
+        Transcript.append({ role: 'assistant', content: fullText, meta: { tier: 'cloud', model: config.model } });
 
         callbacks.onDone(fullText);
-        return { tier: 'tier2', model: config.model };
+        return { tier: 'cloud', model: config.model };
     } catch (err) {
         const error = err instanceof Error ? err : new Error(String(err));
         console.error('  ❌ [tier2] Exception:', error.message);
         callbacks.onError(error);
-        return { tier: 'tier2', model: config.model };
+        return { tier: 'cloud', model: config.model };
     }
 }
 
@@ -748,27 +727,6 @@ export async function askWorkerEngine(prompt: string): Promise<{ result: string;
     const workerConfig = getWorkerEngineConfig();
     if (!workerConfig.enabled) {
         throw new Error('Worker Engine is not enabled. Run: redbus config');
-    }
-
-    // ─── RunPod Serverless Interception ───────────────────────────
-    if (workerConfig.provider === 'runpod') {
-        console.log(`  🏗️ [worker] Processing on RunPod (${workerConfig.model})...`);
-        try {
-            const runpodResult = await executeRunpodOllama({
-                model: workerConfig.model,
-                messages: [{ role: 'user', content: prompt }],
-                system: 'You are a background worker AI. Execute the task precisely. Return only the result, no conversational fluff.',
-                options: { num_ctx: workerConfig.num_ctx },
-                apiKey: workerConfig.apiKey,
-                endpointId: workerConfig.runpod_endpoint_id,
-            });
-            console.log(`  🏗️ [worker] RunPod completed: ${runpodResult.content.length} chars`);
-            return { result: runpodResult.content, model: runpodResult.model };
-        } catch (err) {
-            const error = err instanceof Error ? err : new Error(String(err));
-            console.error(`  ❌ [worker] RunPod exception: ${error.message}`);
-            throw error;
-        }
     }
 
     const model = createWorkerModel();
@@ -800,13 +758,15 @@ export async function askWorkerEngine(prompt: string): Promise<{ result: string;
 // ─── Live Engine Alias ────────────────────────────────────────────
 
 /**
- * askLiveEngine — Alias for askTier1. Uses the Live Engine (cloud API)
+ * askLiveEngine — Alias for askLive. Uses the Live Engine (cloud API)
  * for real-time chat.
  */
-export const askLiveEngine = askTier1;
+export const askLiveEngine = askLive;
+/** @deprecated Use askLive or askLiveEngine instead */
+export const askTier1 = askLive;
 
 export function getRouterStatus(): {
-    tier1: { url: string; model: string; enabled: boolean; provider?: string };
+    liveEngine: { url: string; model: string; enabled: boolean; provider?: string };
     tier2: { provider: string; model: string; configured: boolean; authMethod?: string } | null;
     workerEngine: { model: string; enabled: boolean; num_threads: number; provider?: string } | null;
     forgedTools: number;
@@ -818,7 +778,7 @@ export function getRouterStatus(): {
     const workerConfig = getWorkerEngineConfig();
 
     return {
-        tier1: {
+        liveEngine: {
             url: liveConfig.url,
             model: liveConfig.model,
             enabled: liveConfig.enabled,

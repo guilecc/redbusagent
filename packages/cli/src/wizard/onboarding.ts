@@ -10,7 +10,7 @@
 
 import * as p from '@clack/prompts';
 import pc from 'picocolors';
-import { Vault, type VaultTier2Config, type VaultTier1Config, type VaultLiveEngineConfig, type VaultWorkerEngineConfig, type Tier2Provider, type EngineProvider, fetchTier2Models, SUGGESTED_MCPS, getMCPSuggestion } from '@redbusagent/shared';
+import { Vault, type VaultTier2Config, type VaultLiveEngineConfig, type VaultWorkerEngineConfig, type Tier2Provider, type EngineProvider, fetchTier2Models, SUGGESTED_MCPS, getMCPSuggestion } from '@redbusagent/shared';
 import { WhatsAppChannel } from '@redbusagent/daemon/dist/channels/whatsapp.js';
 
 // ─── Helper: RunPod Serverless Configuration ─────────────────────
@@ -30,14 +30,14 @@ async function configureRunpod(engineLabel: string): Promise<{ provider: 'runpod
     if (p.isCancel(endpointId)) return null;
 
     const model = await p.text({
-        message: `Which Ollama model is deployed on this RunPod worker?`,
-        placeholder: 'gemma3:27b',
-        initialValue: 'gemma3:27b',
+        message: `What is the model name on your RunPod endpoint? (OpenAI-compatible)`,
+        placeholder: 'e.g. qwen3-32b-awq, meta-llama/Llama-3.1-8B-Instruct',
+        initialValue: 'qwen3-32b-awq',
         validate: (v) => { if (!v || v.trim().length < 2) return 'Invalid model name.'; },
     });
     if (p.isCancel(model)) return null;
 
-    p.log.success(`🚀 ${engineLabel}: RunPod Serverless — ${pc.bold(model as string)} (endpoint: ${(endpointId as string).slice(0, 8)}...)`);
+    p.log.success(`🚀 ${engineLabel}: RunPod Serverless (OpenAI-compatible) — ${pc.bold(model as string)} (endpoint: ${(endpointId as string).slice(0, 8)}...)`);
     return { provider: 'runpod', apiKey: (apiKey as string).trim(), endpointId: (endpointId as string).trim(), model: (model as string).trim() };
 }
 
@@ -116,7 +116,7 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
     if (existingConfig) {
         const liveInfo = existingConfig.live_engine
             ? `${existingConfig.live_engine.provider ?? 'ollama'}/${existingConfig.live_engine.model}`
-            : existingConfig.tier1?.model ?? 'not configured';
+            : 'not configured';
         p.note(
             `Live Engine: ${pc.bold(liveInfo)}\n` +
             `Worker Engine: ${pc.bold(existingConfig.worker_engine?.enabled ? existingConfig.worker_engine.model : 'disabled')}\n` +
@@ -142,14 +142,14 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
         message: 'Which provider for the Live Engine?',
         options: [
             { value: 'cloud' as const, label: '☁️  Cloud API', hint: 'Google, Anthropic, or OpenAI — recommended' },
-            { value: 'runpod' as const, label: '🚀 RunPod Serverless', hint: 'Your own GPU in the cloud running Ollama models' },
+            { value: 'runpod' as const, label: '🚀 RunPod Serverless', hint: 'Your own GPU in the cloud (OpenAI-compatible via vLLM)' },
         ],
         initialValue: 'cloud' as const,
     });
     if (p.isCancel(liveEngineType)) return false;
 
     let liveEngineConfig: VaultLiveEngineConfig;
-    let tier1Config: VaultTier1Config;
+    // Legacy tier1 config kept for backward compatibility
     let tier2Config: VaultTier2Config;
     let skipTier2 = true;
     let runpodApiKey: string | undefined;
@@ -168,7 +168,6 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
             apiKey: result.apiKey,
             runpod_endpoint_id: result.endpointId,
         };
-        tier1Config = { enabled: false, url: '', model: 'none' };
         tier2Config = { provider: 'anthropic', model: 'none', apiKey: '' };
     } else {
         // ── Live Engine: Cloud Configuration ──────────────────
@@ -182,7 +181,6 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
             model: result.model,
             apiKey: result.apiKey,
         };
-        tier1Config = { enabled: false, url: '', model: 'none' };
         tier2Config = { provider: result.provider as Tier2Provider, model: result.model, apiKey: result.apiKey };
         skipTier2 = false;
     }
@@ -204,7 +202,7 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
         message: 'How do you want to run the Worker Engine?',
         options: [
             { value: 'cloud' as const, label: '☁️  Cloud API', hint: 'Anthropic, Google, or OpenAI — recommended' },
-            { value: 'runpod' as const, label: '🚀 RunPod Serverless', hint: 'Your own GPU in the cloud running Ollama models' },
+            { value: 'runpod' as const, label: '🚀 RunPod Serverless', hint: 'Your own GPU in the cloud (OpenAI-compatible via vLLM)' },
             { value: 'disabled' as const, label: '⏸️  Disabled', hint: 'Skip Worker Engine for now' },
         ],
         initialValue: 'cloud' as const,
@@ -255,7 +253,6 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
         version: Vault.schemaVersion,
         tier2_enabled: !skipTier2,
         tier2: tier2Config,
-        tier1: tier1Config,
         live_engine: liveEngineConfig,
         worker_engine: workerEngineConfig,
         default_chat_tier,
@@ -313,7 +310,6 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
             version: Vault.schemaVersion,
             tier2_enabled: !skipTier2,
             tier2: tier2Config,
-            tier1: tier1Config,
             live_engine: liveEngineConfig,
             worker_engine: workerEngineConfig,
             default_chat_tier,
@@ -353,7 +349,6 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
             version: Vault.schemaVersion,
             tier2_enabled: !skipTier2,
             tier2: tier2Config,
-            tier1: tier1Config,
             live_engine: liveEngineConfig,
             worker_engine: workerEngineConfig,
             default_chat_tier,

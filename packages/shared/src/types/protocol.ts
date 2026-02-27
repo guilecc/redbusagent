@@ -91,8 +91,8 @@ export interface ChatStreamDoneMessage extends BaseMessage {
         readonly requestId: string;
         /** Full accumulated response text */
         readonly fullText: string;
-        /** Which engine handled this request (tier1=Live, tier2=Cloud, worker=Worker) */
-        readonly tier: 'tier1' | 'tier2' | 'worker';
+        /** Which engine handled this request */
+        readonly tier: 'live' | 'cloud' | 'worker';
         /** Model identifier used */
         readonly model: string;
     };
@@ -214,7 +214,7 @@ export interface ChatRequestMessage extends BaseMessage {
         /** The user's message text */
         readonly content: string;
         /** Optional: force a specific tier */
-        readonly tier?: 'tier1' | 'tier2';
+        readonly tier?: 'live' | 'cloud';
         /** Optional: flag for persona onboarding */
         readonly isOnboarding?: boolean;
         /** Unified conversational history array from the frontend */

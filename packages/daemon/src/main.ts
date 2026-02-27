@@ -62,8 +62,8 @@ if (Vault.isConfigured()) {
 // Display router status
 const routerStatus = getRouterStatus();
 console.log('  🧠 Cognitive Router:');
-const liveProviderLabel = routerStatus.tier1.provider ?? 'Cloud';
-console.log(`     Live Engine (${liveProviderLabel}):  ${routerStatus.tier1.model} [${routerStatus.tier1.enabled ? '✅' : '⏸️  disabled'}]`);
+const liveProviderLabel = routerStatus.liveEngine.provider ?? 'Cloud';
+console.log(`     Live Engine (${liveProviderLabel}):  ${routerStatus.liveEngine.model} [${routerStatus.liveEngine.enabled ? '✅' : '⏸️  disabled'}]`);
 if (routerStatus.tier2) {
     if (routerStatus.tier2.configured) {
         console.log(`     Worker Engine (${routerStatus.tier2.provider}):  ${routerStatus.tier2.model} [✅ ${routerStatus.tier2.authMethod}]`);
@@ -116,14 +116,14 @@ const wsServer = new DaemonWsServer({
                 console.log(`  🔌 Command from ${clientId}: ${command}`);
 
                 if (command === 'force-local') {
-                    chatHandler.setForceTier1(true);
+                    chatHandler.setForceLive(true);
                     wsServer.sendTo(clientId, {
                         type: 'log',
                         timestamp: new Date().toISOString(),
                         payload: { level: 'info', source: 'System', message: 'Next message forced to Live Engine' }
                     });
                 } else if (command === 'auto-route') {
-                    chatHandler.setForceTier1(false);
+                    chatHandler.setForceLive(false);
                     wsServer.sendTo(clientId, {
                         type: 'log',
                         timestamp: new Date().toISOString(),
@@ -140,7 +140,7 @@ const wsServer = new DaemonWsServer({
                         payload: {
                             level: 'info',
                             source: 'Status',
-                            message: `Models: Live:${status.tier1.model}, Worker:${status.tier2?.provider}/${status.tier2?.model} | RAM: ${ramUsage} | Scheduler: OK`
+                            message: `Models: Live:${status.liveEngine.model}, Worker:${status.tier2?.provider}/${status.tier2?.model} | RAM: ${ramUsage} | Scheduler: OK`
                         }
                     });
                 } else if (command === 'switch-cloud') {
