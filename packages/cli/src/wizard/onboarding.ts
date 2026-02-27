@@ -180,7 +180,7 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
     if (powerClass === 'platinum') {
         recommendedLiveModel = 'llama3.3:70b';
     } else if (powerClass === 'gold') {
-        recommendedLiveModel = 'gemma2:27b';
+        recommendedLiveModel = 'gemma3:27b';
     } else if (powerClass === 'silver') {
         recommendedLiveModel = 'qwen2.5-coder:14b';
     } else if (powerClass === 'bronze') {
@@ -253,11 +253,13 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
         const LOCAL_MODELS: Array<{ value: string; label: string; hint: string }> = powerClass === 'bronze'
             ? [
                 { value: 'llama3.2:3b', label: '⚡ Llama 3.2 (3B) — The Sweet Spot', hint: 'Best balance of intelligence and speed for 4GB GPUs ⭐ recommended' },
+                { value: 'gemma3:4b', label: '🌟 Gemma 3 (4B) — Google\'s Newest Lightweight', hint: 'Incredible reasoning density (Note: Requires solid quantization for exactly 4GB VRAM)' },
                 { value: 'phi3:mini', label: '🧠 Phi-3 Mini (3.8B) — Logic Expert', hint: "Microsoft's optimized logic model" },
                 { value: 'qwen2.5-coder:1.5b', label: '🚀 Qwen 2.5 Coder (1.5B) — Ultra-Fast', hint: 'Sub-second responses, code-focused' },
                 { value: 'deepseek-r1:1.5b', label: '🔬 DeepSeek R1 (1.5B) — Chain-of-Thought', hint: 'Built-in reasoning, tiny footprint' },
             ]
             : [
+                { value: 'gemma3:4b', label: '🌟 Gemma 3 (4B) — Google\'s Newest Lightweight', hint: 'Top-tier conversational intelligence (~5GB VRAM)' },
                 { value: 'qwen2.5-coder:7b', label: '💻 qwen2.5-coder:7b', hint: 'Excellent for code (~8GB VRAM)' },
                 { value: 'llama3.1:8b', label: '🧠 llama3.1:8b', hint: 'General, great reasoning (~8GB VRAM)' },
             ];
@@ -270,7 +272,7 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
         }
         if (powerClass === 'gold' || powerClass === 'platinum') {
             LOCAL_MODELS.push(
-                { value: 'gemma2:27b', label: '🌟 gemma2:27b', hint: `Google's efficient model (~32GB VRAM)${powerClass === 'gold' ? ' ⭐' : ''}` },
+                { value: 'gemma3:27b', label: '🌟 gemma3:27b', hint: `Google's latest, exceptional reasoning (~32GB VRAM)${powerClass === 'gold' ? ' ⭐' : ''}` },
                 { value: 'codestral:22b', label: '💻 codestral:22b', hint: `Mistral's coding model (~32GB VRAM)` },
             );
         }
@@ -314,6 +316,7 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
     const recommendedThreads = Math.max(4, Math.floor(cpuCount * 0.6));
 
     let recommendedWorkerModel = 'qwen2.5-coder:14b';
+    if (systemRamGB >= 32) recommendedWorkerModel = 'gemma3:27b';
     if (systemRamGB >= 64) recommendedWorkerModel = 'qwen2.5-coder:32b';
     if (systemRamGB >= 128) recommendedWorkerModel = 'llama3.3:70b';
 
@@ -361,8 +364,8 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
         }
         if (systemRamGB >= 32) {
             WORKER_MODELS.push(
-                { value: 'qwen2.5-coder:32b', label: '🚀 Qwen 2.5 Coder (32B)', hint: `High-precision (~32GB RAM)${systemRamGB < 64 ? ' ⭐' : ''}` },
-                { value: 'gemma2:27b', label: '🌟 Gemma 2 (27B)', hint: 'Versatile (~32GB RAM)' },
+                { value: 'gemma3:27b', label: '🌟 Gemma 3 (27B) — The Distillation Master', hint: 'Exceptional logic and context handling for background tasks (~32GB RAM) ⭐' },
+                { value: 'qwen2.5-coder:32b', label: '🚀 Qwen 2.5 Coder (32B)', hint: `High-precision (~32GB RAM)${systemRamGB < 64 ? '' : ''}` },
             );
         }
         if (systemRamGB >= 64) {
