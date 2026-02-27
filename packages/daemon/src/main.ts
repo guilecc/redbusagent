@@ -23,9 +23,10 @@ import { TaskScheduler } from './core/scheduler.js';
 import { ChatHandler } from './core/chat-handler.js';
 import { HeartbeatManager } from './core/gateway/heartbeat.js';
 import { getRouterStatus } from './core/cognitive-router.js';
+import { getLiveEngineConfig } from './infra/llm-config.js';
 import { Forge } from './core/forge.js';
 import { ToolRegistry } from './core/tool-registry.js';
-import { OllamaManager } from './core/ollama-manager.js';
+// OllamaManager removed — Cloud-First architecture (no local engine management)
 import { WhatsAppChannel } from './channels/whatsapp.js';
 import { CoreMemory } from './core/core-memory.js';
 import { MCPEngine } from './core/mcp-engine.js';
@@ -61,15 +62,16 @@ if (Vault.isConfigured()) {
 // Display router status
 const routerStatus = getRouterStatus();
 console.log('  🧠 Cognitive Router:');
-console.log(`     Tier 1 (Local):  ${routerStatus.tier1.model} @ ${routerStatus.tier1.url} [${routerStatus.tier1.enabled ? '✅' : '⏸️  disabled'}]`);
+const liveProviderLabel = routerStatus.tier1.provider ?? 'Cloud';
+console.log(`     Live Engine (${liveProviderLabel}):  ${routerStatus.tier1.model} [${routerStatus.tier1.enabled ? '✅' : '⏸️  disabled'}]`);
 if (routerStatus.tier2) {
     if (routerStatus.tier2.configured) {
-        console.log(`     Tier 2 (Cloud):  ${routerStatus.tier2.provider}/${routerStatus.tier2.model} [✅ ${routerStatus.tier2.authMethod}]`);
+        console.log(`     Worker Engine (${routerStatus.tier2.provider}):  ${routerStatus.tier2.model} [✅ ${routerStatus.tier2.authMethod}]`);
     } else {
-        console.log(`     Tier 2 (Cloud):  ${routerStatus.tier2.provider}/${routerStatus.tier2.model} [⚠️  credentials missing]`);
+        console.log(`     Worker Engine (${routerStatus.tier2.provider}):  ${routerStatus.tier2.model} [⚠️  credentials missing]`);
     }
 } else {
-    console.log('     Tier 2 (Cloud):  ⚠️  not configured');
+    console.log('     Worker Engine:  ⚠️  not configured');
 }
 console.log(`  🔨 Forge: ${Forge.dir} (${routerStatus.forgedTools} registered tools)`);
 const coreMemStats = CoreMemory.getStats();
@@ -118,7 +120,7 @@ const wsServer = new DaemonWsServer({
                     wsServer.sendTo(clientId, {
                         type: 'log',
                         timestamp: new Date().toISOString(),
-                        payload: { level: 'info', source: 'System', message: 'Next message forced to Tier 1 (Local)' }
+                        payload: { level: 'info', source: 'System', message: 'Next message forced to Live Engine' }
                     });
                 } else if (command === 'auto-route') {
                     chatHandler.setForceTier1(false);
@@ -138,7 +140,7 @@ const wsServer = new DaemonWsServer({
                         payload: {
                             level: 'info',
                             source: 'Status',
-                            message: `Models: T1:${status.tier1.model}, T2:${status.tier2?.provider}/${status.tier2?.model} | RAM: ${ramUsage} | Scheduler: OK`
+                            message: `Models: Live:${status.tier1.model}, Worker:${status.tier2?.provider}/${status.tier2?.model} | RAM: ${ramUsage} | Scheduler: OK`
                         }
                     });
                 } else if (command === 'switch-cloud') {
@@ -170,7 +172,7 @@ const wsServer = new DaemonWsServer({
                                 wsServer.sendTo(clientId, {
                                     type: 'chat:error',
                                     timestamp: new Date().toISOString(),
-                                    payload: { requestId: 'sys', error: 'Tier 2 Cloud is disabled. Run redbus config to configure an API key, or continue using Tier 1.' }
+                                    payload: { requestId: 'sys', error: 'Worker Engine is disabled. Run redbus config to configure an API key, or continue using the Live Engine.' }
                                 });
                                 return;
                             }
@@ -208,24 +210,9 @@ console.log('  ⏱️  Task Scheduler started (deterministic cron engine)');
 console.log('  💬 Chat handler initialized');
 console.log('  ✅ Daemon is ready. Waiting for TUI connections...\n');
 
-// ── Background Engine Download & Start ────────────────────────────
-
-// The engine is mandatory for local workflows. Run it always.
-const shouldRunLocalEngine = true;
-if (shouldRunLocalEngine) {
-    // Send progress to TUI connected clients
-    OllamaManager.setCallbacks((status) => {
-        wsServer.broadcast({
-            type: 'system:status',
-            timestamp: new Date().toISOString(),
-            payload: { status: status as any } // Overload system:status display in TUI
-        });
-    });
-
-    OllamaManager.startup().catch((err) => {
-        console.error('  ❌ Failed to start managed Ollama:', err);
-    });
-}
+// ── Cloud-First: No local engine management needed ───────────────
+// All engines are cloud APIs (Anthropic, Google, OpenAI, RunPod).
+// No local Ollama auto-start or model pulling.
 
 // ── Extensions (Channels) ─────────────────────────────────────────
 
@@ -240,7 +227,7 @@ whatsapp.startSilent().catch(err => {
 async function shutdown(signal: string): Promise<void> {
     console.log(`\n  🛑 Received ${signal}. Shutting down gracefully...`);
     heartbeat.stop();
-    OllamaManager.shutdown();
+    // Cloud-First: no local engine to shut down
     await MCPEngine.getInstance().stop();
     await whatsapp.stop();
     TaskScheduler.stopAll();

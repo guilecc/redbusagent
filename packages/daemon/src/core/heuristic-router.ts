@@ -2,7 +2,7 @@
  * @redbusagent/daemon — Heuristic Complexity Engine
  * 
  * Synchronous scoring engine to calculate the complexity of a prompt
- * to determine whether to route to Tier 1 (Local) or Tier 2 (Cloud).
+ * to determine whether to route to Live Engine or Worker Engine (Cloud).
  */
 
 export function calculateComplexityScore(prompt: string, recentHistory: any[] = []): number {
@@ -34,7 +34,7 @@ export function calculateComplexityScore(prompt: string, recentHistory: any[] = 
     score += recentContextScore;
 
     // Infrastructure & Subsystem Keywords (+40)
-    // Catches MCP, memory ops, visual inspection, background processes — all require Tier 2 reasoning
+    // Catches MCP, memory ops, visual inspection, background processes — all require Worker Engine reasoning
     const infraRegex = /\b(mcp|plugin|install server|install plugin|background|monitor|visual|screenshot|inspect|layout|look at|memorize|remember|forget|memória|lembrar|esquecer|archival|core.?memory|approval|protocol)\b/i;
     if (infraRegex.test(lowerPrompt)) {
         score += 40;

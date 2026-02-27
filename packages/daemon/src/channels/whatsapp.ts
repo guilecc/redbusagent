@@ -175,7 +175,7 @@ export class WhatsAppChannel {
             const body = message.body.trim();
             if (!body) return;
 
-            console.log(`  📱 WhatsAppChannel: Received [${body.slice(0, 40)}...] -> Routing to Tier 2...`);
+            console.log(`  📱 WhatsAppChannel: Received [${body.slice(0, 40)}...] -> Routing to Worker Engine...`);
 
             // ── Omnichannel: Mirror input to TUI ──────────────────
             this.broadcastToTui(`📱 [WhatsApp Input]: ${body}`);
@@ -196,7 +196,7 @@ export class WhatsAppChannel {
                     },
                     onDone: (text) => { fullResponse = text; },
                     onError: (err) => {
-                        console.error('  ❌ WhatsAppChannel: Falha no Tier 2:', err);
+                        console.error('  ❌ WhatsAppChannel: Worker Engine error:', err);
                         this.broadcastToTui(`❌ [WhatsApp Error]: ${err.message}`, 'warn');
                     },
                     onToolCall: async (name) => {

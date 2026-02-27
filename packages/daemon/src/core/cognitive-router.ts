@@ -1,10 +1,10 @@
 /**
  * @redbusagent/daemon — Cognitive Router
  *
- * The brain's routing layer. Abstracts LLM calls behind two tiers:
+ * The brain's routing layer. Abstracts LLM calls behind two engine slots:
  *
- *  • Tier 1 (Local/Fast)  → Ollama via OpenAI-compatible API
- *  • Tier 2 (Cloud/Deep)  → Anthropic / Google / OpenAI
+ *  • Live Engine (Fast)   → Cloud API (Google, Anthropic, OpenAI, RunPod)
+ *  • Worker Engine (Deep) → Cloud API for background reasoning & insights
  *
  * MemGPT Architecture Integration:
  *  • Auto-RAG: Every user message is silently enriched with top 3
@@ -28,8 +28,7 @@ import {
     getWorkerEngineConfig,
 } from '../infra/llm-config.js';
 import { executeRunpodOllama } from './engines/runpod-ollama.js';
-import { getSystemPromptTier1, getSystemPromptTier1Gold, getSystemPromptTier2 } from './system-prompt.js';
-import { calculateComplexityScore } from './heuristic-router.js';
+import { getSystemPromptTier1Gold, getSystemPromptTier2 } from './system-prompt.js';
 import { PersonaManager } from '@redbusagent/shared';
 import { MemoryManager } from './memory-manager.js';
 import { ToolRegistry } from './tool-registry.js';
@@ -67,8 +66,6 @@ function getPersonaContext(): string {
 
 // ─── Provider Factory ─────────────────────────────────────────────
 
-import { OllamaManager } from './ollama-manager.js';
-
 /** Creates a cloud LanguageModel from a provider name + apiKey + model */
 function createCloudModel(provider: string, apiKey: string, model: string): LanguageModel {
     switch (provider) {
@@ -92,45 +89,26 @@ function createCloudModel(provider: string, apiKey: string, model: string): Lang
 function createTier1Model(): LanguageModel {
     const liveConfig = getLiveEngineConfig();
 
-    // ── Hybrid: If Live Engine is a cloud provider, use cloud model factory ──
+    // Cloud-First: All Live Engine providers go through cloud model factory.
     // RunPod is handled separately at the routing level (askTier1), not here.
-    if (liveConfig.provider && liveConfig.provider !== 'ollama' && liveConfig.provider !== 'runpod') {
-        if (!liveConfig.apiKey) throw new Error(`Live Engine (${liveConfig.provider}) requires an API key. Run: redbus config`);
-        return createCloudModel(liveConfig.provider, liveConfig.apiKey, liveConfig.model);
+    if (liveConfig.provider && liveConfig.provider !== 'runpod') {
+        if (liveConfig.provider !== 'ollama' && !liveConfig.apiKey) {
+            throw new Error(`Live Engine (${liveConfig.provider}) requires an API key. Run: redbus config`);
+        }
+        if (liveConfig.provider === 'ollama') {
+            // Legacy Ollama fallback (not recommended)
+            const ollama = createOpenAI({
+                baseURL: `${liveConfig.url || 'http://127.0.0.1:11434'}/v1`,
+                apiKey: 'ollama',
+            });
+            return ollama(liveConfig.model);
+        }
+        return createCloudModel(liveConfig.provider, liveConfig.apiKey!, liveConfig.model);
     }
 
-    // ── Ollama (Local) path ──
-    const { model, power_class } = getTier1Config();
-
-    // Inject hardware-aware options into every Ollama API request via custom fetch.
-    const bronzeOptions: Record<string, unknown> = power_class === 'bronze'
-        ? {
-            num_thread: 8,    // Pin to physical cores — avoids context-switching overhead
-            num_ctx: 4096,    // Cap context window — saves GBs of VRAM
-            num_gpu: 99,      // Force all layers into VRAM — fail fast rather than silent CPU fallback
-        }
-        : {};
-
-    const ollama = createOpenAI({
-        baseURL: `${OllamaManager.baseUrl}/v1`,
-        apiKey: 'ollama',
-        fetch: async (url, init) => {
-            if (init?.body && typeof init.body === 'string') {
-                try {
-                    const body = JSON.parse(init.body);
-                    body.keep_alive = '60m'; // Prevent model unloading between messages
-                    if (Object.keys(bronzeOptions).length > 0) {
-                        body.options = { ...body.options, ...bronzeOptions };
-                    }
-                    init = { ...init, body: JSON.stringify(body) };
-                } catch { /* non-JSON body, pass through */ }
-            }
-            return globalThis.fetch(url, init);
-        },
-    });
-
-    const targetModel = model === 'llama3' ? 'llama3.2:1b' : model;
-    return ollama(targetModel);
+    // Default: use Google provider
+    if (!liveConfig.apiKey) throw new Error('Live Engine requires an API key. Run: redbus config');
+    return createCloudModel('google', liveConfig.apiKey, liveConfig.model);
 }
 
 export function createTier2Model(): LanguageModel {
@@ -163,41 +141,30 @@ export function createTier2Model(): LanguageModel {
 }
 
 
-// ─── Worker Engine Model Factory (local CPU/RAM or cloud) ────────
+// ─── Worker Engine Model Factory (Cloud-First) ──────────────────
 
 export function createWorkerModel(): LanguageModel {
     const workerConfig = getWorkerEngineConfig();
 
-    // ── Hybrid: If Worker Engine is a cloud provider, use cloud model factory ──
-    // RunPod is handled separately at the routing level (askWorkerEngine), not here.
+    // Cloud-First: Worker Engine uses cloud provider APIs.
+    // RunPod is handled separately at the routing level (askWorkerEngine).
     if (workerConfig.provider && workerConfig.provider !== 'ollama' && workerConfig.provider !== 'runpod') {
         if (!workerConfig.apiKey) throw new Error(`Worker Engine (${workerConfig.provider}) requires an API key. Run: redbus config`);
         return createCloudModel(workerConfig.provider, workerConfig.apiKey, workerConfig.model);
     }
 
-    // ── Ollama (Local CPU) path ──
-    const workerOllama = createOpenAI({
-        baseURL: `${workerConfig.url}/v1`,
-        apiKey: 'ollama',
-        fetch: async (url, init) => {
-            if (init?.body && typeof init.body === 'string') {
-                try {
-                    const body = JSON.parse(init.body);
-                    body.keep_alive = '60m';
-                    body.options = {
-                        ...body.options,
-                        num_thread: workerConfig.num_threads,
-                        num_ctx: workerConfig.num_ctx,
-                        num_gpu: 0,   // Force CPU-only — keep GPU free for Live Engine
-                    };
-                    init = { ...init, body: JSON.stringify(body) };
-                } catch { /* non-JSON body, pass through */ }
-            }
-            return globalThis.fetch(url, init);
-        },
-    });
+    // Legacy Ollama fallback (not recommended in cloud-first architecture)
+    if (workerConfig.provider === 'ollama') {
+        const workerOllama = createOpenAI({
+            baseURL: `${workerConfig.url || 'http://127.0.0.1:11434'}/v1`,
+            apiKey: 'ollama',
+        });
+        return workerOllama(workerConfig.model);
+    }
 
-    return workerOllama(workerConfig.model);
+    // Default: use Anthropic
+    if (!workerConfig.apiKey) throw new Error('Worker Engine requires an API key. Run: redbus config');
+    return createCloudModel('anthropic', workerConfig.apiKey, workerConfig.model);
 }
 
 // ─── Stream Callbacks ─────────────────────────────────────────────
@@ -225,89 +192,46 @@ export async function askTier1(
     messagesFromClient?: any[],
     senderRole: SenderRole = 'owner',
 ): Promise<CognitiveRouterResult> {
-    const { model: modelName } = getTier1Config();
+    const liveEngineConf = getLiveEngineConfig();
+    const modelName = liveEngineConf.model;
     const model = createTier1Model();
 
     // ──── Auto-RAG Pre-flight Injection ────
     const ragResult = await AutoRAG.enrich(prompt);
     const enrichedPrompt = ragResult.enrichedPrompt;
 
-    const tier1Config = getTier1Config();
-    const isGold = tier1Config.power_class === 'gold' || tier1Config.power_class === 'platinum';
+    // Cloud-First: All cloud models are treated as full-capability (Gold-class)
     const tools = CapabilityRegistry.getAvailableTools();
-
-    // Prevent weak Tier 1 from forging things or messing with structural shell commands
-    if (!isGold) {
-        delete (tools as any)['create_and_run_tool'];
-        delete (tools as any)['execute_shell_command'];
-    }
-
-    // 🛡️ GUARDRAIL: Strip dangerous/complex tools from bronze models.
-    // Bronze models (≤4096 tokens) hallucinate structured tool calls and can't
-    // reason about multi-step workflows (MCP install, visual inspection, etc.).
-    const isBronze = tier1Config.power_class === 'bronze';
-    const isSilver = tier1Config.power_class === 'silver';
-    if (isBronze) {
-        const complexityScore = calculateComplexityScore(prompt, messagesFromClient ?? []);
-        if (complexityScore < 50) {
-            delete (tools as any)['send_whatsapp_message'];
-            console.log(`  🛡️ [tier1] Guardrail: send_whatsapp_message stripped for bronze model (complexity score: ${complexityScore})`);
-        }
-        // Strip tools that require multi-step reasoning or carry heavy side effects
-        delete (tools as any)['install_mcp'];
-        delete (tools as any)['visual_inspect_page'];
-        delete (tools as any)['web_interact'];
-        delete (tools as any)['start_background_process'];
-        delete (tools as any)['schedule_recurring_task'];
-        console.log(`  🛡️ [tier1] Guardrail: install_mcp, visual_inspect_page, web_interact, start_background_process, schedule_recurring_task stripped for bronze model`);
-    }
-
-    // Silver models can handle most tools but MCP installation is still too complex
-    if (isSilver) {
-        delete (tools as any)['install_mcp'];
-        console.log(`  🛡️ [tier1] Guardrail: install_mcp stripped for silver model`);
-    }
 
     // 🛡️ Tool Policy: Strip owner-only tools for non-owner senders (system/scheduled)
     const filteredTools = senderRole === 'owner' ? tools : applyToolPolicy(tools as Record<string, unknown>, senderRole) as typeof tools;
 
-    // ─── System Prompt Construction (tier-aware context budget) ────
-    let systemPromptContext = getPersonaContext() + (isGold ? getSystemPromptTier1Gold() : getSystemPromptTier1());
-    if (isGold) {
-        // Gold/Platinum: full context — directive + manifest + wisdom
-        systemPromptContext += `\n\n${PROACTIVE_DIRECTIVE}\n\n${CapabilityRegistry.getCapabilityManifest()}`;
-    } else if (!isBronze) {
-        // Silver: manifest only (no directive, no wisdom)
-        systemPromptContext += `\n\n${CapabilityRegistry.getCapabilityManifest()}`;
-    }
-    // Bronze: NO manifest, NO wisdom — protect the 4096-token window
+    // ─── System Prompt Construction (full context for cloud models) ────
+    let systemPromptContext = getPersonaContext() + getSystemPromptTier1Gold();
+    systemPromptContext += `\n\n${PROACTIVE_DIRECTIVE}\n\n${CapabilityRegistry.getCapabilityManifest()}`;
 
-    // Cloud Wisdom injection — skip for bronze to avoid context overflow
-    if (!isBronze) {
-        try {
-            const wisdom = await MemoryManager.searchMemory('cloud_wisdom', prompt, 3);
-            if (wisdom && wisdom.length > 0) {
-                systemPromptContext += `\n\nPAST SUCCESSFUL EXAMPLES (Mimic this level of reasoning):\n`;
-                wisdom.forEach((w) => {
-                    systemPromptContext += `${w}\n\n`;
-                });
-            }
-        } catch (err) {
-            console.error('  ❌ [tier1] Failed to retrieve cloud wisdom:', err);
+    // Cloud Wisdom injection
+    try {
+        const wisdom = await MemoryManager.searchMemory('cloud_wisdom', prompt, 3);
+        if (wisdom && wisdom.length > 0) {
+            systemPromptContext += `\n\nPAST SUCCESSFUL EXAMPLES (Mimic this level of reasoning):\n`;
+            wisdom.forEach((w) => {
+                systemPromptContext += `${w}\n\n`;
+            });
         }
+    } catch (err) {
+        console.error('  ❌ [tier1] Failed to retrieve cloud wisdom:', err);
     }
 
-    // 📚 Skills injection — load relevant skill instructions (skip bronze)
-    if (!isBronze) {
-        try {
-            const skillPrompt = await getRelevantSkillPrompt(prompt);
-            if (skillPrompt) {
-                systemPromptContext += skillPrompt;
-                console.log(`  📚 [tier1] Skill prompt injected`);
-            }
-        } catch (err) {
-            console.error('  ❌ [tier1] Failed to load skills:', err);
+    // 📚 Skills injection — load relevant skill instructions
+    try {
+        const skillPrompt = await getRelevantSkillPrompt(prompt);
+        if (skillPrompt) {
+            systemPromptContext += skillPrompt;
+            console.log(`  📚 [tier1] Skill prompt injected`);
         }
+    } catch (err) {
+        console.error('  ❌ [tier1] Failed to load skills:', err);
     }
 
     let messages: any[];
@@ -815,8 +739,8 @@ export async function askTier2(
 // ─── Worker Engine: Background Heavy Task Execution ───────────────
 
 /**
- * askWorkerEngine — Executes a prompt on the Worker Engine (CPU/RAM-bound).
- * Used for heavy tasks like memory distillation, deep analysis, code review.
+ * askWorkerEngine — Executes a prompt on the Worker Engine (cloud-based).
+ * Used for heavy tasks like memory distillation, deep analysis, insight generation.
  * Runs synchronously (blocking) but is called from the HeartbeatManager's
  * independent worker loop, so it never blocks the Live chat.
  */
@@ -848,7 +772,7 @@ export async function askWorkerEngine(prompt: string): Promise<{ result: string;
     }
 
     const model = createWorkerModel();
-    console.log(`  🏗️ [worker] Processing on ${workerConfig.model} (CPU-only, ${workerConfig.num_threads} threads)...`);
+    console.log(`  🏗️ [worker] Processing on ${workerConfig.provider}/${workerConfig.model}...`);
 
     try {
         const result = streamText({
@@ -876,26 +800,30 @@ export async function askWorkerEngine(prompt: string): Promise<{ result: string;
 // ─── Live Engine Alias ────────────────────────────────────────────
 
 /**
- * askLiveEngine — Alias for askTier1. Uses the Live Engine (VRAM-bound)
- * for real-time chat. The Live Engine config falls back to tier1 if
- * live_engine is not explicitly configured in the Vault.
+ * askLiveEngine — Alias for askTier1. Uses the Live Engine (cloud API)
+ * for real-time chat.
  */
 export const askLiveEngine = askTier1;
 
 export function getRouterStatus(): {
-    tier1: { url: string; model: string; enabled: boolean };
+    tier1: { url: string; model: string; enabled: boolean; provider?: string };
     tier2: { provider: string; model: string; configured: boolean; authMethod?: string } | null;
-    workerEngine: { model: string; enabled: boolean; num_threads: number } | null;
+    workerEngine: { model: string; enabled: boolean; num_threads: number; provider?: string } | null;
     forgedTools: number;
 } {
-    const tier1 = getTier1Config();
+    const liveConfig = getLiveEngineConfig();
     const tier2Config = getTier2Config();
     const validation = validateTier2Config();
     const registryCount = ToolRegistry.getAll().length;
     const workerConfig = getWorkerEngineConfig();
 
     return {
-        tier1,
+        tier1: {
+            url: liveConfig.url,
+            model: liveConfig.model,
+            enabled: liveConfig.enabled,
+            provider: liveConfig.provider,
+        },
         tier2: tier2Config
             ? {
                 provider: tier2Config.provider,
@@ -909,6 +837,7 @@ export function getRouterStatus(): {
                 model: workerConfig.model,
                 enabled: true,
                 num_threads: workerConfig.num_threads,
+                provider: workerConfig.provider,
             }
             : null,
         forgedTools: registryCount,

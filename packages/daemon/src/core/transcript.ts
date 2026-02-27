@@ -29,7 +29,7 @@ import { Vault } from '@redbusagent/shared';
 const TOOL_OUTPUT_MAX_CHARS = 1000;
 /** Character budget for the context window injected into LLM prompts */
 const CONTEXT_BUDGET_CHARS = 4000;
-/** Smaller budget for Tier 1 prompts */
+/** Smaller budget for Live Engine prompts */
 const CONTEXT_BUDGET_CHARS_TIER1 = 2000;
 /** Max entries kept in the in-memory ring buffer */
 const RING_BUFFER_SIZE = 100;
@@ -266,7 +266,7 @@ export class Transcript {
         return CONTEXT_BUDGET_CHARS;
     }
 
-    /** Character budget for Tier 1 context window */
+    /** Character budget for Live Engine context window */
     static get contextBudgetCharsTier1(): number {
         return CONTEXT_BUDGET_CHARS_TIER1;
     }

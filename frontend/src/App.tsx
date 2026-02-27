@@ -102,22 +102,22 @@ function App() {
                         </h2>
                     </div>
 
-                    {/* ── Dual-Local Architecture Hero Card ── */}
+                    {/* ── Dual-Cloud Architecture Hero Card ── */}
                     <div className="mb-12 p-8 border-2 border-red-600 bg-gradient-to-br from-[#0a0000] to-[#1a0505] relative group">
                         <div className="absolute -top-4 -left-4 bg-red-600 text-black text-xs font-black uppercase px-3 py-1.5 rotate-[-3deg] tracking-widest">
-                            NEW — Dual-Local Architecture
+                            NEW — Dual-Cloud Architecture
                         </div>
                         <div className="flex flex-col md:flex-row gap-8 items-start mt-4">
                             <div className="flex-1 space-y-4">
                                 <h3 className="text-3xl font-black uppercase tracking-tight text-white">
-                                    Two Brains. One Machine. Zero Cloud.
+                                    Two Brains. All Cloud. Maximum Power.
                                 </h3>
                                 <p className="text-white/60 text-lg leading-relaxed">
-                                    Your GPU runs a small, ultra-fast model (<span className="text-red-400 font-bold">Live Engine</span>) for instant chat responses.
-                                    Meanwhile, your CPU + System RAM quietly runs a much larger model (<span className="text-blue-400 font-bold">Worker Engine</span>) in the background — handling deep analysis, memory distillation, and complex reasoning without ever blocking your conversation.
+                                    A fast, low-latency cloud model (<span className="text-red-400 font-bold">Live Engine</span>) handles your instant chat responses.
+                                    Meanwhile, a powerful reasoning model (<span className="text-blue-400 font-bold">Worker Engine</span>) runs in the background — handling deep analysis, memory distillation, and insight generation without ever blocking your conversation.
                                 </p>
                                 <p className="text-white/40">
-                                    4GB VRAM + 64GB RAM? Perfect. The Live Engine stays in your GPU. The Worker Engine lives in your RAM. They never compete.
+                                    Pick your providers: Gemini Flash for speed, Claude Sonnet for intelligence, or RunPod for your own GPU in the cloud. Mix and match.
                                 </p>
                             </div>
                             <div className="flex flex-col gap-3 min-w-[220px]">
@@ -125,14 +125,14 @@ function App() {
                                     <Zap size={20} className="text-red-500" />
                                     <div>
                                         <div className="text-sm font-bold text-red-400 uppercase">Live Engine</div>
-                                        <div className="text-xs text-white/40">GPU / VRAM — 30+ words/sec</div>
+                                        <div className="text-xs text-white/40">Cloud API — Low latency</div>
                                     </div>
                                 </div>
                                 <div className="flex items-center gap-3 p-3 border border-blue-600/40 bg-blue-600/5">
                                     <Cpu size={20} className="text-blue-500" />
                                     <div>
                                         <div className="text-sm font-bold text-blue-400 uppercase">Worker Engine</div>
-                                        <div className="text-xs text-white/40">CPU / RAM — Background tasks</div>
+                                        <div className="text-xs text-white/40">Cloud API — Deep reasoning</div>
                                     </div>
                                 </div>
                             </div>
@@ -163,7 +163,7 @@ function App() {
                         <FeatureCard
                             icon={<Shield size={28} strokeWidth={2.5} />}
                             title="AES-256 Vault"
-                            desc="API keys encrypted locally. Nothing leaves your machine. Sleep well."
+                            desc="API keys encrypted on disk with AES-256. Your credentials stay safe."
                         />
                         <FeatureCard
                             icon={<Play size={28} strokeWidth={2.5} />}
@@ -178,7 +178,7 @@ function App() {
                         <FeatureCard
                             icon={<Camera size={28} strokeWidth={2.5} />}
                             title="Multimodal Vision"
-                            desc="Playwright takes full-page screenshots and sends them to Tier 2 models for visual debugging. It doesn't just read the DOM — it sees the page."
+                            desc="Playwright takes full-page screenshots and sends them to the Worker Engine for visual debugging. It doesn't just read the DOM — it sees the page."
                         />
                         <FeatureCard
                             icon={<UserCircle size={28} strokeWidth={2.5} />}

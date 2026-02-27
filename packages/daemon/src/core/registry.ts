@@ -114,7 +114,7 @@ export class CapabilityRegistry {
 - 🧠 Memory (Two-Tier MemGPT Architecture):
   - Core Working Memory: Always visible in your system prompt. Update with core_memory_replace/core_memory_append.
   - Archival Memory: Long-term vector DB. Auto-RAG retrieves relevant chunks automatically. Use search_memory for deep searches.
-  - Distilled Wisdom: Cloud wisdom from past Tier 2 interactions is auto-injected.
+  - Distilled Wisdom: Cloud wisdom from past Worker Engine interactions is auto-injected.
 ${hasWhatsapp ? `- 📱 WhatsApp: You are connected to the user's WhatsApp. You can proactively send them messages using the send_whatsapp_message tool.` : ''}
 - ⏱️ Cron Scheduler: You can schedule, list, and remove recurring jobs using schedule_recurring_task, list_scheduled_tasks, remove_scheduled_task. Jobs are persisted to disk and survive daemon restarts. Cron triggers inject synthetic prompts into the TaskQueue — they never interrupt active LLM streams.
 - 🔄 Background Processes: You can start long-running commands (like servers) using start_background_process. The system will watch the logs and notify you if it crashes so you can fix it automatically. Use kill_background_process to stop them.

@@ -16,6 +16,7 @@ import {
     mkdirSync,
     readFileSync,
     writeFileSync,
+    statSync,
 } from 'node:fs';
 import crypto from 'node:crypto';
 
@@ -23,7 +24,7 @@ import crypto from 'node:crypto';
 
 export type Tier2Provider = 'anthropic' | 'google' | 'openai';
 
-/** Provider type for any engine slot (local, cloud, or RunPod serverless) */
+/** Provider type for any engine slot (cloud API or RunPod serverless) */
 export type EngineProvider = 'ollama' | 'anthropic' | 'google' | 'openai' | 'runpod';
 
 export interface VaultTier2Config {
@@ -44,16 +45,16 @@ export interface VaultTier1Config {
     readonly power_class?: Tier1PowerClass;
 }
 
-// ─── Dual-Local Architecture: Live Engine + Worker Engine ──────────
+// ─── Dual-Cloud Architecture: Live Engine + Worker Engine ──────────
 
 /**
- * Live Engine: Fast, small model for instant TUI/WhatsApp chat.
- * Default: Ollama (VRAM-bound GPU, 30+ tok/s).
- * Can also be a Cloud provider for users without local GPU.
+ * Live Engine: Fast, low-latency cloud model for instant TUI/WhatsApp chat.
+ * Default: Google Gemini 2.5 Flash (cheapest + fast).
+ * Also supports: Anthropic, OpenAI, RunPod Serverless.
  */
 export interface VaultLiveEngineConfig {
     readonly enabled: boolean;
-    /** Provider: 'ollama' for local, 'anthropic'/'google'/'openai' for cloud, 'runpod' for RunPod Serverless */
+    /** Provider: 'anthropic'/'google'/'openai' for cloud, 'runpod' for RunPod Serverless, 'ollama' for legacy local */
     readonly provider?: EngineProvider;
     readonly url: string;
     readonly model: string;
@@ -65,21 +66,21 @@ export interface VaultLiveEngineConfig {
 }
 
 /**
- * Worker Engine: Large model for heavy background tasks.
- * Default: Ollama on CPU/System RAM (e.g., 32B model on 64GB RAM).
- * Can also be a Cloud provider for offloading to cloud.
+ * Worker Engine: High-intelligence cloud model for background tasks.
+ * Default: Claude Sonnet 4 (best reasoning/cost ratio).
+ * Handles: memory distillation, insight generation, deep analysis.
  */
 export interface VaultWorkerEngineConfig {
     readonly enabled: boolean;
-    /** Provider: 'ollama' for local, 'anthropic'/'google'/'openai' for cloud, 'runpod' for RunPod Serverless */
+    /** Provider: 'anthropic'/'google'/'openai' for cloud, 'runpod' for RunPod Serverless, 'ollama' for legacy local */
     readonly provider?: EngineProvider;
     readonly url: string;
     readonly model: string;
     /** API key for cloud providers */
     readonly apiKey?: string;
-    /** Number of CPU threads to dedicate to worker inference (Ollama only) */
+    /** Number of CPU threads (legacy, only for Ollama) */
     readonly num_threads?: number;
-    /** Context window size for worker model (Ollama only) */
+    /** Context window size (legacy, only for Ollama) */
     readonly num_ctx?: number;
     /** RunPod Serverless endpoint ID (only when provider === 'runpod') */
     readonly runpod_endpoint_id?: string;
@@ -92,14 +93,14 @@ export interface VaultConfig {
     readonly tier2: VaultTier2Config;
     readonly tier1: VaultTier1Config;
 
-    // ─── Dual-Local Architecture ────────────────────────────────
-    /** Live Engine: Fast, small model for real-time chat (GPU/VRAM) */
+    // ─── Dual-Cloud Architecture ────────────────────────────────
+    /** Live Engine: Fast, low-latency cloud model for real-time chat */
     readonly live_engine?: VaultLiveEngineConfig;
-    /** Worker Engine: Heavy, large model for background tasks (CPU/RAM) */
+    /** Worker Engine: High-intelligence cloud model for background tasks */
     readonly worker_engine?: VaultWorkerEngineConfig;
 
     /**
-     * The default engine tier for chat communication (1 for local, 2 for cloud).
+     * The default engine tier for chat communication (1 for Live Engine, 2 for Worker Engine).
      */
     readonly default_chat_tier?: 1 | 2;
     /**
@@ -165,6 +166,8 @@ function getMasterKey(): Buffer {
 export class Vault {
     /** In-memory cache to avoid repeated disk reads */
     private static cache: VaultConfig | null | undefined = undefined;
+    /** mtime of config file when cache was last populated */
+    private static cacheMtimeMs: number | undefined = undefined;
 
     /** Path to the vault directory */
     static get dir(): string {
@@ -181,8 +184,24 @@ export class Vault {
         return existsSync(CONFIG_FILE);
     }
 
-    /** Read config from disk (with in-memory cache) */
+    /** Read config from disk (with mtime-aware cache) */
     static read(): VaultConfig | null {
+        // Check if file has been modified externally (e.g., by CLI while daemon is running)
+        if (this.cache !== undefined && this.cacheMtimeMs !== undefined) {
+            try {
+                const currentMtime = statSync(CONFIG_FILE).mtimeMs;
+                if (currentMtime !== this.cacheMtimeMs) {
+                    // File changed on disk — invalidate cache
+                    this.cache = undefined;
+                    this.cacheMtimeMs = undefined;
+                }
+            } catch {
+                // File may have been deleted — invalidate cache
+                this.cache = undefined;
+                this.cacheMtimeMs = undefined;
+            }
+        }
+
         if (this.cache !== undefined) return this.cache;
 
         if (!this.exists()) {
@@ -194,6 +213,7 @@ export class Vault {
             const raw = readFileSync(CONFIG_FILE, 'utf-8');
             const parsed = JSON.parse(raw) as VaultConfig;
             this.cache = parsed;
+            this.cacheMtimeMs = statSync(CONFIG_FILE).mtimeMs;
             return parsed;
         } catch {
             this.cache = null;
@@ -213,6 +233,7 @@ export class Vault {
         });
 
         this.cache = config;
+        try { this.cacheMtimeMs = statSync(CONFIG_FILE).mtimeMs; } catch { /* ignore */ }
     }
 
     /** Check if vault has valid Tier 2 credentials */
@@ -255,7 +276,7 @@ export class Vault {
         return `${config.owner_phone_number}@c.us`;
     }
 
-    /** Create a default config object */
+    /** Create a default config object (Cloud-First defaults) */
     static createDefault(overrides?: Partial<VaultConfig>): VaultConfig {
         return {
             version: CURRENT_VERSION,
@@ -266,28 +287,26 @@ export class Vault {
                 ...overrides?.tier2,
             },
             tier1: {
-                enabled: true,
-                url: 'http://127.0.0.1:11434',
-                model: 'llama3.2:1b',
-                power_class: 'bronze',
+                enabled: false,
+                url: '',
+                model: 'none',
                 ...overrides?.tier1,
             },
             live_engine: {
                 enabled: true,
-                url: 'http://127.0.0.1:11434',
-                model: 'llama3.2:3b',
-                power_class: 'bronze',
+                provider: 'google',
+                url: '',
+                model: 'gemini-2.5-flash',
                 ...overrides?.live_engine,
             },
             worker_engine: {
-                enabled: false,
-                url: 'http://127.0.0.1:11434',
-                model: 'qwen2.5-coder:14b',
-                num_threads: 8,
-                num_ctx: 8192,
+                enabled: true,
+                provider: 'anthropic',
+                url: '',
+                model: 'claude-sonnet-4-20250514',
                 ...overrides?.worker_engine,
             },
-            default_chat_tier: overrides?.default_chat_tier ?? 2,
+            default_chat_tier: overrides?.default_chat_tier ?? 1,
             credentials: {},
             sessions: {},
             mcps: {},

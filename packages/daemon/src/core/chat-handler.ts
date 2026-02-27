@@ -9,6 +9,7 @@ import type { DaemonWsServer } from '../infra/ws-server.js';
 import type { ChatRequestMessage } from '@redbusagent/shared';
 import { PersonaManager, Vault } from '@redbusagent/shared';
 import { askTier1, askTier2 } from './cognitive-router.js';
+import { getLiveEngineConfig } from '../infra/llm-config.js';
 import { resolveSenderRole } from './tool-policy.js';
 import { calculateComplexityScore } from './heuristic-router.js';
 import { CoreMemory } from './core-memory.js';
@@ -175,7 +176,7 @@ Return ONLY the JSON object. Do not explain.`;
             return;
         }
 
-        // Trivial escape hatch force-routing to local engine (Slash Command menu equivalent)
+        // Trivial escape hatch force-routing to Live Engine (Slash Command menu equivalent)
         if (content.trim().toLowerCase().startsWith('/local')) {
             targetTier = 'tier1';
             content = content.replace(/^\/local\s*/i, '');
@@ -183,8 +184,8 @@ Return ONLY the JSON object. Do not explain.`;
 
         // ─── Intent Classifier Pre-flight ─────────────────────────────────────
         if (!isOnboarding && content.trim() !== '' && !this.forceTier1 && !tier) {
-            const vaultTier1 = vaultConfig?.tier1;
-            const powerClass = (vaultTier1 as any)?.power_class || 'bronze';
+            // Cloud-First: all models are treated as full-capability
+            const powerClass = 'gold';
             const workerEnabled = vaultConfig?.worker_engine?.enabled ?? false;
 
             console.log(`  🕵️‍♂️ [pre-router] Calculating heuristic complexity score...`);
@@ -196,7 +197,7 @@ Return ONLY the JSON object. Do not explain.`;
                 targetTier = 'tier1';
             }
 
-            // ─── Dual-Local: Delegate heavy background tasks to Worker Queue ──
+            // ─── Dual-Cloud: Delegate heavy background tasks to Worker Queue ──
             // If the Worker Engine is enabled and the score indicates heavy work,
             // enqueue a background analysis task and let the Live Engine handle
             // a quick acknowledgement instead of blocking the chat.
@@ -221,7 +222,14 @@ Return ONLY the JSON object. Do not explain.`;
                     payload: { level: 'info', source: 'Router', message: `🧠 [Router]: Complexity Score ${score}/100 → Delegated to Worker Engine (background task ${taskId.slice(0, 12)})` }
                 });
             } else {
-                const engineLabel = targetTier === 'tier1' ? 'Live Engine (Local)' : 'Cloud Engine';
+                let engineLabel: string;
+                if (targetTier === 'tier1') {
+                    const liveConf = getLiveEngineConfig();
+                    const providerLabel = liveConf.provider ?? 'Cloud';
+                    engineLabel = `Live Engine (${providerLabel}/${liveConf.model})`;
+                } else {
+                    engineLabel = 'Cloud Engine';
+                }
                 this.wsServer.broadcast({
                     type: 'log',
                     timestamp: new Date().toISOString(),
@@ -230,7 +238,7 @@ Return ONLY the JSON object. Do not explain.`;
             }
         }
 
-        // Fallback targetTier to tier1 just in case somehow it is undefined
+        // Fallback targetTier to Live Engine just in case somehow it is undefined
         targetTier = targetTier || 'tier1';
 
         console.log(`  🧠 [${targetTier}] Processing request ${requestId.slice(0, 8)}... from ${clientId}`);

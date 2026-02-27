@@ -77,7 +77,7 @@ export function executeReset(categories: ResetCategory[]): ResetResult[] {
                     const { live_engine, worker_engine, tier1, tier2, tier2_enabled, default_chat_tier, hardware_profile, ...rest } = config;
                     Vault.write(rest as typeof config);
                     Vault.clearCache();
-                    result.filesDeleted.push('config.json [live_engine, worker_engine, tier1, tier2, hardware_profile cleared]');
+                    result.filesDeleted.push('config.json [live_engine, worker_engine, legacy tier1/tier2, hardware_profile cleared]');
                 }
                 break;
             }
@@ -149,7 +149,7 @@ export function buildResetPreview(categories: ResetCategory[]): string {
                 lines.push('👤 Persona: persona.json (name, personality, guidelines)');
                 break;
             case 'engines':
-                lines.push('🤖 Engines (LLMs): Live Engine, Worker Engine, Tier 1/2, hardware profile');
+                lines.push('🤖 Engines (LLMs): Live Engine, Worker Engine, hardware profile');
                 lines.push('    → Keeps MCPs, persona, memory, credentials intact');
                 break;
             case 'configuration':
