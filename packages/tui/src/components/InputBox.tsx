@@ -88,9 +88,10 @@ export function InputBox(props: InputBoxProps): React.ReactElement {
                     {activeMenu === 'main' && (
                         <SelectInput
                             items={[
-                                { label: `🔄 /toggle-tier    - Current: Tier ${defaultTier} (${defaultTier === 1 ? 'Local' : 'Cloud'})`, value: 'toggle-tier' },
+                                { label: `🔄 /toggle-tier    - Current: ${defaultTier === 1 ? 'Live Engine (Local)' : 'Cloud'}`, value: 'toggle-tier' },
+                                { label: '🏗️  /worker         - Send to Worker Engine (heavy task)', value: 'worker' },
                                 { label: '🤖 /auto-route     - Restore Cognitive Routing', value: 'auto-route' },
-                                { label: '☁️  /switch-cloud  - Change Tier 2 Provider', value: 'switch-cloud' },
+                                { label: '☁️  /switch-cloud  - Change Cloud Provider', value: 'switch-cloud' },
                                 { label: '🔌 /mcp install    - Install new MCP Server', value: 'mcp-install' },
                                 { label: '🔄 /update          - Install New Version', value: 'update' },
                                 { label: '📊 /status        - Daemon & Model Status', value: 'status' },

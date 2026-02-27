@@ -2,7 +2,7 @@
  * @redbusagent/daemon — Model Fallback
  *
  * Simplified model fallback inspired by openclaw's model-fallback.ts.
- * Manages a candidate chain for Tier 2 providers and handles
+ * Manages a candidate chain for Cloud providers and handles
  * error classification, cooldowns, and automatic switching.
  */
 

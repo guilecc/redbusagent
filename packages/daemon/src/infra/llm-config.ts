@@ -8,12 +8,12 @@
  * (e.g. via `redbus config`) take effect without daemon restart.
  */
 
-import { Vault, type VaultConfig, type Tier2Provider } from '@redbusagent/shared';
+import { Vault, type VaultConfig, type Tier2Provider, type EngineProvider } from '@redbusagent/shared';
 
 // Re-export the type for convenience
-export type { Tier2Provider };
+export type { Tier2Provider, EngineProvider };
 
-// ─── Tier 1 (Ollama / Local) ──────────────────────────────────────
+// ─── Tier 1 (Ollama / Local) — backward compat ───────────────────
 
 export function getTier1Config(): { url: string; model: string; enabled: boolean; power_class?: string } {
     const config = Vault.read();
@@ -25,9 +25,18 @@ export function getTier1Config(): { url: string; model: string; enabled: boolean
     };
 }
 
-// ─── Live Engine (VRAM-bound, real-time chat) ─────────────────────
+// ─── Live Engine (real-time chat — local or cloud) ────────────────
 
-export function getLiveEngineConfig(): { url: string; model: string; enabled: boolean; power_class?: string } {
+export interface LiveEngineConfig {
+    url: string;
+    model: string;
+    enabled: boolean;
+    power_class?: string;
+    provider: EngineProvider;
+    apiKey?: string;
+}
+
+export function getLiveEngineConfig(): LiveEngineConfig {
     const config = Vault.read();
     // Fall back to tier1 config if live_engine not configured (backward compat)
     if (config?.live_engine) {
@@ -36,12 +45,15 @@ export function getLiveEngineConfig(): { url: string; model: string; enabled: bo
             model: config.live_engine.model ?? 'llama3.2:3b',
             enabled: config.live_engine.enabled ?? true,
             power_class: config.live_engine.power_class,
+            provider: config.live_engine.provider ?? 'ollama',
+            apiKey: config.live_engine.apiKey,
         };
     }
-    return getTier1Config();
+    const t1 = getTier1Config();
+    return { ...t1, provider: 'ollama' };
 }
 
-// ─── Worker Engine (RAM-bound, background heavy tasks) ────────────
+// ─── Worker Engine (background heavy tasks — local or cloud) ──────
 
 export interface WorkerEngineConfig {
     url: string;
@@ -49,6 +61,8 @@ export interface WorkerEngineConfig {
     enabled: boolean;
     num_threads: number;
     num_ctx: number;
+    provider: EngineProvider;
+    apiKey?: string;
 }
 
 export function getWorkerEngineConfig(): WorkerEngineConfig {
@@ -59,6 +73,8 @@ export function getWorkerEngineConfig(): WorkerEngineConfig {
         enabled: config?.worker_engine?.enabled ?? false,
         num_threads: config?.worker_engine?.num_threads ?? 8,
         num_ctx: config?.worker_engine?.num_ctx ?? 8192,
+        provider: config?.worker_engine?.provider ?? 'ollama',
+        apiKey: config?.worker_engine?.apiKey,
     };
 }
 

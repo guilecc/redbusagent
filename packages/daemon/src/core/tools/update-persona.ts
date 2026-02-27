@@ -9,7 +9,7 @@ export const updatePersonaTool = tool({
     }),
     execute: async (params: { new_guidelines: string }) => {
         try {
-            // We use Tier 2 inside the tool to effectively merge the guidelines if needed, 
+            // We use the Cloud/Worker Engine inside the tool to merge the guidelines if needed,
             // but for simplicity here we can just update the behavioral_guidelines field 
             // or even better, append to it. 
             // However, the requirement says "Overwrites or merges the new instructions into the persona.json file."

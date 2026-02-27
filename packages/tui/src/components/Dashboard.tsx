@@ -189,7 +189,7 @@ export function Dashboard(): React.ReactElement {
             let actualCmd = '';
             let rest = '';
 
-            const commands = ['/toggle-tier', '/model', '/switch-cloud', '/auto-route', '/status', '/update'];
+            const commands = ['/toggle-tier', '/model', '/switch-cloud', '/auto-route', '/status', '/update', '/worker', '/deep'];
             for (const c of commands) {
                 if (finalMessage.startsWith(c)) {
                     actualCmd = c;
@@ -200,19 +200,46 @@ export function Dashboard(): React.ReactElement {
             }
 
             if (handled) {
-                if (actualCmd === '/toggle-tier') {
+                if (actualCmd === '/worker' || actualCmd === '/deep') {
+                    // Delegate the rest of the message to the Worker Engine
+                    if (!rest) {
+                        setChatLines((prev) => [
+                            ...prev.slice(-(MAX_CHAT_LINES - 1)),
+                            `⚠️ Usage: /worker <your prompt>  — Sends the prompt to the Worker Engine for deep processing.`
+                        ]);
+                        return;
+                    }
+                    const config = Vault.read();
+                    if (!config?.worker_engine?.enabled) {
+                        setChatLines((prev) => [
+                            ...prev.slice(-(MAX_CHAT_LINES - 1)),
+                            `❌ Worker Engine is disabled. Run ${'\x1b[1m'}redbus config${'\x1b[0m'} to enable it.`
+                        ]);
+                        return;
+                    }
+                    setChatLines((prev) => [
+                        ...prev.slice(-(MAX_CHAT_LINES - 1)),
+                        `🏗️ Delegating to Worker Engine: "${rest.slice(0, 80)}${rest.length > 80 ? '...' : ''}"`
+                    ]);
+                    clientRef.current?.send({
+                        type: 'system:command',
+                        timestamp: new Date().toISOString(),
+                        payload: { command: 'force-worker' as any, args: { content: rest } }
+                    });
+                    return;
+                } else if (actualCmd === '/toggle-tier') {
                     const nextTier = defaultTier === 1 ? 2 : 1;
                     const config = Vault.read();
                     if (nextTier === 2 && config?.tier2_enabled === false) {
                         setChatLines((prev) => [
                             ...prev.slice(-(MAX_CHAT_LINES - 1)),
-                            `❌ Tier 2 Cloud is disabled. Run redbus config to configure an API key, or continue using Tier 1.`
+                            `❌ Cloud is disabled. Run redbus config to configure an API key.`
                         ]);
                         return;
                     }
                     setDefaultTier(nextTier);
                     currentTierForLog = nextTier;
-                    const modeText = nextTier === 1 ? 'Tier 1 (Local)' : 'Tier 2 (Cloud)';
+                    const modeText = nextTier === 1 ? 'Live Engine (Local)' : 'Cloud';
                     const warning = nextTier === 2 ? ' Warning: API costs will now apply.' : '';
                     setChatLines((prev) => [
                         ...prev.slice(-(MAX_CHAT_LINES - 1)),
@@ -297,7 +324,7 @@ export function Dashboard(): React.ReactElement {
         }
 
         clientRef.current.send(chatRequest);
-        addLog(`Sent to Tier ${currentTierForLog}: "${finalMessage.slice(0, 50)}${finalMessage.length > 50 ? '...' : ''}"`, 'cyan');
+        addLog(`Sent to ${currentTierForLog === 1 ? 'Live Engine' : 'Cloud'}: "${finalMessage.slice(0, 50)}${finalMessage.length > 50 ? '...' : ''}"`, 'cyan');
     }, [isStreaming, addLog, isOnboarding, defaultTier]);
 
     // ── Approval Gate Handler ─────────────────────────────────
@@ -532,19 +559,26 @@ export function Dashboard(): React.ReactElement {
             setMcpInputStr('');
         } else if (value === 'switch-cloud') {
             setActiveMenu('cloud');
+        } else if (value === 'worker') {
+            // /worker from slash menu — close menu and show usage hint
+            setIsSlashMenuOpen(false);
+            setChatLines((prev) => [
+                ...prev.slice(-(MAX_CHAT_LINES - 1)),
+                `💡 Type: /worker <your prompt> to send a task to the Worker Engine.`
+            ]);
         } else if (value === 'toggle-tier') {
             const nextTier = defaultTier === 1 ? 2 : 1;
             const config = Vault.read();
             if (nextTier === 2 && config?.tier2_enabled === false) {
                 setChatLines((prev) => [
                     ...prev.slice(-(MAX_CHAT_LINES - 1)),
-                    `❌ Tier 2 Cloud is disabled. Run redbus config to configure an API key, or continue using Tier 1.`
+                    `❌ Cloud is disabled. Run redbus config to configure an API key.`
                 ]);
                 setIsSlashMenuOpen(false);
                 return;
             }
             setDefaultTier(nextTier);
-            const modeText = nextTier === 1 ? 'Tier 1 (Local)' : 'Tier 2 (Cloud)';
+            const modeText = nextTier === 1 ? 'Live Engine (Local)' : 'Cloud';
             const warning = nextTier === 2 ? ' Warning: API costs will now apply.' : '';
             setChatLines((prev) => [
                 ...prev.slice(-(MAX_CHAT_LINES - 1)),

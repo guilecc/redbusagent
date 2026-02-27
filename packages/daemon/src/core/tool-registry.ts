@@ -6,7 +6,7 @@
  * tool that can be re-invoked by the LLM via Function Calling.
  *
  * On startup, registered tools are loaded and injected into the
- * Tier 2 tools array so the LLM "remembers" what it can do.
+ * Cloud/Worker Engine tools array so the LLM "remembers" what it can do.
  */
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';

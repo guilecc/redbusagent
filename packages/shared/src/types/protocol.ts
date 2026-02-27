@@ -91,7 +91,7 @@ export interface ChatStreamDoneMessage extends BaseMessage {
         readonly requestId: string;
         /** Full accumulated response text */
         readonly fullText: string;
-        /** Which tier/engine handled this request */
+        /** Which engine handled this request (tier1=Live, tier2=Cloud, worker=Worker) */
         readonly tier: 'tier1' | 'tier2' | 'worker';
         /** Model identifier used */
         readonly model: string;
@@ -227,7 +227,7 @@ export interface ChatRequestMessage extends BaseMessage {
 export interface SystemCommandMessage extends BaseMessage {
     readonly type: 'system:command';
     readonly payload: {
-        readonly command: 'force-local' | 'auto-route' | 'switch-cloud' | 'status' | 'set-default-tier';
+        readonly command: 'force-local' | 'auto-route' | 'switch-cloud' | 'status' | 'set-default-tier' | 'force-worker';
         readonly args?: Record<string, unknown>;
     };
 }

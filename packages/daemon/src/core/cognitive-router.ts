@@ -68,13 +68,39 @@ function getPersonaContext(): string {
 
 import { OllamaManager } from './ollama-manager.js';
 
+/** Creates a cloud LanguageModel from a provider name + apiKey + model */
+function createCloudModel(provider: string, apiKey: string, model: string): LanguageModel {
+    switch (provider) {
+        case 'anthropic': {
+            const anthropic = createAnthropic({ apiKey });
+            return anthropic(model);
+        }
+        case 'google': {
+            const google = createGoogleGenerativeAI({ apiKey });
+            return google(model);
+        }
+        case 'openai': {
+            const openai = createOpenAI({ apiKey });
+            return openai(model);
+        }
+        default:
+            throw new Error(`Unknown cloud provider: ${provider}`);
+    }
+}
+
 function createTier1Model(): LanguageModel {
+    const liveConfig = getLiveEngineConfig();
+
+    // ── Hybrid: If Live Engine is a cloud provider, use cloud model factory ──
+    if (liveConfig.provider && liveConfig.provider !== 'ollama') {
+        if (!liveConfig.apiKey) throw new Error(`Live Engine (${liveConfig.provider}) requires an API key. Run: redbus config`);
+        return createCloudModel(liveConfig.provider, liveConfig.apiKey, liveConfig.model);
+    }
+
+    // ── Ollama (Local) path ──
     const { model, power_class } = getTier1Config();
 
-    // ── Ollama Inference Optimizer ──
     // Inject hardware-aware options into every Ollama API request via custom fetch.
-    // These options are Ollama-native and NOT part of the OpenAI-compatible spec,
-    // so we intercept the request body and inject them transparently.
     const bronzeOptions: Record<string, unknown> = power_class === 'bronze'
         ? {
             num_thread: 8,    // Pin to physical cores — avoids context-switching overhead
@@ -135,11 +161,18 @@ export function createTier2Model(): LanguageModel {
 }
 
 
-// ─── Worker Engine Model Factory (CPU/RAM-bound) ─────────────────
+// ─── Worker Engine Model Factory (local CPU/RAM or cloud) ────────
 
 export function createWorkerModel(): LanguageModel {
     const workerConfig = getWorkerEngineConfig();
 
+    // ── Hybrid: If Worker Engine is a cloud provider, use cloud model factory ──
+    if (workerConfig.provider && workerConfig.provider !== 'ollama') {
+        if (!workerConfig.apiKey) throw new Error(`Worker Engine (${workerConfig.provider}) requires an API key. Run: redbus config`);
+        return createCloudModel(workerConfig.provider, workerConfig.apiKey, workerConfig.model);
+    }
+
+    // ── Ollama (Local CPU) path ──
     const workerOllama = createOpenAI({
         baseURL: `${workerConfig.url}/v1`,
         apiKey: 'ollama',

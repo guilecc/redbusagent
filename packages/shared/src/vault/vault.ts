@@ -23,6 +23,9 @@ import crypto from 'node:crypto';
 
 export type Tier2Provider = 'anthropic' | 'google' | 'openai';
 
+/** Provider type for any engine slot (local or cloud) */
+export type EngineProvider = 'ollama' | 'anthropic' | 'google' | 'openai';
+
 export interface VaultTier2Config {
     readonly provider: Tier2Provider;
     readonly model: string;
@@ -44,28 +47,37 @@ export interface VaultTier1Config {
 // ─── Dual-Local Architecture: Live Engine + Worker Engine ──────────
 
 /**
- * Live Engine: VRAM-bound, ultra-fast, small model for instant TUI/WhatsApp chat.
- * Runs on GPU for real-time responsiveness (30+ tok/s).
+ * Live Engine: Fast, small model for instant TUI/WhatsApp chat.
+ * Default: Ollama (VRAM-bound GPU, 30+ tok/s).
+ * Can also be a Cloud provider for users without local GPU.
  */
 export interface VaultLiveEngineConfig {
     readonly enabled: boolean;
+    /** Provider: 'ollama' for local, or 'anthropic'/'google'/'openai' for cloud */
+    readonly provider?: EngineProvider;
     readonly url: string;
     readonly model: string;
     readonly power_class?: Tier1PowerClass;
+    /** API key for cloud providers */
+    readonly apiKey?: string;
 }
 
 /**
- * Worker Engine: RAM-bound, large model for heavy background tasks.
- * Runs on CPU/System RAM (e.g., 32B model on 64GB RAM).
- * Slow but powerful — processes HeavyTaskQueue asynchronously.
+ * Worker Engine: Large model for heavy background tasks.
+ * Default: Ollama on CPU/System RAM (e.g., 32B model on 64GB RAM).
+ * Can also be a Cloud provider for offloading to cloud.
  */
 export interface VaultWorkerEngineConfig {
     readonly enabled: boolean;
+    /** Provider: 'ollama' for local, or 'anthropic'/'google'/'openai' for cloud */
+    readonly provider?: EngineProvider;
     readonly url: string;
     readonly model: string;
-    /** Number of CPU threads to dedicate to worker inference */
+    /** API key for cloud providers */
+    readonly apiKey?: string;
+    /** Number of CPU threads to dedicate to worker inference (Ollama only) */
     readonly num_threads?: number;
-    /** Context window size for worker model */
+    /** Context window size for worker model (Ollama only) */
     readonly num_ctx?: number;
 }
 
