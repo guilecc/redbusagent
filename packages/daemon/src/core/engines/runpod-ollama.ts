@@ -59,6 +59,8 @@ export interface RunPodOllamaResponse {
 
 const RUNPOD_API_BASE = 'https://api.runpod.ai/v2';
 const RUNSYNC_TIMEOUT_MS = 300_000; // 5 minutes max for /runsync
+const RUN_POLL_INTERVAL_MS = 2_000; // poll every 2s when using /run
+const RUN_MAX_POLL_MS = 600_000;    // 10 minutes max poll time
 
 // ─── Public API ───────────────────────────────────────────────────
 
@@ -137,12 +139,56 @@ export async function executeRunpodOllama(opts: RunPodOllamaOptions): Promise<Ru
     }
 
     if (result.status !== 'COMPLETED') {
-        throw new Error(`RunPod job did not complete synchronously (status: ${result.status}). Consider using /run instead.`);
+        // ── C3: Fallback to polling if /runsync didn't complete ──
+        console.log(`  🔄 [runpod] Job ${result.id} not completed (${result.status}), falling back to polling...`);
+        return pollForCompletion(result.id, apiKey, endpointId, opts.model);
     }
 
     return parseRunPodOutput(result.output, opts.model);
 }
 
+/**
+ * Submit a job via /run (async) and poll for result.
+ * Useful for long-running tasks that exceed /runsync timeout.
+ */
+export async function executeRunpodOllamaAsync(opts: RunPodOllamaOptions): Promise<RunPodOllamaResponse> {
+    const config = Vault.read();
+    const apiKey = opts.apiKey ?? config?.runpod_api_key;
+    const endpointId = opts.endpointId ?? getEndpointIdFromConfig(config);
+
+    if (!apiKey) throw new Error('RunPod API key not configured.');
+    if (!endpointId) throw new Error('RunPod Endpoint ID not configured.');
+
+    const ollamaPayload: Record<string, unknown> = {
+        model: opts.model,
+        messages: opts.messages,
+        stream: false,
+    };
+    if (opts.system) {
+        ollamaPayload['messages'] = [{ role: 'system', content: opts.system }, ...opts.messages];
+    }
+    if (opts.tools?.length) ollamaPayload['tools'] = opts.tools;
+    if (opts.options) ollamaPayload['options'] = opts.options;
+
+    const runpodPayload = { input: { method: '/api/chat', data: ollamaPayload } };
+    const url = `${RUNPOD_API_BASE}/${endpointId}/run`;
+
+    console.log(`  🚀 [runpod/async] Submitting to ${endpointId} — model: ${opts.model}`);
+
+    const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(runpodPayload),
+    });
+
+    if (!response.ok) {
+        const errorText = await response.text().catch(() => 'unknown error');
+        throw new Error(`RunPod /run error (${response.status}): ${errorText}`);
+    }
+
+    const result = await response.json() as RunPodSyncResponse;
+    return pollForCompletion(result.id, apiKey, endpointId, opts.model);
+}
 
 
 // ─── Internal Types ───────────────────────────────────────────────
@@ -164,6 +210,46 @@ function getEndpointIdFromConfig(config: ReturnType<typeof Vault.read>): string 
     if (!config) return undefined;
     return config.live_engine?.runpod_endpoint_id
         ?? config.worker_engine?.runpod_endpoint_id;
+}
+
+/**
+ * C3: Poll RunPod /status/{id} until job completes or times out.
+ */
+async function pollForCompletion(
+    jobId: string,
+    apiKey: string,
+    endpointId: string,
+    requestedModel: string,
+): Promise<RunPodOllamaResponse> {
+    const statusUrl = `${RUNPOD_API_BASE}/${endpointId}/status/${jobId}`;
+    const deadline = Date.now() + RUN_MAX_POLL_MS;
+
+    while (Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, RUN_POLL_INTERVAL_MS));
+
+        const resp = await fetch(statusUrl, {
+            headers: { 'Authorization': `Bearer ${apiKey}` },
+        });
+
+        if (!resp.ok) {
+            throw new Error(`RunPod status poll failed (${resp.status})`);
+        }
+
+        const status = await resp.json() as RunPodSyncResponse;
+
+        if (status.status === 'COMPLETED') {
+            console.log(`  ✅ [runpod] Job ${jobId} completed via polling`);
+            return parseRunPodOutput(status.output, requestedModel);
+        }
+
+        if (status.status === 'FAILED') {
+            throw new Error(`RunPod job ${jobId} failed: ${JSON.stringify(status.error ?? status.output)}`);
+        }
+
+        // Still IN_QUEUE or IN_PROGRESS — keep polling
+    }
+
+    throw new Error(`RunPod job ${jobId} timed out after ${RUN_MAX_POLL_MS / 1000}s of polling`);
 }
 
 /**
