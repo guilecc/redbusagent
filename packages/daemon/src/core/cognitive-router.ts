@@ -909,20 +909,20 @@ export function getRouterStatus(): {
             enabled: liveConfig.enabled,
             provider: liveConfig.provider,
         },
-        tier2: tier2Config
+        tier2: workerConfig.enabled
             ? {
-                provider: tier2Config.provider,
-                model: tier2Config.model,
-                configured: validation.valid,
-                authMethod: validation.authMethod,
+                provider: workerConfig.provider || 'anthropic',
+                model: workerConfig.model || 'none',
+                configured: workerConfig.provider === 'ollama' || !!workerConfig.apiKey,
+                authMethod: workerConfig.provider === 'ollama' ? 'Local API' : 'API key',
             }
             : null,
         workerEngine: workerConfig.enabled
             ? {
-                model: workerConfig.model,
+                model: workerConfig.model || 'none',
                 enabled: true,
                 num_threads: workerConfig.num_threads,
-                provider: workerConfig.provider,
+                provider: workerConfig.provider || 'anthropic',
             }
             : null,
         forgedTools: registryCount,

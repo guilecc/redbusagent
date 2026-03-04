@@ -26,7 +26,7 @@ import { getRouterStatus } from './core/cognitive-router.js';
 import { getLiveEngineConfig } from './infra/llm-config.js';
 import { Forge } from './core/forge.js';
 import { ToolRegistry } from './core/tool-registry.js';
-// OllamaManager removed — Cloud-First architecture (no local engine management)
+import { OllamaManager } from './core/ollama-manager.js';
 import { WhatsAppChannel } from './channels/whatsapp.js';
 import { CoreMemory } from './core/core-memory.js';
 import { MCPEngine } from './core/mcp-engine.js';
@@ -51,6 +51,9 @@ Forge.ensureWorkspace();
 ToolRegistry.ensureFile();
 CoreMemory.ensureFile();
 await MCPEngine.getInstance().initialize();
+
+// Initialize Ollama Engine (downloads binary and configured local models if any)
+await OllamaManager.startup();
 
 // Display vault status
 if (Vault.isConfigured()) {
@@ -227,7 +230,7 @@ whatsapp.startSilent().catch(err => {
 async function shutdown(signal: string): Promise<void> {
     console.log(`\n  🛑 Received ${signal}. Shutting down gracefully...`);
     heartbeat.stop();
-    // Cloud-First: no local engine to shut down
+    OllamaManager.shutdown();
     await MCPEngine.getInstance().stop();
     await whatsapp.stop();
     TaskScheduler.stopAll();

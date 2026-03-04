@@ -160,17 +160,26 @@ export class OllamaManager {
     }
 
     private static async ensureModels(): Promise<void> {
-        // Read the user's configured Live Engine model from the Vault instead of hardcoding.
-        // Only pull the configured model + the embedding model (nomic-embed-text).
+        // Read the user's configured models from the Vault.
+        // We ensure `nomic-embed-text` for memory embeddings.
         const config = Vault.read();
-        const configuredModel = config?.live_engine?.model ?? config?.tier1?.model;
 
-        // Only require the embedding model. The user's Live Engine model is pulled during onboarding.
-        // If it's already present, this is a no-op.
         const REQUIRED_MODELS: string[] = ['nomic-embed-text'];
-        if (configuredModel) {
-            REQUIRED_MODELS.push(configuredModel);
+
+        // Add Live Engine model if it's local
+        if (config?.live_engine?.provider === 'ollama' && config?.live_engine?.model) {
+            REQUIRED_MODELS.push(config.live_engine.model);
+        } else if (config?.tier1?.model && (!config?.live_engine || config.live_engine.provider === 'ollama')) {
+            REQUIRED_MODELS.push(config.tier1.model);
         }
+
+        // Add Worker Engine model if it's local
+        if (config?.worker_engine?.enabled && config?.worker_engine?.provider === 'ollama' && config?.worker_engine?.model) {
+            REQUIRED_MODELS.push(config.worker_engine.model);
+        }
+
+        // De-duplicate models
+        const uniqueModels = Array.from(new Set(REQUIRED_MODELS));
 
         try {
             const res = await fetch(`http://127.0.0.1:${this.port}/api/tags`);
@@ -179,7 +188,7 @@ export class OllamaManager {
             const data = await res.json() as { models: Array<{ name: string }> };
             const existingModels = data.models.map(m => m.name);
 
-            for (const model of REQUIRED_MODELS) {
+            for (const model of uniqueModels) {
                 // If model exists (or a variant of it), skip.
                 // Ollama tags append :latest if none specified, so simplistic matching:
                 if (!existingModels.some(m => m === model || m === `${model}:latest` || m.startsWith(`${model}:`))) {
