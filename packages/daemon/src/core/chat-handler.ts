@@ -131,13 +131,12 @@ Extract the following information into a JSON object:
 }
 Return ONLY the JSON object. Do not explain.`;
 
-            const result = await askFnOnboarding(onboardingPrompt, {
-                onChunk: (delta) => {
+            const callbacks = {
+                onChunk: (delta: string) => {
                     // We don't stream the raw JSON parsing to the user
                 },
-                onDone: (fullText) => {
+                onDone: (fullText: string) => {
                     try {
-                        // Extract JSON from potential code blocks
                         const jsonMatch = fullText.match(/\{[\s\S]*\}/);
                         if (jsonMatch) {
                             const persona = JSON.parse(jsonMatch[0]);
@@ -154,14 +153,22 @@ Return ONLY the JSON object. Do not explain.`;
                         console.error('  ❌ [onboarding] Failed to parse persona JSON:', err);
                     }
                 },
-                onError: (error) => {
+                onError: (error: Error) => {
                     this.wsServer.broadcast({
                         type: 'chat:error',
                         timestamp: new Date().toISOString(),
                         payload: { requestId, error: `Falha no onboarding: ${error.message}` },
                     });
                 }
-            });
+            };
+
+            const disableOpts = { disableTools: true };
+            let result;
+            if (targetTier === 'cloud') {
+                result = await askTier2(onboardingPrompt, callbacks, undefined, undefined, 'owner', disableOpts);
+            } else {
+                result = await askLive(onboardingPrompt, callbacks, undefined, 'owner', disableOpts);
+            }
 
             this.wsServer.broadcast({
                 type: 'chat:stream:done',

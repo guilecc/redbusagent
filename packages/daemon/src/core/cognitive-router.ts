@@ -212,6 +212,36 @@ export function createWorkerModel(): LanguageModel {
     return createCloudModel('anthropic', workerConfig.apiKey, workerConfig.model);
 }
 
+// ─── Gemma 3 Explicit Tool Calling Adapter ────────────────────────
+export function generateGemma3ToolPrompt(tools: Record<string, any>): string {
+    const schemas = Object.entries(tools).map(([name, tool]) => {
+        let schema = {};
+        if (tool.parameters?.jsonSchema) {
+            schema = tool.parameters.jsonSchema;
+        } else if (tool.inputSchema?.jsonSchema) {
+            schema = tool.inputSchema.jsonSchema;
+        } else {
+            // Fallback for tools without explicit inner jsonSchema
+            schema = tool.parameters || tool.inputSchema || {};
+        }
+        return {
+            name,
+            description: tool.description,
+            parameters: schema
+        };
+    });
+
+    return `\n\nYou have access to the following tools:
+${JSON.stringify(schemas, null, 2)}
+
+To use a tool, you MUST output a JSON block wrapped EXACTLY in these XML tags:
+<tool_call>
+{"name": "tool_name", "arguments": {"param1": "value1"}}
+</tool_call>
+
+Do not add any other text inside the <tool_call> tags. If you do not need to use a tool, simply reply to the user normally.`;
+}
+
 // ─── Stream Callbacks ─────────────────────────────────────────────
 
 // ─── Streaming Interfaces ─────────────────────────────────────────
@@ -236,6 +266,7 @@ export async function askLive(
     callbacks: StreamCallbacks,
     messagesFromClient?: any[],
     senderRole: SenderRole = 'owner',
+    options?: { disableTools?: boolean }
 ): Promise<CognitiveRouterResult> {
     const liveEngineConf = getLiveEngineConfig();
     const modelName = liveEngineConf.model;
@@ -279,6 +310,12 @@ export async function askLive(
         console.error('  ❌ [live] Failed to load skills:', err);
     }
 
+    // 🤖 Gemma 3 Adapter
+    const isGemma3 = modelName.toLowerCase().includes('gemma3');
+    if (isGemma3 && !options?.disableTools) {
+        systemPromptContext += generateGemma3ToolPrompt(filteredTools);
+    }
+
     let messages: any[];
     if (messagesFromClient && messagesFromClient.length > 0) {
         messages = [...messagesFromClient];
@@ -320,8 +357,8 @@ export async function askLive(
                 model,
                 system: systemPromptContext,
                 messages,
-                tools: filteredTools,
-                stopWhen: stepCountIs(MAX_STEPS),
+                tools: (options?.disableTools || isGemma3) ? undefined : filteredTools,
+                stopWhen: (options?.disableTools || isGemma3) ? undefined : stepCountIs(MAX_STEPS),
                 onError: ({ error }) => {
                     console.error('  ❌ [live] streamText onError:', error);
                 },
@@ -447,26 +484,36 @@ export async function askLive(
             // Only used if the model didn't use native SDK tool calling
             if (!nativeToolUsed) {
                 try {
-                    let jsonStr = fullText.trim();
-                    const match = jsonStr.match(/```(?:json)?\n?([\s\S]*?)\n?```/);
-                    if (match && match[1]) {
-                        jsonStr = match[1].trim();
+                    // GEMMA 3 XML ADAPTER
+                    const xmlMatch = fullText.match(/<tool_call>([\s\S]*?)<\/tool_call>/);
+                    if (xmlMatch && xmlMatch[1]) {
+                        const parsed = JSON.parse(xmlMatch[1].trim());
+                        if (parsed && typeof parsed.name === 'string' && typeof parsed.arguments === 'object') {
+                            rawToolCall = parsed;
+                        }
                     } else {
-                        const startObj = jsonStr.indexOf('{');
-                        const endObj = jsonStr.lastIndexOf('}');
-                        if (startObj !== -1 && endObj !== -1 && endObj > startObj) {
-                            jsonStr = jsonStr.substring(startObj, endObj + 1);
+                        // Original JSON fallback
+                        let jsonStr = fullText.trim();
+                        const match = jsonStr.match(/```(?:json)?\n?([\s\S]*?)\n?```/);
+                        if (match && match[1]) {
+                            jsonStr = match[1].trim();
+                        } else {
+                            const startObj = jsonStr.indexOf('{');
+                            const endObj = jsonStr.lastIndexOf('}');
+                            if (startObj !== -1 && endObj !== -1 && endObj > startObj) {
+                                jsonStr = jsonStr.substring(startObj, endObj + 1);
+                            }
                         }
-                    }
 
-                    const parsed = JSON.parse(jsonStr);
-                    if (parsed && typeof parsed.name === 'string' && (typeof parsed.arguments === 'object' || typeof parsed.parameters === 'object')) {
-                        rawToolCall = parsed;
-                        if (!rawToolCall.arguments && rawToolCall.parameters) {
-                            rawToolCall.arguments = rawToolCall.parameters;
+                        const parsed = JSON.parse(jsonStr);
+                        if (parsed && typeof parsed.name === 'string' && (typeof parsed.arguments === 'object' || typeof parsed.parameters === 'object')) {
+                            rawToolCall = parsed;
+                            if (!rawToolCall.arguments && rawToolCall.parameters) {
+                                rawToolCall.arguments = rawToolCall.parameters;
+                            }
+                        } else if (parsed && parsed.tool === 'call' && parsed.name) {
+                            rawToolCall = parsed;
                         }
-                    } else if (parsed && parsed.tool === 'call' && parsed.name) {
-                        rawToolCall = parsed;
                     }
                 } catch (e) {
                     // Not JSON — normal text response, no action needed
@@ -576,6 +623,7 @@ export async function askTier2(
     context?: string,
     messagesFromClient?: any[],
     senderRole: SenderRole = 'owner',
+    options?: { disableTools?: boolean }
 ): Promise<CognitiveRouterResult> {
     const validation = validateTier2Config();
     if (!validation.valid) {
@@ -603,6 +651,12 @@ export async function askTier2(
         `\n\n${CapabilityRegistry.getCapabilityManifest()}`,
         context ? `\n## Additional Session Context\n${context}` : '',
     ].join('');
+
+    // 🤖 Gemma 3 Adapter
+    const isGemma3 = config.model.toLowerCase().includes('gemma3');
+    if (isGemma3 && !options?.disableTools) {
+        fullSystemPrompt += generateGemma3ToolPrompt(tools);
+    }
 
     // 📚 Skills injection — load relevant skill instructions
     try {
@@ -714,8 +768,8 @@ export async function askTier2(
             model,
             system: fullSystemPrompt,
             messages,
-            tools,
-            stopWhen: stepCountIs(5),
+            tools: (options?.disableTools || isGemma3) ? undefined : tools,
+            stopWhen: (options?.disableTools || isGemma3) ? undefined : stepCountIs(5),
             onError: ({ error }) => {
                 console.error('  ❌ [tier2] streamText onError:', error);
             },
@@ -815,6 +869,77 @@ export async function askTier2(
 
                 default:
                     break;
+            }
+        }
+
+        // ─── Gemma 3 XML Output Interceptor (Fallback) ───
+        if (!toolCalled && isGemma3) {
+            try {
+                const xmlMatch = fullText.match(/<tool_call>([\s\S]*?)<\/tool_call>/);
+                if (xmlMatch && xmlMatch[1]) {
+                    const parsed = JSON.parse(xmlMatch[1].trim());
+                    if (parsed && typeof parsed.name === 'string' && typeof parsed.arguments === 'object') {
+                        const rawToolCall = parsed;
+                        console.log(`  🔧 [tier2] XML Tool Call Intercepted: ${rawToolCall.name}`);
+
+                        const thinkingCheck = validateThinkingProtocol(rawToolCall.name, fullText);
+                        if (!thinkingCheck.valid) {
+                            callbacks.onChunk(`\n${thinkingCheck.error}\n`);
+                            callbacks.onDone(thinkingCheck.error!);
+                            return { tier: 'cloud', model: config.model };
+                        }
+
+                        callbacks.onToolCall?.(rawToolCall.name, rawToolCall.arguments || {});
+
+                        Transcript.append({
+                            role: 'tool-call',
+                            content: JSON.stringify(rawToolCall.arguments || {}),
+                            meta: { toolName: rawToolCall.name, tier: 'cloud', model: config.model },
+                        });
+
+                        const toolFn = (tools as any)[rawToolCall.name];
+                        let toolOutput = '';
+                        let success = false;
+                        const toolStart = Date.now();
+
+                        if (toolFn) {
+                            try {
+                                const res = await toolFn.execute(rawToolCall.arguments || {}, { toolCallId: 'raw-2', messages: [] });
+                                toolOutput = typeof res === 'string' ? res : JSON.stringify(res);
+                                success = true;
+                            } catch (e: any) {
+                                toolOutput = e.message || String(e);
+                            }
+                        } else {
+                            toolOutput = `Error: Tool '${rawToolCall.name}' not found.`;
+                        }
+
+                        const toolDuration = Date.now() - toolStart;
+
+                        Transcript.append({
+                            role: 'tool-result',
+                            content: toolOutput,
+                            meta: {
+                                toolName: rawToolCall.name,
+                                success,
+                                tier: 'cloud',
+                                model: config.model,
+                                durationMs: toolDuration,
+                                ...(!success ? { error: toolOutput.slice(0, 200) } : {}),
+                            },
+                        });
+
+                        callbacks.onToolResult?.(rawToolCall.name, success, toolOutput);
+
+                        // Feed the result back using askTier2 recursively once
+                        console.log(`  🔄 [tier2] Feeding XML tool result back to model...`);
+                        const followUpPrompt = `[System Tool Execution Result for ${rawToolCall.name}]:\n${toolOutput}\n\nWhen you receive a tool execution output, formulate a natural language response to the user based on that output. DO NOT output JSON anymore unless another tool is needed.`;
+
+                        return await askTier2(followUpPrompt, callbacks, context, messagesFromClient, senderRole, { disableTools: false });
+                    }
+                }
+            } catch (err) {
+                // Not JSON inside <tool_call>
             }
         }
 
