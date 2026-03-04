@@ -264,7 +264,7 @@ To use a tool, you MUST output a JSON block wrapped EXACTLY in these XML tags:
 {"name": "tool_name", "arguments": {"param1": "value1"}}
 </tool_call>
 
-Do not add any other text inside the <tool_call> tags. If you do not need to use a tool, simply reply to the user normally.`;
+CRITICAL RULE: When using a tool, DO NOT output ANY conversational text before or after the <tool_call> block. DO NOT say "Here is the tool call" or explain what you are doing. Just output the raw <tool_call> block and nothing else. If you do not need to use a tool, simply reply to the user normally.`;
 }
 
 // ─── Stream Callbacks ─────────────────────────────────────────────
@@ -314,9 +314,9 @@ export async function askLive(
     // Only inject if Worker Engine is explicitly enabled and properly configured
     if (workerConfig.enabled && workerConfig.model) {
         runtimeTools['delegate_to_worker_engine'] = {
-            description: 'Delegate complex engineering, coding, forging, automation scripts, or deep analysis tasks to the powerful Worker Engine. Use this whenever the user asks to build a script, create a routine, automate a workflow, or do something you cannot do natively. It will seamlessly handoff to the intelligent cloud engine.',
+            description: 'Delegate complex engineering, coding, forging, automation scripts, or deep analysis tasks to the powerful Worker Engine. Use this whenever the user asks to build a script, create a routine, automate a workflow, or do something you cannot do natively. The Worker Engine is an advanced agent with full access to Node.js/Python sandbox, Playwright for web automation/scraping, full terminal shell, and a secure Vault for managing credentials or passwords. It can read emails, interact with internal systems, and do advanced ops.',
             parameters: z.object({
-                task_prompt: z.string().describe('Detailed prompt explaining exactly what the user wants to build or automate. Include all necessary context.')
+                task_prompt: z.string().describe('Detailed prompt explaining exactly what the user wants to build or automate. Include all necessary context, and specify any tools the worker should use (like Playwright, Vault, etc).')
             }),
             execute: async (params: { task_prompt: string }) => {
                 callbacks.onChunk('\n\n🛠️  [Live Engine] Delegating complex task to the Engineering Worker Engine...\n\n');

@@ -22,13 +22,10 @@ import { OllamaManager } from '@redbusagent/daemon/dist/core/ollama-manager.js';
 
 const LOCAL_MODEL_CATALOG = [
     { value: 'gemma3:1b', label: '🪶 gemma3:1b', hint: '~1B params — ultra-lightweight' },
-    { value: 'qwen2.5-coder:1.5b', label: '💻 qwen2.5-coder:1.5b', hint: '~1.5B params — fast code model' },
-    { value: 'llama3.2:3b', label: '🦙 llama3.2:3b', hint: '~3B params — balanced' },
     { value: 'gemma3:4b', label: '🪶 gemma3:4b', hint: '~4B params — good all-rounder' },
     { value: 'gemma3:12b', label: '🪶 gemma3:12b', hint: '~12B params — strong reasoning' },
     { value: 'gemma3:27b', label: '🪶 gemma3:27b', hint: '~27B params — near cloud-quality' },
-    { value: 'qwen2.5-coder:32b', label: '💻 qwen2.5-coder:32b', hint: '~32B params — top-tier code model' },
-    { value: '__custom__', label: '✏️  Custom (Type your own model tag)', hint: 'any Ollama-compatible tag' },
+    { value: '__custom__', label: '✏️  Custom (Type sua tag desejada)', hint: 'Recomendação: Mantenha na família Gemma 3' },
 ] as const;
 
 // ─── Helper: Local Model Selection ───────────────────────────────
