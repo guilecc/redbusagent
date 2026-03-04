@@ -93,7 +93,6 @@ export function InputBox(props: InputBoxProps): React.ReactElement {
                                 { label: '🤖 /auto-route     - Restore Cognitive Routing', value: 'auto-route' },
                                 { label: '☁️  /switch-cloud  - Change Cloud Provider', value: 'switch-cloud' },
                                 { label: '🔌 /mcp install    - Install new MCP Server', value: 'mcp-install' },
-                                { label: '🔄 /update          - Install New Version', value: 'update' },
                                 { label: '📊 /status        - Daemon & Model Status', value: 'status' },
                                 { label: '❌ Close Menu', value: 'close' },
                             ]}

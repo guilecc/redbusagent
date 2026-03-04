@@ -265,9 +265,10 @@ To use a tool, you MUST output an XML block exactly like this:
 </tool_call>
 
 CRITICAL RULES: 
-1. The JSON must NOT be nested inside another "arguments" object. Just the parameters directly.
-2. The JSON MUST be correctly formatted and all braces must be closed.
-3. You should provide a short, helpful conversational reply to the user BEFORE outputting the <tool_call> block (e.g. "I am delegating this task to the engineering agent..."). Do not use markdown code blocks (\`\`\`xml) around the tool call.`;
+1. DO NOT give an example of how to make a tool call. If the user asks for something that requires a tool, YOU MUST ACTUALLY CALL THE TOOL to perform the request right now in reality.
+2. The JSON inside the XML must NOT be nested inside another "arguments" object. Just the parameters directly.
+3. The JSON MUST be correctly formatted. Escape all internal quotes or newlines.
+4. You should provide a short, helpful conversational reply to the user BEFORE outputting the <tool_call> block (e.g. "I am delegating this task to the engineering agent..."). Do not use markdown code blocks (\`\`\`xml) around the tool call.`;
 }
 
 // ─── Stream Callbacks ─────────────────────────────────────────────
