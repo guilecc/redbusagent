@@ -27,7 +27,7 @@ import {
     getWorkerEngineConfig,
 } from '../infra/llm-config.js';
 import { getSystemPromptLiveGold, getSystemPromptTier2 } from './system-prompt.js';
-import { PersonaManager } from '@redbusagent/shared';
+import { PersonaManager, Vault } from '@redbusagent/shared';
 import { MemoryManager } from './memory-manager.js';
 import { ToolRegistry } from './tool-registry.js';
 import { CapabilityRegistry } from './registry.js';
@@ -146,6 +146,18 @@ function createLiveModel(): LanguageModel {
             const ollama = createOpenAI({
                 baseURL: `${liveConfig.url || 'http://127.0.0.1:11434'}/v1`,
                 apiKey: 'ollama',
+                fetch: async (url, fetchOptions) => {
+                    if (fetchOptions?.body && Vault.read()?.gpu_acceleration) {
+                        try {
+                            const body = JSON.parse(fetchOptions.body as string);
+                            body.options = { ...body.options, num_gpu: 999 };
+                            fetchOptions.body = JSON.stringify(body);
+                        } catch (e) {
+                            // ignore
+                        }
+                    }
+                    return fetch(url, fetchOptions);
+                }
             });
             return ollama(liveConfig.model);
         }
@@ -203,6 +215,18 @@ export function createWorkerModel(): LanguageModel {
         const workerOllama = createOpenAI({
             baseURL: `${workerConfig.url || 'http://127.0.0.1:11434'}/v1`,
             apiKey: 'ollama',
+            fetch: async (url, fetchOptions) => {
+                if (fetchOptions?.body && Vault.read()?.gpu_acceleration) {
+                    try {
+                        const body = JSON.parse(fetchOptions.body as string);
+                        body.options = { ...body.options, num_gpu: 999 };
+                        fetchOptions.body = JSON.stringify(body);
+                    } catch (e) {
+                        // ignore
+                    }
+                }
+                return fetch(url, fetchOptions);
+            }
         });
         return workerOllama(workerConfig.model);
     }

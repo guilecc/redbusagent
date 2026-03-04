@@ -13,6 +13,7 @@
 
 import * as p from '@clack/prompts';
 import pc from 'picocolors';
+import { execSync } from 'node:child_process';
 import { Vault, type VaultTier2Config, type VaultLiveEngineConfig, type VaultWorkerEngineConfig, type Tier2Provider, type EngineProvider, fetchTier2Models, SUGGESTED_MCPS, getMCPSuggestion } from '@redbusagent/shared';
 import { WhatsAppChannel } from '@redbusagent/daemon/dist/channels/whatsapp.js';
 import { OllamaManager } from '@redbusagent/daemon/dist/core/ollama-manager.js';
@@ -255,6 +256,23 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
     const saveSpinner = p.spinner();
     saveSpinner.start('Saving configuration to Vault...');
 
+    let gpu_acceleration = false;
+
+    // ── Pre-Flight NVIDIA Check ───────────────────────────────
+    if (process.platform === 'linux') {
+        try {
+            const output = execSync('nvidia-smi --query-gpu=name --format=csv,noheader', { stdio: 'pipe' }).toString().trim();
+            gpu_acceleration = true;
+            p.log.success(pc.green(`✅ NVIDIA GPU Detected: [${output}]. Hardware acceleration enabled.`));
+        } catch (err) {
+            gpu_acceleration = false;
+            p.log.warn(pc.yellow('⚠️ NVIDIA driver not found (nvidia-smi failed). Models will run on CPU, which is significantly slower. Please install NVIDIA proprietary drivers to enable GPU acceleration.'));
+        }
+    } else {
+        // Fallback for non-linux or when we want to conservatively test
+        gpu_acceleration = false;
+    }
+
     Vault.write({
         version: Vault.schemaVersion,
         tier2_enabled: !skipTier2,
@@ -265,6 +283,7 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
         owner_phone_number: ownerPhoneNumber,
         credentials,
         sessions,
+        gpu_acceleration,
     });
 
     await new Promise(r => setTimeout(r, 500));

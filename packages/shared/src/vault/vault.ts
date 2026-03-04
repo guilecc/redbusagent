@@ -133,7 +133,8 @@ export interface VaultConfig {
         readonly vram_gb: number;
         readonly system_ram_gb: number;
     };
-
+    /** Optional flag to explicitly enable or disable local GPU offloading. */
+    readonly gpu_acceleration?: boolean;
 }
 
 
