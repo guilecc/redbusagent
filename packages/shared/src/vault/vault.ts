@@ -75,9 +75,9 @@ export interface VaultLiveEngineConfig {
 export interface VaultWorkerEngineConfig {
     readonly enabled: boolean;
     /** Provider: 'anthropic'/'google'/'openai' for cloud, 'ollama' for local */
-    readonly provider?: EngineProvider;
+    readonly provider?: EngineProvider | null;
     readonly url: string;
-    readonly model: string;
+    readonly model?: string | null;
     /** API key for cloud providers */
     readonly apiKey?: string;
     /** Number of CPU threads (legacy, only for Ollama) */

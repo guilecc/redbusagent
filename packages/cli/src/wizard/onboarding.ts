@@ -204,11 +204,11 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
     );
 
     const workerEngineType = await p.select({
-        message: 'Select provider for the WORKER Engine:',
+        message: 'Configure the WORKER Engine (for coding/forging):',
         options: [
             { value: 'local' as const, label: '🏠 Local (Ollama)', hint: 'free, private, runs on your machine' },
             { value: 'cloud' as const, label: '☁️  Cloud API', hint: 'Anthropic, Google, or OpenAI' },
-            { value: 'disabled' as const, label: '⏸️  Disabled', hint: 'Skip Worker Engine for now' },
+            { value: 'disabled' as const, label: '⏭️  Skip — Use Live Engine for everything', hint: 'Simplifies routing' },
         ],
     });
     if (p.isCancel(workerEngineType)) return false;
@@ -239,7 +239,7 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
             apiKey: result.apiKey,
         };
     } else {
-        workerEngineConfig = { enabled: false, url: '', model: 'none' };
+        workerEngineConfig = { enabled: false, url: '', model: null, provider: null };
     }
 
     let default_chat_tier: 1 | 2 = 1;

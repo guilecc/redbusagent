@@ -12,7 +12,7 @@ export const forgetMemoryTool = tool({
         try {
             const count = await MemoryManager.forgetMemory(params.category, params.content_match);
             if (count === 0) {
-                return { success: false, message: `No matching memories found in category "${params.category}" close enough to delete. Try using 'search_memory' first to find the exact content.` };
+                return { success: true, message: `No matching memories found in category "${params.category}" close enough to delete. Try using 'search_memory' first to find the exact content.`, removedCount: 0 };
             }
             return { success: true, message: `Forgot ${count} memory(ies) from category "${params.category}".`, removedCount: count };
         } catch (error) {

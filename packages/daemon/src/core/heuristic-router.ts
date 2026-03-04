@@ -5,6 +5,20 @@
  * to determine whether to route to Live Engine or Worker Engine (Cloud).
  */
 
+export type TaskIntent = 'INTENT_FORGE' | 'INTENT_EXECUTE';
+
+export function classifyTaskIntent(prompt: string): TaskIntent {
+    const lowerPrompt = prompt.toLowerCase();
+
+    const forgeRegex = /\b(create a tool|write a script|code|forge|refactor|build an integration|crie uma ferramenta|escreva um script|codar|refatorar|construir uma integração|build a tool|write code|modify architecture|edit_file_blocks|edit file|change line)\b/i;
+
+    if (forgeRegex.test(lowerPrompt)) {
+        return 'INTENT_FORGE';
+    }
+
+    return 'INTENT_EXECUTE';
+}
+
 export function calculateComplexityScore(prompt: string, recentHistory: any[] = []): number {
     let score = 0;
     const lowerPrompt = prompt.toLowerCase();

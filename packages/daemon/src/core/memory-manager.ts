@@ -67,25 +67,144 @@ export class MemoryManager {
     }
 
     /**
-     * Vectorizes text using the local `nomic-embed-text` model via Ollama.
+     * Vectorizes text into an embedding vector.
+     *
+     * Waterfall strategy:
+     *  1. Try local Ollama (nomic-embed-text) — fast, free, no API costs
+     *  2. Fall back to cloud embedding APIs if configured (OpenAI, Google)
+     *  3. Throw a clear error if nothing is available
      */
     static async generateEmbedding(text: string): Promise<number[]> {
-        const res = await fetch(`${OllamaManager.baseUrl}/api/embeddings`, {
+        // 1. Try Ollama first (may not be running in cloud-only setups)
+        try {
+            const ollamaResult = await this.generateEmbeddingViaOllama(text);
+            return ollamaResult;
+        } catch (ollamaErr) {
+            console.warn(`  🧠 ⚠️ Ollama embedding failed (${(ollamaErr as Error).message}), trying cloud fallback...`);
+        }
+
+        // 2. Cloud fallback: use the configured provider's embedding API
+        const config = Vault.read();
+        const liveProvider = config?.live_engine?.provider;
+        const liveApiKey = config?.live_engine?.apiKey;
+
+        // Try OpenAI embeddings
+        if ((liveProvider === 'openai' && liveApiKey) || config?.tier2?.provider === 'openai') {
+            const apiKey = liveProvider === 'openai' ? liveApiKey : config?.tier2?.apiKey;
+            if (apiKey) {
+                try {
+                    return await this.generateEmbeddingViaOpenAI(text, apiKey);
+                } catch (e) {
+                    console.warn(`  🧠 ⚠️ OpenAI embedding failed: ${(e as Error).message}`);
+                }
+            }
+        }
+
+        // Try Google embeddings
+        if ((liveProvider === 'google' && liveApiKey) || config?.tier2?.provider === 'google') {
+            const apiKey = liveProvider === 'google' ? liveApiKey : config?.tier2?.apiKey;
+            if (apiKey) {
+                try {
+                    return await this.generateEmbeddingViaGoogle(text, apiKey);
+                } catch (e) {
+                    console.warn(`  🧠 ⚠️ Google embedding failed: ${(e as Error).message}`);
+                }
+            }
+        }
+
+        // Try Anthropic → use Voyage AI embeddings (Anthropic's recommended partner)
+        // If no dedicated embedding provider available, try OpenAI with whatever key
+        // we can find as a last resort
+        if (liveProvider === 'anthropic' && liveApiKey) {
+            // Anthropic doesn't have its own embedding API — check if we have
+            // any fallback API key (Google from Tier 2, etc.)
+            const googleKey = config?.tier2?.provider === 'google' ? config.tier2.apiKey : undefined;
+            if (googleKey) {
+                try {
+                    return await this.generateEmbeddingViaGoogle(text, googleKey);
+                } catch (e) {
+                    console.warn(`  🧠 ⚠️ Google (fallback for Anthropic) embedding failed: ${(e as Error).message}`);
+                }
+            }
+        }
+
+        throw new Error(
+            'No embedding provider available. Either start Ollama locally or configure an OpenAI/Google API key. ' +
+            'Run: redbus config'
+        );
+    }
+
+    /** Ollama local embedding (nomic-embed-text) */
+    private static async generateEmbeddingViaOllama(text: string): Promise<number[]> {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 5000); // 5s timeout
+
+        try {
+            const res = await fetch(`${OllamaManager.baseUrl}/api/embeddings`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    model: 'nomic-embed-text',
+                    prompt: text,
+                    keep_alive: '60m',
+                }),
+                signal: controller.signal,
+            });
+
+            if (!res.ok) {
+                throw new Error(`Ollama returned ${res.status}: ${res.statusText}`);
+            }
+
+            const data = await res.json() as { embedding: number[] };
+            return data.embedding;
+        } finally {
+            clearTimeout(timeout);
+        }
+    }
+
+    /** OpenAI-compatible embedding API */
+    private static async generateEmbeddingViaOpenAI(text: string, apiKey: string): Promise<number[]> {
+        console.log('  🧠 ☁️ Using OpenAI embedding API...');
+        const res = await fetch('https://api.openai.com/v1/embeddings', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${apiKey}`,
+            },
             body: JSON.stringify({
-                model: 'nomic-embed-text',
-                prompt: text,
-                keep_alive: '60m',
+                model: 'text-embedding-3-small',
+                input: text,
             }),
         });
 
         if (!res.ok) {
-            throw new Error(`Failed to generate embedding: ${res.statusText}`);
+            throw new Error(`OpenAI embedding API returned ${res.status}: ${res.statusText}`);
         }
 
-        const data = await res.json() as { embedding: number[] };
-        return data.embedding;
+        const data = await res.json() as { data: Array<{ embedding: number[] }> };
+        return data.data[0]!.embedding;
+    }
+
+    /** Google Generative AI embedding API */
+    private static async generateEmbeddingViaGoogle(text: string, apiKey: string): Promise<number[]> {
+        console.log('  🧠 ☁️ Using Google embedding API...');
+        const res = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key=${apiKey}`,
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    content: { parts: [{ text }] },
+                }),
+            },
+        );
+
+        if (!res.ok) {
+            throw new Error(`Google embedding API returned ${res.status}: ${res.statusText}`);
+        }
+
+        const data = await res.json() as { embedding: { values: number[] } };
+        return data.embedding.values;
     }
 
     // ─── Core CRUD ────────────────────────────────────────────────

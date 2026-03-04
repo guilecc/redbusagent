@@ -11,7 +11,7 @@ import { PersonaManager, Vault } from '@redbusagent/shared';
 import { askLive, askTier2 } from './cognitive-router.js';
 import { getLiveEngineConfig } from '../infra/llm-config.js';
 import { resolveSenderRole } from './tool-policy.js';
-import { calculateComplexityScore } from './heuristic-router.js';
+import { classifyTaskIntent } from './heuristic-router.js';
 import { CoreMemory } from './core-memory.js';
 import { approvalGate, type ApprovalRequest } from './approval-gate.js';
 import { enqueueCommandInLane, CommandLane } from './task-queue.js';
@@ -184,56 +184,34 @@ Return ONLY the JSON object. Do not explain.`;
 
         // ─── Intent Classifier Pre-flight ─────────────────────────────────────
         if (!isOnboarding && content.trim() !== '' && !this.forceLive && !tier) {
-            // Cloud-First: all models are treated as full-capability
-            const powerClass = 'gold';
             const workerEnabled = vaultConfig?.worker_engine?.enabled ?? false;
 
-            console.log(`  🕵️‍♂️ [pre-router] Calculating heuristic complexity score...`);
-            const score = calculateComplexityScore(content, messages || []);
+            console.log(`  🕵️‍♂️ [pre-router] Classifying task intent...`);
+            const intent = classifyTaskIntent(content);
 
-            if (score >= 40) {
-                targetTier = 'cloud';
+            if (intent === 'INTENT_FORGE' && workerEnabled && vaultConfig?.worker_engine?.model) {
+                targetTier = 'cloud'; // Cloud tier maps to askTier2, which uses Worker Engine model
+                this.wsServer.broadcast({
+                    type: 'log',
+                    timestamp: new Date().toISOString(),
+                    payload: { level: 'info', source: 'Router', message: `🧠 [Router]: Intent FORGE → Routing to Worker Engine` }
+                });
+
+                // Transparent Handoff Message
+                this.wsServer.broadcast({
+                    type: 'chat:stream:chunk',
+                    timestamp: new Date().toISOString(),
+                    payload: { requestId, delta: `\n\n🛠️ I am waking up the Engineering Engine to forge this tool. This might take a moment...\n\n` }
+                });
             } else {
                 targetTier = 'live';
-            }
-
-            // ─── Dual-Cloud: Delegate heavy background tasks to Worker Queue ──
-            // If the Worker Engine is enabled and the score indicates heavy work,
-            // enqueue a background analysis task and let the Live Engine handle
-            // a quick acknowledgement instead of blocking the chat.
-            if (workerEnabled && score >= 60) {
-                const taskId = HeavyTaskQueue.enqueue({
-                    description: `Deep analysis: ${content.slice(0, 80)}...`,
-                    prompt: content,
-                    type: 'deep_analysis',
-                    onComplete: (result) => {
-                        // Notify user via WS when the worker finishes
-                        this.wsServer.broadcast({
-                            type: 'log',
-                            timestamp: new Date().toISOString(),
-                            payload: { level: 'info', source: 'Worker Engine', message: `🏗️ Background analysis complete. Result available.` }
-                        });
-                    },
-                });
-
+                const liveConf = getLiveEngineConfig();
+                const providerLabel = liveConf.provider ?? 'Cloud';
+                const engineLabel = `Live Engine (${providerLabel}/${liveConf.model})`;
                 this.wsServer.broadcast({
                     type: 'log',
                     timestamp: new Date().toISOString(),
-                    payload: { level: 'info', source: 'Router', message: `🧠 [Router]: Complexity Score ${score}/100 → Delegated to Worker Engine (background task ${taskId.slice(0, 12)})` }
-                });
-            } else {
-                let engineLabel: string;
-                if (targetTier === 'live') {
-                    const liveConf = getLiveEngineConfig();
-                    const providerLabel = liveConf.provider ?? 'Cloud';
-                    engineLabel = `Live Engine (${providerLabel}/${liveConf.model})`;
-                } else {
-                    engineLabel = 'Cloud Engine';
-                }
-                this.wsServer.broadcast({
-                    type: 'log',
-                    timestamp: new Date().toISOString(),
-                    payload: { level: 'info', source: 'Router', message: `🧠 [Router]: Complexity Score ${score}/100 → Routing to ${engineLabel}` }
+                    payload: { level: 'info', source: 'Router', message: `🧠 [Router]: Intent EXECUTE (or Fallback) → Routing to ${engineLabel}` }
                 });
             }
         }
@@ -250,67 +228,67 @@ Return ONLY the JSON object. Do not explain.`;
             ? CommandLane.Main
             : `session:${clientId}`;
         await enqueueCommandInLane(lane, async () => {
-                let result;
-                const callbacks = {
-                    onChunk: (delta: string) => {
-                        this.wsServer.broadcast({
-                            type: 'chat:stream:chunk',
-                            timestamp: new Date().toISOString(),
-                            payload: { requestId, delta },
-                        });
-                    },
-                    onDone: (fullText: string) => {
-                    },
-                    onError: (error: Error) => {
-                        console.error(`  ❌ [${targetTier}] Error:`, error.message);
-                        this.wsServer.broadcast({
-                            type: 'chat:error',
-                            timestamp: new Date().toISOString(),
-                            payload: { requestId, error: error.message },
-                        });
-                    },
-                    onToolCall: (toolName: string, args: Record<string, unknown>) => {
-                        console.log(`  🔧 [${targetTier}] Tool call: ${toolName}`);
-                        this.wsServer.broadcast({
-                            type: 'chat:tool:call',
-                            timestamp: new Date().toISOString(),
-                            payload: { requestId, toolName, args },
-                        });
-                    },
-                    onToolResult: (toolName: string, success: boolean, toolResult: string) => {
-                        console.log(`  ${success ? '✅' : '❌'} [${targetTier}] Tool result: ${toolName} — ${success ? 'success' : 'failed'}`);
-                        this.wsServer.broadcast({
-                            type: 'chat:tool:result',
-                            timestamp: new Date().toISOString(),
-                            payload: { requestId, toolName, success, result: toolResult },
-                        });
-                    },
-                };
+            let result;
+            const callbacks = {
+                onChunk: (delta: string) => {
+                    this.wsServer.broadcast({
+                        type: 'chat:stream:chunk',
+                        timestamp: new Date().toISOString(),
+                        payload: { requestId, delta },
+                    });
+                },
+                onDone: (fullText: string) => {
+                },
+                onError: (error: Error) => {
+                    console.error(`  ❌ [${targetTier}] Error:`, error.message);
+                    this.wsServer.broadcast({
+                        type: 'chat:error',
+                        timestamp: new Date().toISOString(),
+                        payload: { requestId, error: error.message },
+                    });
+                },
+                onToolCall: (toolName: string, args: Record<string, unknown>) => {
+                    console.log(`  🔧 [${targetTier}] Tool call: ${toolName}`);
+                    this.wsServer.broadcast({
+                        type: 'chat:tool:call',
+                        timestamp: new Date().toISOString(),
+                        payload: { requestId, toolName, args },
+                    });
+                },
+                onToolResult: (toolName: string, success: boolean, toolResult: string) => {
+                    console.log(`  ${success ? '✅' : '❌'} [${targetTier}] Tool result: ${toolName} — ${success ? 'success' : 'failed'}`);
+                    this.wsServer.broadcast({
+                        type: 'chat:tool:result',
+                        timestamp: new Date().toISOString(),
+                        payload: { requestId, toolName, success, result: toolResult },
+                    });
+                },
+            };
 
-                const senderRole = resolveSenderRole(clientId);
-                this.heartbeat?.setThinking(true);
-                try {
-                    if (targetTier === 'live') {
-                        result = await askLive(content, callbacks, messages, senderRole);
-                    } else {
-                        result = await askTier2(content, callbacks, undefined, messages, senderRole);
-                    }
-                } finally {
-                    this.heartbeat?.setThinking(false);
+            const senderRole = resolveSenderRole(clientId);
+            this.heartbeat?.setThinking(true);
+            try {
+                if (targetTier === 'live') {
+                    result = await askLive(content, callbacks, messages, senderRole);
+                } else {
+                    result = await askTier2(content, callbacks, undefined, messages, senderRole);
                 }
+            } finally {
+                this.heartbeat?.setThinking(false);
+            }
 
-                this.wsServer.broadcast({
-                    type: 'chat:stream:done',
-                    timestamp: new Date().toISOString(),
-                    payload: {
-                        requestId,
-                        fullText: '',
-                        tier: result.tier,
-                        model: result.model,
-                    },
-                });
+            this.wsServer.broadcast({
+                type: 'chat:stream:done',
+                timestamp: new Date().toISOString(),
+                payload: {
+                    requestId,
+                    fullText: '',
+                    tier: result.tier,
+                    model: result.model,
+                },
+            });
 
-                console.log(`  ✅ [${result.tier}] Completed request ${requestId.slice(0, 8)}... via ${result.model}`);
+            console.log(`  ✅ [${result.tier}] Completed request ${requestId.slice(0, 8)}... via ${result.model}`);
         }, { warnAfterMs: 5_000 });
     }
 }
