@@ -11,7 +11,7 @@ import { PersonaManager, Vault } from '@redbusagent/shared';
 import { askLive, askTier2 } from './cognitive-router.js';
 import { getLiveEngineConfig } from '../infra/llm-config.js';
 import { resolveSenderRole } from './tool-policy.js';
-import { classifyTaskIntent } from './heuristic-router.js';
+
 import { CoreMemory } from './core-memory.js';
 import { approvalGate, type ApprovalRequest } from './approval-gate.js';
 import { enqueueCommandInLane, CommandLane } from './task-queue.js';
@@ -189,38 +189,17 @@ Return ONLY the JSON object. Do not explain.`;
             content = content.replace(/^\/local\s*/i, '');
         }
 
-        // ─── Intent Classifier Pre-flight ─────────────────────────────────────
+        // ─── Direct Routing ──────────────────────────────────────────────────
         if (!isOnboarding && content.trim() !== '' && !this.forceLive && !tier) {
-            const workerEnabled = vaultConfig?.worker_engine?.enabled ?? false;
-
-            console.log(`  🕵️‍♂️ [pre-router] Classifying task intent...`);
-            const intent = classifyTaskIntent(content);
-
-            if (intent === 'INTENT_FORGE' && workerEnabled && vaultConfig?.worker_engine?.model) {
-                targetTier = 'cloud'; // Cloud tier maps to askTier2, which uses Worker Engine model
-                this.wsServer.broadcast({
-                    type: 'log',
-                    timestamp: new Date().toISOString(),
-                    payload: { level: 'info', source: 'Router', message: `🧠 [Router]: Intent FORGE → Routing to Worker Engine` }
-                });
-
-                // Transparent Handoff Message
-                this.wsServer.broadcast({
-                    type: 'chat:stream:chunk',
-                    timestamp: new Date().toISOString(),
-                    payload: { requestId, delta: `\n\n🛠️ I am waking up the Engineering Engine to forge this tool. This might take a moment...\n\n` }
-                });
-            } else {
-                targetTier = 'live';
-                const liveConf = getLiveEngineConfig();
-                const providerLabel = liveConf.provider ?? 'Cloud';
-                const engineLabel = `Live Engine (${providerLabel}/${liveConf.model})`;
-                this.wsServer.broadcast({
-                    type: 'log',
-                    timestamp: new Date().toISOString(),
-                    payload: { level: 'info', source: 'Router', message: `🧠 [Router]: Intent EXECUTE (or Fallback) → Routing to ${engineLabel}` }
-                });
-            }
+            targetTier = 'live';
+            const liveConf = getLiveEngineConfig();
+            const providerLabel = liveConf.provider ?? 'Cloud';
+            const engineLabel = `Live Engine (${providerLabel}/${liveConf.model})`;
+            this.wsServer.broadcast({
+                type: 'log',
+                timestamp: new Date().toISOString(),
+                payload: { level: 'info', source: 'Router', message: `🧠 [Router]: Routing to ${engineLabel}` }
+            });
         }
 
         // Fallback targetTier to Live Engine just in case somehow it is undefined

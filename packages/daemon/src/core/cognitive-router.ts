@@ -13,7 +13,8 @@
  *  • Tools include core_memory_replace and core_memory_append.
  */
 
-import { streamText, stepCountIs, type LanguageModel } from 'ai';
+import { streamText, stepCountIs, type LanguageModel, tool } from 'ai';
+import { z } from 'zod';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
@@ -301,10 +302,33 @@ export async function askLive(
     const enrichedPrompt = ragResult.enrichedPrompt;
 
     // Cloud-First: All cloud models are treated as full-capability (Gold-class)
-    const tools = CapabilityRegistry.getAvailableTools();
+    const baseTools = CapabilityRegistry.getAvailableTools();
 
     // 🛡️ Tool Policy: Strip owner-only tools for non-owner senders (system/scheduled)
-    const filteredTools = senderRole === 'owner' ? tools : applyToolPolicy(tools as Record<string, unknown>, senderRole) as typeof tools;
+    const filteredTools = senderRole === 'owner' ? baseTools : applyToolPolicy(baseTools as Record<string, unknown>, senderRole) as typeof baseTools;
+
+    // ─── Dynamic Handoff Tool Injection ───
+    const runtimeTools: Record<string, any> = { ...filteredTools };
+    const workerConfig = getWorkerEngineConfig();
+
+    // Only inject if Worker Engine is explicitly enabled and properly configured
+    if (workerConfig.enabled && workerConfig.model) {
+        runtimeTools['delegate_to_worker_engine'] = {
+            description: 'Delegate complex engineering, coding, forging, automation scripts, or deep analysis tasks to the powerful Worker Engine. Use this whenever the user asks to build a script, create a routine, automate a workflow, or do something you cannot do natively. It will seamlessly handoff to the intelligent cloud engine.',
+            parameters: z.object({
+                task_prompt: z.string().describe('Detailed prompt explaining exactly what the user wants to build or automate. Include all necessary context.')
+            }),
+            execute: async (params: { task_prompt: string }) => {
+                callbacks.onChunk('\n\n🛠️  [Live Engine] Delegating complex task to the Engineering Worker Engine...\n\n');
+                console.log(`  🧠 [Router]: Intent FORGE/DELEGATE → Routing to Worker Engine via tool call`);
+                // Dynamically invoke askTier2 to run the heavy processing 
+                // Using { disableTools: false } ensures the worker can use its tools
+                await askTier2(params.task_prompt, callbacks, undefined, messagesFromClient, senderRole, { disableTools: false });
+
+                return `The Worker Engine executed the task successfully and communicated the result to the user. You do not need to repeat its output. Just inform the user the task is complete.`;
+            }
+        };
+    }
 
     // ─── System Prompt Construction (full context for cloud models) ────
     let systemPromptContext = getPersonaContext() + getSystemPromptLiveGold();
@@ -337,7 +361,7 @@ export async function askLive(
     // 🤖 Gemma 3 Adapter
     const isGemma3 = modelName.toLowerCase().includes('gemma3');
     if (isGemma3 && !options?.disableTools) {
-        systemPromptContext += generateGemma3ToolPrompt(filteredTools);
+        systemPromptContext += generateGemma3ToolPrompt(runtimeTools);
     }
 
     let messages: any[];
@@ -381,7 +405,7 @@ export async function askLive(
                 model,
                 system: systemPromptContext,
                 messages,
-                tools: (options?.disableTools || isGemma3) ? undefined : filteredTools,
+                tools: (options?.disableTools || isGemma3) ? undefined : runtimeTools,
                 stopWhen: (options?.disableTools || isGemma3) ? undefined : stepCountIs(MAX_STEPS),
                 onError: ({ error }) => {
                     console.error('  ❌ [live] streamText onError:', error);
@@ -565,7 +589,7 @@ export async function askLive(
                     meta: { toolName: rawToolCall.name, tier: 'live', model: modelName },
                 });
 
-                const toolFn = (tools as any)[rawToolCall.name];
+                const toolFn = (runtimeTools as any)[rawToolCall.name];
                 let toolOutput = '';
                 let success = false;
                 const toolStart = Date.now();

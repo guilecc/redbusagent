@@ -10,7 +10,7 @@ export type TaskIntent = 'INTENT_FORGE' | 'INTENT_EXECUTE';
 export function classifyTaskIntent(prompt: string): TaskIntent {
     const lowerPrompt = prompt.toLowerCase();
 
-    const forgeRegex = /\b(create a tool|write a script|code|forge|refactor|build an integration|crie uma ferramenta|escreva um script|codar|refatorar|construir uma integração|build a tool|write code|modify architecture|edit_file_blocks|edit file|change line)\b/i;
+    const forgeRegex = /\b(create a tool|write a script|code|forge|refactor|build an integration|crie uma ferramenta|escreva um script|codar|refatorar|construir uma integração|build a tool|write code|modify architecture|edit_file_blocks|edit file|change line|crie uma rotina|criar uma rotina|automatizar|automate|crie um script|criar script|construir script|build script|automaton)\b/i;
 
     if (forgeRegex.test(lowerPrompt)) {
         return 'INTENT_FORGE';
