@@ -2,16 +2,54 @@
  * @redbusagent/cli — Onboarding Wizard
  *
  * Interactive step-by-step configuration assistant using @clack/prompts.
- * Guides the user through Live Engine + Worker Engine (Dual-Cloud Architecture)
- * setup, then persists everything to the Vault (~/.redbusagent/config.json).
+ * Guides the user through Live Engine + Worker Engine setup (Local or Cloud),
+ * then persists everything to the Vault (~/.redbusagent/config.json).
  *
- * Flow: Live Engine (Cloud) → Worker Engine (Cloud) → Save
+ * Flow: Live Engine → Worker Engine → Save
+ *
+ * NO hardware detection is performed — the full model catalog is always
+ * presented unrestricted so users can freely mix and match engines.
  */
 
 import * as p from '@clack/prompts';
 import pc from 'picocolors';
 import { Vault, type VaultTier2Config, type VaultLiveEngineConfig, type VaultWorkerEngineConfig, type Tier2Provider, type EngineProvider, fetchTier2Models, SUGGESTED_MCPS, getMCPSuggestion } from '@redbusagent/shared';
 import { WhatsAppChannel } from '@redbusagent/daemon/dist/channels/whatsapp.js';
+
+// ─── Master Catalog: All Supported Local Models (sorted by size) ──
+
+const LOCAL_MODEL_CATALOG = [
+    { value: 'gemma3:1b', label: '🪶 gemma3:1b', hint: '~1B params — ultra-lightweight' },
+    { value: 'qwen2.5-coder:1.5b', label: '💻 qwen2.5-coder:1.5b', hint: '~1.5B params — fast code model' },
+    { value: 'llama3.2:3b', label: '🦙 llama3.2:3b', hint: '~3B params — balanced' },
+    { value: 'gemma3:4b', label: '🪶 gemma3:4b', hint: '~4B params — good all-rounder' },
+    { value: 'gemma3:12b', label: '🪶 gemma3:12b', hint: '~12B params — strong reasoning' },
+    { value: 'gemma3:27b', label: '🪶 gemma3:27b', hint: '~27B params — near cloud-quality' },
+    { value: 'qwen2.5-coder:32b', label: '💻 qwen2.5-coder:32b', hint: '~32B params — top-tier code model' },
+    { value: '__custom__', label: '✏️  Custom (Type your own model tag)', hint: 'any Ollama-compatible tag' },
+] as const;
+
+// ─── Helper: Local Model Selection ───────────────────────────────
+
+async function selectLocalModel(engineLabel: string): Promise<string | null> {
+    const selected = await p.select({
+        message: `Select a local model for the ${engineLabel}:`,
+        options: LOCAL_MODEL_CATALOG.map(m => ({ value: m.value, label: m.label, hint: m.hint })),
+    });
+    if (p.isCancel(selected)) return null;
+
+    if (selected === '__custom__') {
+        const custom = await p.text({
+            message: `Type the Ollama model tag for the ${engineLabel}:`,
+            placeholder: 'e.g. mistral:7b, codellama:13b, deepseek-coder:33b',
+            validate: (v) => { if (!v || v.trim().length < 2) return 'Invalid model tag.'; },
+        });
+        if (p.isCancel(custom)) return null;
+        return (custom as string).trim();
+    }
+
+    return selected as string;
+}
 
 // ─── Helper: RunPod Serverless Configuration ─────────────────────
 
@@ -58,7 +96,7 @@ async function configureCloudProvider(engineLabel: string): Promise<{ provider: 
 
     const keyLabel = provider === 'anthropic' ? 'Paste your Anthropic API key (sk-ant-...):'
         : provider === 'google' ? 'Paste your Google AI API key:'
-        : 'Paste your OpenAI API key (sk-...):';
+            : 'Paste your OpenAI API key (sk-...):';
 
     const key = await p.password({
         message: keyLabel,
@@ -105,8 +143,6 @@ async function configureCloudProvider(engineLabel: string): Promise<{ provider: 
     return { provider, apiKey, model: model as string };
 }
 
-// (Local Ollama helpers removed — Cloud-First architecture)
-
 // ─── Wizard ───────────────────────────────────────────────────────
 
 export async function runOnboardingWizard(options: { reconfigureOnly?: boolean } = {}): Promise<boolean> {
@@ -126,36 +162,50 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
     }
 
     // ════════════════════════════════════════════════════════════
-    // ██  STEP A — LIVE ENGINE CONFIGURATION (Cloud-First)     ██
+    // ██  STEP A — LIVE ENGINE CONFIGURATION                   ██
     // ════════════════════════════════════════════════════════════
 
     p.note(
         pc.bold(pc.cyan('⚡ LIVE ENGINE')) + ' — Your real-time chat brain.\n\n' +
         'The Live Engine handles all interactive TUI and WhatsApp messages.\n' +
         'It must be fast and low-latency for a responsive experience.\n\n' +
-        `${pc.dim('Recommended: Google Gemini Flash (fastest + cheapest)')}\n` +
-        `${pc.dim('Or choose Anthropic, OpenAI, or RunPod for your own cloud GPU.')}`,
+        `${pc.dim('Local: Run a model via Ollama on your machine (free, private)')}\n` +
+        `${pc.dim('Cloud: Use Google, Anthropic, OpenAI, or RunPod')}`,
         '⚡ Step A — Live Engine',
     );
 
     const liveEngineType = await p.select({
-        message: 'Which provider for the Live Engine?',
+        message: 'Select provider for the LIVE Engine:',
         options: [
-            { value: 'cloud' as const, label: '☁️  Cloud API', hint: 'Google, Anthropic, or OpenAI — recommended' },
+            { value: 'local' as const, label: '🏠 Local (Ollama)', hint: 'free, private, runs on your machine' },
+            { value: 'cloud' as const, label: '☁️  Cloud API', hint: 'Google, Anthropic, or OpenAI' },
             { value: 'runpod' as const, label: '🚀 RunPod Serverless', hint: 'Your own GPU in the cloud (OpenAI-compatible via vLLM)' },
         ],
-        initialValue: 'cloud' as const,
     });
     if (p.isCancel(liveEngineType)) return false;
 
     let liveEngineConfig: VaultLiveEngineConfig;
-    // Legacy tier1 config kept for backward compatibility
+    // Legacy tier2 config kept for backward compatibility
     let tier2Config: VaultTier2Config;
     let skipTier2 = true;
     let runpodApiKey: string | undefined;
 
-    if (liveEngineType === 'runpod') {
-        // ── Live Engine: RunPod Serverless Configuration ──────
+    if (liveEngineType === 'local') {
+        // ── Live Engine: Local Ollama ─────────────────────────────
+        const model = await selectLocalModel('Live Engine');
+        if (!model) return false;
+
+        p.log.success(`🏠 Live Engine: Local Ollama — ${pc.bold(model)}`);
+
+        liveEngineConfig = {
+            enabled: true,
+            provider: 'ollama',
+            url: 'http://localhost:11434',
+            model,
+        };
+        tier2Config = { provider: 'anthropic', model: 'none', apiKey: '' };
+    } else if (liveEngineType === 'runpod') {
+        // ── Live Engine: RunPod Serverless Configuration ──────────
         const result = await configureRunpod('Live Engine');
         if (!result) return false;
         runpodApiKey = result.apiKey;
@@ -170,7 +220,7 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
         };
         tier2Config = { provider: 'anthropic', model: 'none', apiKey: '' };
     } else {
-        // ── Live Engine: Cloud Configuration ──────────────────
+        // ── Live Engine: Cloud Configuration ──────────────────────
         const result = await configureCloudProvider('Live Engine');
         if (!result) return false;
 
@@ -186,32 +236,45 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
     }
 
     // ══════════════════════════════════════════════════════════════
-    // ██  STEP B — WORKER ENGINE CONFIGURATION (Cloud-First)     ██
+    // ██  STEP B — WORKER ENGINE CONFIGURATION                   ██
     // ══════════════════════════════════════════════════════════════
 
     p.note(
         pc.bold(pc.blue('🏗️  WORKER ENGINE')) + ' — Your background reasoning brain.\n\n' +
         'The Worker Engine handles heavy tasks like memory distillation,\n' +
         'insight generation, deep analysis — without blocking chat.\n\n' +
-        `${pc.dim('Recommended: Claude Sonnet (best reasoning/cost ratio)')}\n` +
-        `${pc.dim('Or choose Google, OpenAI, or RunPod.')}`,
+        `${pc.dim('Local: Run a model via Ollama on your machine (free, private)')}\n` +
+        `${pc.dim('Cloud: Use Anthropic, Google, OpenAI, or RunPod')}`,
         '🏗️ Step B — Worker Engine',
     );
 
     const workerEngineType = await p.select({
-        message: 'How do you want to run the Worker Engine?',
+        message: 'Select provider for the WORKER Engine:',
         options: [
-            { value: 'cloud' as const, label: '☁️  Cloud API', hint: 'Anthropic, Google, or OpenAI — recommended' },
+            { value: 'local' as const, label: '🏠 Local (Ollama)', hint: 'free, private, runs on your machine' },
+            { value: 'cloud' as const, label: '☁️  Cloud API', hint: 'Anthropic, Google, or OpenAI' },
             { value: 'runpod' as const, label: '🚀 RunPod Serverless', hint: 'Your own GPU in the cloud (OpenAI-compatible via vLLM)' },
             { value: 'disabled' as const, label: '⏸️  Disabled', hint: 'Skip Worker Engine for now' },
         ],
-        initialValue: 'cloud' as const,
     });
     if (p.isCancel(workerEngineType)) return false;
 
     let workerEngineConfig: VaultWorkerEngineConfig;
 
-    if (workerEngineType === 'runpod') {
+    if (workerEngineType === 'local') {
+        // ── Worker Engine: Local Ollama ───────────────────────────
+        const model = await selectLocalModel('Worker Engine');
+        if (!model) return false;
+
+        p.log.success(`🏠 Worker Engine: Local Ollama — ${pc.bold(model)}`);
+
+        workerEngineConfig = {
+            enabled: true,
+            provider: 'ollama',
+            url: 'http://localhost:11434',
+            model,
+        };
+    } else if (workerEngineType === 'runpod') {
         const result = await configureRunpod('Worker Engine');
         if (!result) return false;
         if (!runpodApiKey) runpodApiKey = result.apiKey;
@@ -448,11 +511,15 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
 
     const liveLabel = liveEngineConfig.provider === 'runpod'
         ? `🚀 ${liveEngineConfig.model} (RunPod Serverless)`
-        : `${liveEngineConfig.provider}/${liveEngineConfig.model}`;
+        : liveEngineConfig.provider === 'ollama'
+            ? `🏠 ${liveEngineConfig.model} (Local Ollama)`
+            : `${liveEngineConfig.provider}/${liveEngineConfig.model}`;
     const workerLabel = !workerEngineConfig.enabled ? 'disabled'
         : workerEngineConfig.provider === 'runpod'
             ? `🚀 ${workerEngineConfig.model} (RunPod Serverless)`
-            : `${workerEngineConfig.provider}/${workerEngineConfig.model}`;
+            : workerEngineConfig.provider === 'ollama'
+                ? `🏠 ${workerEngineConfig.model} (Local Ollama)`
+                : `${workerEngineConfig.provider}/${workerEngineConfig.model}`;
 
     p.note(
         `⚡ Live Engine: ${pc.bold(pc.cyan(liveLabel))}\n` +
@@ -465,7 +532,7 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
         `MCPs: ${pc.bold(Object.keys(finalConfig.mcps || {}).length)} installed\n` +
         `God Mode: ${pc.bold(shellGodMode ? pc.red('ON') : 'OFF')}\n` +
         `Vault: ${pc.dim(Vault.configPath)}`,
-        '✅ Two Brains. All Cloud. Configuration Complete.',
+        '✅ Configuration Complete.',
     );
 
     p.outro(pc.green('Configuration complete! Run: ') + pc.bold(pc.cyan('redbus start')));
