@@ -311,11 +311,17 @@ export async function askLive(
         stepCount++;
 
         try {
+            // ─── ReAct Loop via AI SDK ─────────────────────────────────
+            // stopWhen enables multi-step: the SDK will automatically feed
+            // tool results back to the model and continue generating text.
+            // This is the OpenClaw-style ReAct loop — the stream emits
+            // text → tool-call → tool-result → more text → done.
             const result = streamText({
                 model,
                 system: systemPromptContext,
                 messages,
                 tools: filteredTools,
+                stopWhen: stepCountIs(MAX_STEPS),
                 onError: ({ error }) => {
                     console.error('  ❌ [live] streamText onError:', error);
                 },
@@ -327,10 +333,23 @@ export async function askLive(
             let isDetermining = true;
             let hasSentThinking = false;
             let nativeToolUsed = false;
+            // Track text emitted per "step" so we can stream continuation
+            // text after tool results properly to the user.
+            let stepText = '';
+            let afterToolResult = false;
 
             for await (const part of result.fullStream) {
                 if (part.type === 'text-delta') {
                     fullText += part.text;
+                    stepText += part.text;
+
+                    // After a tool result, we are in "continuation mode":
+                    // stream every delta directly to the user so they see
+                    // the model's follow-up response in real time.
+                    if (afterToolResult) {
+                        callbacks.onChunk(part.text);
+                        continue;
+                    }
 
                     if (isDetermining && fullText.trim().length > 0) {
                         const trimmed = fullText.trim();
@@ -338,7 +357,7 @@ export async function askLive(
                             isJsonMode = true;
                             isDetermining = false;
                             if (!hasSentThinking) {
-                                callbacks.onChunk('⏳ Interceptando Tool Call (JSON)...\n');
+                                callbacks.onChunk('⏳ Intercepting Tool Call (JSON)...\n');
                                 hasSentThinking = true;
                             }
                         } else if (trimmed.length > 15) {
@@ -350,10 +369,42 @@ export async function askLive(
                     }
                 } else if (part.type === 'tool-call') {
                     nativeToolUsed = true;
-                    console.log(`  🔧 [live] Native Tool call: ${part.toolName}`);
+                    console.log(`  🔧 [live] Native Tool call: ${part.toolName} (step ${stepCount})`);
+
+                    // 🧠 Thinking Protocol: Reject forge calls without <thinking> block
+                    const thinkingCheck = validateThinkingProtocol(part.toolName, fullText);
+                    if (!thinkingCheck.valid) {
+                        console.warn(`  🚫 [live] Thinking protocol rejected: ${part.toolName}`);
+                        callbacks.onChunk(`\n${thinkingCheck.error}\n`);
+                        // Continue processing the stream — the SDK will handle the rejection
+                    }
+
+                    // ─── Transcript: Log tool call ───
+                    Transcript.append({
+                        role: 'tool-call',
+                        content: JSON.stringify(part.input),
+                        meta: { toolName: part.toolName, tier: 'live', model: modelName },
+                    });
                     callbacks.onToolCall?.(part.toolName, part.input as Record<string, unknown>);
                 } else if (part.type === 'tool-result') {
                     console.log(`  🔧 [live] Native Tool result: ${part.toolName}`);
+
+                    // ─── Transcript: Log tool result ───
+                    Transcript.append({
+                        role: 'tool-result',
+                        content: typeof part.output === 'string'
+                            ? part.output
+                            : JSON.stringify(part.output, null, 2),
+                        meta: {
+                            toolName: part.toolName,
+                            success: typeof part.output === 'object' && part.output !== null && 'success' in part.output
+                                ? (part.output as { success: boolean }).success
+                                : true,
+                            tier: 'live',
+                            model: modelName,
+                        },
+                    });
+
                     callbacks.onToolResult?.(
                         part.toolName,
                         typeof part.output === 'object' && part.output !== null && 'success' in part.output
@@ -363,13 +414,37 @@ export async function askLive(
                             ? part.output
                             : JSON.stringify(part.output, null, 2),
                     );
+
+                    // 🔄 Tool Loop Detection
+                    const toolArgs = (part as any).args || (part as any).input || {};
+                    const toolResult = typeof part.output === 'string'
+                        ? part.output
+                        : JSON.stringify(part.output);
+                    toolCallHistory.push({
+                        argsHash: hashToolCall(part.toolName, toolArgs),
+                        resultHash: hashResult(toolResult),
+                        toolName: part.toolName,
+                    });
+                    const loopCheck = detectToolCallLoop(toolCallHistory, part.toolName, toolArgs);
+                    if (loopCheck.stuck) {
+                        console.warn(`  🚨 [live] Loop detected (${loopCheck.detector}): ${loopCheck.message}`);
+                        callbacks.onChunk(`\n⚠️ Loop detected: ${loopCheck.message}. Breaking out.\n`);
+                        callbacks.onDone(`Loop circuit breaker activated: ${loopCheck.message}`);
+                        return { tier: 'live', model: modelName };
+                    }
+
+                    // Reset for the continuation step: the model will now
+                    // generate text based on the tool result.
+                    afterToolResult = true;
+                    stepText = '';
                 } else if (part.type === 'error') {
                     console.error('  ❌ [live] Stream error event:', part.error);
                     callbacks.onError(part.error instanceof Error ? part.error : new Error(String(part.error)));
                 }
             }
 
-            // 1. Raw JSON Interceptor (Fallback Parser)
+            // ─── Raw JSON Interceptor (Fallback for non-native tool calling) ───
+            // Only used if the model didn't use native SDK tool calling
             if (!nativeToolUsed) {
                 try {
                     let jsonStr = fullText.trim();
@@ -394,13 +469,13 @@ export async function askLive(
                         rawToolCall = parsed;
                     }
                 } catch (e) {
-                    console.warn('  ⚠️ [live] Falha ao fazer parse do JSON bruto (Interceptor):', e);
+                    // Not JSON — normal text response, no action needed
                 }
             }
 
-            // 2. The Invisible Execution Loop
+            // ─── Raw JSON Invisible Execution Loop ───
             if (rawToolCall) {
-                console.log(`  🔧 [live] Raw JSON Tool Call Interceptado: ${rawToolCall.name}`);
+                console.log(`  🔧 [live] Raw JSON Tool Call Intercepted: ${rawToolCall.name}`);
 
                 // 🧠 Thinking Protocol: Reject forge calls without <thinking> block
                 const thinkingCheck = validateThinkingProtocol(rawToolCall.name, fullText);
