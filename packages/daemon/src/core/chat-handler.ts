@@ -119,7 +119,7 @@ export class ChatHandler {
         // Special handling for onboarding
         if (isOnboarding) {
             console.log(`  👤 [onboarding] Parsing persona from user input...`);
-            const askFnOnboarding = targetTier === 'live' ? askLive : askTier2;
+            const askFnOnboarding = targetTier === 'cloud' ? askTier2 : askLive;
             const onboardingPrompt = `The user is describing their desired agent persona. 
 User response: "${content}"
 

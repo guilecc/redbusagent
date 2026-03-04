@@ -15,6 +15,7 @@ import * as p from '@clack/prompts';
 import pc from 'picocolors';
 import { Vault, type VaultTier2Config, type VaultLiveEngineConfig, type VaultWorkerEngineConfig, type Tier2Provider, type EngineProvider, fetchTier2Models, SUGGESTED_MCPS, getMCPSuggestion } from '@redbusagent/shared';
 import { WhatsAppChannel } from '@redbusagent/daemon/dist/channels/whatsapp.js';
+import { OllamaManager } from '@redbusagent/daemon/dist/core/ollama-manager.js';
 
 // ─── Master Catalog: All Supported Local Models (sorted by size) ──
 
@@ -268,6 +269,23 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
 
     await new Promise(r => setTimeout(r, 500));
     saveSpinner.stop('Configuration saved!');
+
+    // ── Download Local Models (if any configured) ─────────────
+    if (!skipTier2 || liveEngineConfig.provider === 'ollama') {
+        try {
+            p.note('Checking local AI Engine and downloading required models... This might take a few minutes if the models are large.', '📦 Ollama Engine Setup');
+            const dlSpinner = p.spinner();
+            dlSpinner.start('Initializing OllamaManager...');
+            OllamaManager.setCallbacks((msg) => {
+                dlSpinner.message(pc.cyan(msg));
+            });
+            await OllamaManager.startup();
+            OllamaManager.shutdown();
+            dlSpinner.stop('Local AI Engine is ready ✅');
+        } catch (err) {
+            p.log.warn(`Ollama setup issue: ${(err as Error).message}. Models will be verified on daemon startup.`);
+        }
+    }
 
     // ── Skip Remaining if reconfigureOnly ──────────────────────
 
