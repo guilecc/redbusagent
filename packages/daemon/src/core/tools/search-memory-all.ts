@@ -12,7 +12,7 @@ export const searchMemoryAllTool = tool({
         try {
             const results = await MemoryManager.searchAllCategories(params.query, params.limit ?? 5);
             if (results.length === 0) {
-                return { success: false, message: 'No relevant memories found across any category.' };
+                return { success: true, results: [], message: 'No relevant memories found across any category.' };
             }
             return {
                 success: true,

@@ -12,7 +12,7 @@ export const searchMemoryTool = tool({
         try {
             const results = await MemoryManager.searchMemory(params.category, params.query);
             if (!results.length) {
-                return { success: false, message: `Nothing semantic found in category "${params.category}" matching "${params.query}".` };
+                return { success: true, blocks: [], message: `Nothing semantic found in category "${params.category}" matching "${params.query}".` };
             }
             return { success: true, blocks: results };
         } catch (error) {

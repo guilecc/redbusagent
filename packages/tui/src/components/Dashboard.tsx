@@ -593,21 +593,39 @@ export function Dashboard(): React.ReactElement {
             }
 
             case 'chat:tool:result': {
-                const status = message.payload.success ? 'success' : 'failed';
                 const resultActivityLabel = getToolActivityLabel(message.payload.toolName);
+                // Remove the ephemeral activity indicator
+                setActiveTools((prev) => prev.filter((l) => l !== resultActivityLabel));
+
                 if (!message.payload.success) {
-                    // Failed: remove ephemeral indicator, add permanent error to chat
-                    setActiveTools((prev) => prev.filter((l) => l !== resultActivityLabel));
-                    const summary = formatToolResultSummary(message.payload.toolName, message.payload.result, false);
-                    setChatLines((prev) => [
-                        ...prev.slice(-(MAX_CHAT_LINES - 1)),
-                        `❌ ${message.payload.toolName}: ${summary}`,
-                    ]);
+                    // Distinguish between real errors and soft "no results" outcomes:
+                    // Real errors have an "error" field; soft failures only have "message"
+                    let isHardError = true;
+                    try {
+                        const parsed = JSON.parse(message.payload.result);
+                        // Soft failure: has message but no error field (e.g. "No memories found")
+                        if (parsed.message && !parsed.error) {
+                            isHardError = false;
+                        }
+                    } catch {
+                        // Not JSON — treat as hard error
+                    }
+
+                    if (isHardError) {
+                        const summary = formatToolResultSummary(message.payload.toolName, message.payload.result, false);
+                        setChatLines((prev) => [
+                            ...prev.slice(-(MAX_CHAT_LINES - 1)),
+                            `❌ ${message.payload.toolName}: ${summary}`,
+                        ]);
+                        addLog(`Tool result: ${message.payload.toolName} — error`, 'red');
+                    } else {
+                        // Soft failure: log silently, don't pollute chat
+                        addLog(`Tool result: ${message.payload.toolName} — no results`, 'gray');
+                    }
                 } else {
-                    // Success: just remove the ephemeral indicator silently
-                    setActiveTools((prev) => prev.filter((l) => l !== resultActivityLabel));
+                    // Success: log silently
+                    addLog(`Tool result: ${message.payload.toolName} — success`, 'green');
                 }
-                addLog(`Tool result: ${message.payload.toolName} — ${status}`, message.payload.success ? 'green' : 'red');
                 break;
             }
 
