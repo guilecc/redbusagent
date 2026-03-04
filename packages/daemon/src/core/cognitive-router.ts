@@ -55,6 +55,55 @@ SILENT EXECUTION: Do not ask the user "Would you like me to write a script for t
 THE LAZINESS BAN: Never attempt to do complex math, data filtering, or system analysis textually in your "head". Always forge a tool to do the heavy lifting.
 `;
 
+// ─── Thinking Protocol ────────────────────────────────────────────
+
+/**
+ * Tools that require a <thinking> block before invocation.
+ * The Router will reject these tool calls if no architectural
+ * reasoning was output by the LLM first.
+ */
+const THINKING_REQUIRED_TOOLS = new Set([
+    'forge_and_test_skill',
+]);
+
+const THINKING_REJECTION = 'Error: You must output a <thinking> architectural plan before forging a tool. ' +
+    'Explain: (1) WHY you need this tool, (2) HOW it integrates with your existing architecture, ' +
+    '(3) WHAT the expected input/output contract is. Then call forge_and_test_skill again.';
+
+/**
+ * Validates that the LLM output a <thinking>...</thinking> block before
+ * calling a tool that requires explicit reasoning.
+ */
+function validateThinkingProtocol(toolName: string, precedingText: string): { valid: boolean; error?: string } {
+    if (!THINKING_REQUIRED_TOOLS.has(toolName)) {
+        return { valid: true };
+    }
+
+    // Check if the preceding text contains a <thinking> block
+    const hasThinkingOpen = precedingText.includes('<thinking>');
+    const hasThinkingClose = precedingText.includes('</thinking>');
+
+    if (!hasThinkingOpen || !hasThinkingClose) {
+        console.warn(`  🚫 [thinking-protocol] Rejected ${toolName}: no <thinking> block found`);
+        return { valid: false, error: THINKING_REJECTION };
+    }
+
+    // Extract the thinking content and validate it's not trivially empty
+    const thinkingMatch = precedingText.match(/<thinking>([\s\S]*?)<\/thinking>/);
+    const thinkingContent = thinkingMatch?.[1]?.trim() || '';
+
+    if (thinkingContent.length < 50) {
+        console.warn(`  🚫 [thinking-protocol] Rejected ${toolName}: <thinking> block too short (${thinkingContent.length} chars)`);
+        return {
+            valid: false,
+            error: 'Error: Your <thinking> block is too brief. Provide detailed architectural reasoning (at least 50 characters) covering WHY, HOW, and WHAT before forging.',
+        };
+    }
+
+    console.log(`  ✅ [thinking-protocol] ${toolName} approved — <thinking> block validated (${thinkingContent.length} chars)`);
+    return { valid: true };
+}
+
 // ─── Persona Helpers ──────────────────────────────────────────────
 
 function getPersonaContext(): string {
@@ -370,6 +419,15 @@ export async function askLive(
             // 2. The Invisible Execution Loop
             if (rawToolCall) {
                 console.log(`  🔧 [live] Raw JSON Tool Call Interceptado: ${rawToolCall.name}`);
+
+                // 🧠 Thinking Protocol: Reject forge calls without <thinking> block
+                const thinkingCheck = validateThinkingProtocol(rawToolCall.name, fullText);
+                if (!thinkingCheck.valid) {
+                    callbacks.onChunk(`\n${thinkingCheck.error}\n`);
+                    callbacks.onDone(thinkingCheck.error!);
+                    return { tier: 'live' as const, model: modelName };
+                }
+
                 callbacks.onToolCall?.(rawToolCall.name, rawToolCall.arguments || {});
 
                 // ─── Transcript: Log tool call ───
@@ -624,7 +682,16 @@ export async function askTier2(
                     callbacks.onChunk(part.text);
                     break;
 
-                case 'tool-call':
+                case 'tool-call': {
+                    // 🧠 Thinking Protocol: Reject forge calls without <thinking> block
+                    const tier2ThinkingCheck = validateThinkingProtocol(part.toolName, fullText);
+                    if (!tier2ThinkingCheck.valid) {
+                        console.warn(`  🚫 [tier2] Thinking protocol rejected: ${part.toolName}`);
+                        // Inject the rejection as a tool result so the LLM can retry
+                        callbacks.onToolResult?.(part.toolName, false, tier2ThinkingCheck.error!);
+                        break;
+                    }
+
                     toolCalled = true;
                     toolTimers.set(part.toolName, Date.now());
                     lastToolCallArgs = part.input;
@@ -639,6 +706,7 @@ export async function askTier2(
                         part.input as Record<string, unknown>,
                     );
                     break;
+                }
 
                 case 'tool-result': {
                     const toolDurationMs = toolTimers.has(part.toolName)

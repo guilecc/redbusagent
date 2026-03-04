@@ -24,6 +24,8 @@ import { getGitStatusTool, getGitDiffTool, gitCommitChangesTool } from './tools/
 import { startBackgroundProcessTool, getProcessLogsTool, killBackgroundProcessTool } from './tools/process-manager.js';
 import { visualInspectPageTool } from './tools/visual-inspect-page.js';
 import { installMcpTool } from './tools/install-mcp.js';
+import { readOwnArchitectureTool, readToolSignaturesTool } from './tools/introspection.js';
+import { forgeAndTestSkillTool, listForgedSkillsTool } from './tools/forge-tdd.js';
 import { Forge } from './forge.js';
 import { Vault } from '@redbusagent/shared';
 import { WhatsAppChannel } from '../channels/whatsapp.js';
@@ -95,6 +97,11 @@ export class CapabilityRegistry {
             kill_background_process: killBackgroundProcessTool,
             visual_inspect_page: visualInspectPageTool,
             install_mcp: installMcpTool,
+            // ─── Self-Improvement Tools ────────────────────────
+            read_own_architecture: readOwnArchitectureTool,
+            read_tool_signatures: readToolSignaturesTool,
+            forge_and_test_skill: forgeAndTestSkillTool,
+            list_forged_skills: listForgedSkillsTool,
             ...dynamicTools,
             ...mcpSdkTools,
         };
@@ -125,6 +132,7 @@ ${hasWhatsapp ? `- 📱 WhatsApp: You are connected to the user's WhatsApp. You 
 - 🛠️ Surgical Code Editing: When you need to modify an existing file, DO NOT recreate the whole file. Use the edit_file_blocks tool. Provide the EXACT existing lines in the search_block, and your new lines in the replace_block. Always read the file first to get the exact indentation before attempting an edit.
 - 💻 System Shell: You have direct terminal access. You can execute OS commands via the execute_shell_command tool.
 - 🔨 Forge (Dual-Language): You can write and execute **Node.js** (.js) and **Python** (.py) tools. For Python, dependencies are installed via pip into an isolated venv at \`${Forge.venvDir}\`. Use .py files for data science, ML, scraping with Python libs, etc. Use .js files for Node.js tasks. Your tools and workspace are physically located at: \`${Forge.dir}\`. You currently have ${forgedTools.length} custom tools forged${forgedTools.length > 0 ? `: ${forgedNames}` : '.'}
+- ⚙️ Self-Improvement Mode: You are an autonomous engineer of your own system. When the user asks for a new capability: 1) Plan in a <thinking> block. 2) Use read_tool_signatures to understand how your existing tools are structured. 3) Write the new tool code. 4) Use forge_and_test_skill to validate it in the sandbox. 5) Never deploy untested code into your own registry. Tools: read_own_architecture, read_tool_signatures, forge_and_test_skill, list_forged_skills.
 - 🔌 MCP (Model Context Protocol): You are connected to MCP servers exposing ${mcpCount} external tools dynamically.
 - 🧩 MCP Discovery & Install: You can discover and install new MCP servers at runtime using install_mcp. Workflow: (1) Use web_search to find MCPs (e.g. "MCP server for X site:github.com", "npm @modelcontextprotocol/server-*", "registry.modelcontextprotocol.io"). (2) Use web_read_page to read the MCP's README for the correct command/args. (3) Ask the user for any required API keys/tokens. (4) Call install_mcp with the id, name, command, args, and env. The MCP will be activated immediately and its tools will become available.
 - 🔒 Approval Gates: The following tools require explicit user approval before execution:
