@@ -24,7 +24,6 @@ export interface LiveEngineConfig {
     power_class?: string;
     provider: EngineProvider;
     apiKey?: string;
-    runpod_endpoint_id?: string;
 }
 
 export function getLiveEngineConfig(): LiveEngineConfig {
@@ -36,8 +35,7 @@ export function getLiveEngineConfig(): LiveEngineConfig {
             enabled: config.live_engine.enabled ?? true,
             power_class: config.live_engine.power_class ?? 'gold',
             provider: config.live_engine.provider ?? 'google',
-            apiKey: config.live_engine.apiKey ?? config?.runpod_api_key,
-            runpod_endpoint_id: config.live_engine.runpod_endpoint_id,
+            apiKey: config.live_engine.apiKey,
         };
     }
     // Legacy fallback: use tier1 if live_engine not configured
@@ -60,7 +58,6 @@ export interface WorkerEngineConfig {
     num_ctx: number;
     provider: EngineProvider;
     apiKey?: string;
-    runpod_endpoint_id?: string;
 }
 
 export function getWorkerEngineConfig(): WorkerEngineConfig {
@@ -72,8 +69,7 @@ export function getWorkerEngineConfig(): WorkerEngineConfig {
         num_threads: config?.worker_engine?.num_threads ?? 8,
         num_ctx: config?.worker_engine?.num_ctx ?? 8192,
         provider: config?.worker_engine?.provider ?? 'anthropic',
-        apiKey: config?.worker_engine?.apiKey ?? config?.runpod_api_key,
-        runpod_endpoint_id: config?.worker_engine?.runpod_endpoint_id,
+        apiKey: config?.worker_engine?.apiKey,
     };
 }
 

@@ -24,8 +24,8 @@ import crypto from 'node:crypto';
 
 export type Tier2Provider = 'anthropic' | 'google' | 'openai';
 
-/** Provider type for any engine slot (cloud API or RunPod serverless) */
-export type EngineProvider = 'ollama' | 'anthropic' | 'google' | 'openai' | 'runpod';
+/** Provider type for any engine slot (cloud API or local Ollama) */
+export type EngineProvider = 'ollama' | 'anthropic' | 'google' | 'openai';
 
 export interface VaultTier2Config {
     readonly provider: Tier2Provider;
@@ -54,19 +54,17 @@ export interface VaultTier1Config {
 /**
  * Live Engine: Fast, low-latency cloud model for instant TUI/WhatsApp chat.
  * Default: Google Gemini 2.5 Flash (cheapest + fast).
- * Also supports: Anthropic, OpenAI, RunPod Serverless.
+ * Also supports: Anthropic, OpenAI, or local Ollama.
  */
 export interface VaultLiveEngineConfig {
     readonly enabled: boolean;
-    /** Provider: 'anthropic'/'google'/'openai' for cloud, 'runpod' for RunPod Serverless, 'ollama' for legacy local */
+    /** Provider: 'anthropic'/'google'/'openai' for cloud, 'ollama' for local */
     readonly provider?: EngineProvider;
     readonly url: string;
     readonly model: string;
     readonly power_class?: PowerClass;
     /** API key for cloud providers */
     readonly apiKey?: string;
-    /** RunPod Serverless endpoint ID (only when provider === 'runpod') */
-    readonly runpod_endpoint_id?: string;
 }
 
 /**
@@ -76,7 +74,7 @@ export interface VaultLiveEngineConfig {
  */
 export interface VaultWorkerEngineConfig {
     readonly enabled: boolean;
-    /** Provider: 'anthropic'/'google'/'openai' for cloud, 'runpod' for RunPod Serverless, 'ollama' for legacy local */
+    /** Provider: 'anthropic'/'google'/'openai' for cloud, 'ollama' for local */
     readonly provider?: EngineProvider;
     readonly url: string;
     readonly model: string;
@@ -86,8 +84,6 @@ export interface VaultWorkerEngineConfig {
     readonly num_threads?: number;
     /** Context window size (legacy, only for Ollama) */
     readonly num_ctx?: number;
-    /** RunPod Serverless endpoint ID (only when provider === 'runpod') */
-    readonly runpod_endpoint_id?: string;
 }
 
 export interface VaultConfig {
@@ -137,11 +133,7 @@ export interface VaultConfig {
         readonly vram_gb: number;
         readonly system_ram_gb: number;
     };
-    /**
-     * RunPod Serverless API key.
-     * Used when any engine has provider === 'runpod'.
-     */
-    readonly runpod_api_key?: string;
+
 }
 
 

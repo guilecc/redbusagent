@@ -211,7 +211,7 @@ console.log('  💬 Chat handler initialized');
 console.log('  ✅ Daemon is ready. Waiting for TUI connections...\n');
 
 // ── Cloud-First: No local engine management needed ───────────────
-// All engines are cloud APIs (Anthropic, Google, OpenAI, RunPod).
+// All engines are cloud APIs (Anthropic, Google, OpenAI) or local Ollama.
 // No local Ollama auto-start or model pulling.
 
 // ── Extensions (Channels) ─────────────────────────────────────────

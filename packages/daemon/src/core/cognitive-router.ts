@@ -3,8 +3,8 @@
  *
  * The brain's routing layer. Abstracts LLM calls behind two engine slots:
  *
- *  • Live Engine (Fast)   → Cloud API (Google, Anthropic, OpenAI, RunPod)
- *  • Worker Engine (Deep) → Cloud API for background reasoning & insights
+ *  • Live Engine (Fast)   → Cloud API (Google, Anthropic, OpenAI) or Local Ollama
+ *  • Worker Engine (Deep) → Cloud API or Local Ollama for background reasoning & insights
  *
  * MemGPT Architecture Integration:
  *  • Auto-RAG: Every user message is silently enriched with top 3
@@ -26,7 +26,6 @@ import {
     getLiveEngineConfig,
     getWorkerEngineConfig,
 } from '../infra/llm-config.js';
-// RunPod is now handled as a standard OpenAI-compatible provider in createCloudModel
 import { getSystemPromptLiveGold, getSystemPromptTier2 } from './system-prompt.js';
 import { PersonaManager } from '@redbusagent/shared';
 import { MemoryManager } from './memory-manager.js';
@@ -115,7 +114,7 @@ function getPersonaContext(): string {
 // ─── Provider Factory ─────────────────────────────────────────────
 
 /** Creates a cloud LanguageModel from a provider name + apiKey + model */
-function createCloudModel(provider: string, apiKey: string, model: string, opts?: { runpodEndpointId?: string }): LanguageModel {
+function createCloudModel(provider: string, apiKey: string, model: string): LanguageModel {
     switch (provider) {
         case 'anthropic': {
             const anthropic = createAnthropic({ apiKey });
@@ -129,17 +128,6 @@ function createCloudModel(provider: string, apiKey: string, model: string, opts?
             const openai = createOpenAI({ apiKey });
             return openai(model);
         }
-        case 'runpod': {
-            // RunPod Serverless exposes an OpenAI-compatible API via vLLM.
-            // Standard baseURL: https://api.runpod.ai/v2/{endpoint-id}/openai/v1
-            const endpointId = opts?.runpodEndpointId;
-            if (!endpointId) throw new Error('RunPod requires an endpoint ID. Run: redbus config');
-            const runpod = createOpenAI({
-                baseURL: `https://api.runpod.ai/v2/${endpointId}/openai/v1`,
-                apiKey,
-            });
-            return runpod(model);
-        }
         default:
             throw new Error(`Unknown cloud provider: ${provider}`);
     }
@@ -148,23 +136,20 @@ function createCloudModel(provider: string, apiKey: string, model: string, opts?
 function createLiveModel(): LanguageModel {
     const liveConfig = getLiveEngineConfig();
 
-    // Cloud-First: All Live Engine providers go through cloud model factory.
-    // RunPod is now a standard OpenAI-compatible provider (no special interception needed).
+    // Cloud or Local: All Live Engine providers go through the appropriate factory.
     if (liveConfig.provider) {
         if (liveConfig.provider !== 'ollama' && !liveConfig.apiKey) {
             throw new Error(`Live Engine (${liveConfig.provider}) requires an API key. Run: redbus config`);
         }
         if (liveConfig.provider === 'ollama') {
-            // Legacy Ollama fallback (not recommended)
+            // Local Ollama
             const ollama = createOpenAI({
                 baseURL: `${liveConfig.url || 'http://127.0.0.1:11434'}/v1`,
                 apiKey: 'ollama',
             });
             return ollama(liveConfig.model);
         }
-        return createCloudModel(liveConfig.provider, liveConfig.apiKey!, liveConfig.model, {
-            runpodEndpointId: liveConfig.runpod_endpoint_id,
-        });
+        return createCloudModel(liveConfig.provider, liveConfig.apiKey!, liveConfig.model);
     }
 
     // Default: use Google provider
@@ -207,16 +192,13 @@ export function createTier2Model(): LanguageModel {
 export function createWorkerModel(): LanguageModel {
     const workerConfig = getWorkerEngineConfig();
 
-    // Cloud-First: Worker Engine uses cloud provider APIs.
-    // RunPod is now a standard OpenAI-compatible provider (no special interception needed).
+    // Cloud or Local: Worker Engine uses cloud provider APIs or local Ollama.
     if (workerConfig.provider && workerConfig.provider !== 'ollama') {
         if (!workerConfig.apiKey) throw new Error(`Worker Engine (${workerConfig.provider}) requires an API key. Run: redbus config`);
-        return createCloudModel(workerConfig.provider, workerConfig.apiKey, workerConfig.model, {
-            runpodEndpointId: workerConfig.runpod_endpoint_id,
-        });
+        return createCloudModel(workerConfig.provider, workerConfig.apiKey, workerConfig.model);
     }
 
-    // Legacy Ollama fallback (not recommended in cloud-first architecture)
+    // Local Ollama
     if (workerConfig.provider === 'ollama') {
         const workerOllama = createOpenAI({
             baseURL: `${workerConfig.url || 'http://127.0.0.1:11434'}/v1`,

@@ -51,34 +51,6 @@ async function selectLocalModel(engineLabel: string): Promise<string | null> {
     return selected as string;
 }
 
-// ─── Helper: RunPod Serverless Configuration ─────────────────────
-
-async function configureRunpod(engineLabel: string): Promise<{ provider: 'runpod'; apiKey: string; endpointId: string; model: string } | null> {
-    const apiKey = await p.password({
-        message: `Paste your RunPod API key:`,
-        validate: (v) => { if (!v || v.trim().length < 10) return 'Invalid key.'; },
-    });
-    if (p.isCancel(apiKey)) return null;
-
-    const endpointId = await p.text({
-        message: `Paste your RunPod Serverless Endpoint ID:`,
-        placeholder: 'e.g. abc123def456',
-        validate: (v) => { if (!v || v.trim().length < 5) return 'Invalid endpoint ID.'; },
-    });
-    if (p.isCancel(endpointId)) return null;
-
-    const model = await p.text({
-        message: `What is the model name on your RunPod endpoint? (OpenAI-compatible)`,
-        placeholder: 'e.g. qwen3-32b-awq, meta-llama/Llama-3.1-8B-Instruct',
-        initialValue: 'qwen3-32b-awq',
-        validate: (v) => { if (!v || v.trim().length < 2) return 'Invalid model name.'; },
-    });
-    if (p.isCancel(model)) return null;
-
-    p.log.success(`🚀 ${engineLabel}: RunPod Serverless (OpenAI-compatible) — ${pc.bold(model as string)} (endpoint: ${(endpointId as string).slice(0, 8)}...)`);
-    return { provider: 'runpod', apiKey: (apiKey as string).trim(), endpointId: (endpointId as string).trim(), model: (model as string).trim() };
-}
-
 // ─── Helper: Cloud Provider Configuration ────────────────────────
 
 async function configureCloudProvider(engineLabel: string): Promise<{ provider: Tier2Provider; apiKey: string; model: string } | null> {
@@ -170,7 +142,7 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
         'The Live Engine handles all interactive TUI and WhatsApp messages.\n' +
         'It must be fast and low-latency for a responsive experience.\n\n' +
         `${pc.dim('Local: Run a model via Ollama on your machine (free, private)')}\n` +
-        `${pc.dim('Cloud: Use Google, Anthropic, OpenAI, or RunPod')}`,
+        `${pc.dim('Cloud: Use Google, Anthropic, or OpenAI')}`,
         '⚡ Step A — Live Engine',
     );
 
@@ -179,7 +151,6 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
         options: [
             { value: 'local' as const, label: '🏠 Local (Ollama)', hint: 'free, private, runs on your machine' },
             { value: 'cloud' as const, label: '☁️  Cloud API', hint: 'Google, Anthropic, or OpenAI' },
-            { value: 'runpod' as const, label: '🚀 RunPod Serverless', hint: 'Your own GPU in the cloud (OpenAI-compatible via vLLM)' },
         ],
     });
     if (p.isCancel(liveEngineType)) return false;
@@ -188,7 +159,6 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
     // Legacy tier2 config kept for backward compatibility
     let tier2Config: VaultTier2Config;
     let skipTier2 = true;
-    let runpodApiKey: string | undefined;
 
     if (liveEngineType === 'local') {
         // ── Live Engine: Local Ollama ─────────────────────────────
@@ -202,21 +172,6 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
             provider: 'ollama',
             url: 'http://localhost:11434',
             model,
-        };
-        tier2Config = { provider: 'anthropic', model: 'none', apiKey: '' };
-    } else if (liveEngineType === 'runpod') {
-        // ── Live Engine: RunPod Serverless Configuration ──────────
-        const result = await configureRunpod('Live Engine');
-        if (!result) return false;
-        runpodApiKey = result.apiKey;
-
-        liveEngineConfig = {
-            enabled: true,
-            provider: 'runpod',
-            url: '',
-            model: result.model,
-            apiKey: result.apiKey,
-            runpod_endpoint_id: result.endpointId,
         };
         tier2Config = { provider: 'anthropic', model: 'none', apiKey: '' };
     } else {
@@ -244,7 +199,7 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
         'The Worker Engine handles heavy tasks like memory distillation,\n' +
         'insight generation, deep analysis — without blocking chat.\n\n' +
         `${pc.dim('Local: Run a model via Ollama on your machine (free, private)')}\n` +
-        `${pc.dim('Cloud: Use Anthropic, Google, OpenAI, or RunPod')}`,
+        `${pc.dim('Cloud: Use Anthropic, Google, or OpenAI')}`,
         '🏗️ Step B — Worker Engine',
     );
 
@@ -253,7 +208,6 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
         options: [
             { value: 'local' as const, label: '🏠 Local (Ollama)', hint: 'free, private, runs on your machine' },
             { value: 'cloud' as const, label: '☁️  Cloud API', hint: 'Anthropic, Google, or OpenAI' },
-            { value: 'runpod' as const, label: '🚀 RunPod Serverless', hint: 'Your own GPU in the cloud (OpenAI-compatible via vLLM)' },
             { value: 'disabled' as const, label: '⏸️  Disabled', hint: 'Skip Worker Engine for now' },
         ],
     });
@@ -273,18 +227,6 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
             provider: 'ollama',
             url: 'http://localhost:11434',
             model,
-        };
-    } else if (workerEngineType === 'runpod') {
-        const result = await configureRunpod('Worker Engine');
-        if (!result) return false;
-        if (!runpodApiKey) runpodApiKey = result.apiKey;
-        workerEngineConfig = {
-            enabled: true,
-            provider: 'runpod',
-            url: '',
-            model: result.model,
-            apiKey: result.apiKey,
-            runpod_endpoint_id: result.endpointId,
         };
     } else if (workerEngineType === 'cloud') {
         const result = await configureCloudProvider('Worker Engine');
@@ -322,7 +264,6 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
         owner_phone_number: ownerPhoneNumber,
         credentials,
         sessions,
-        ...(runpodApiKey ? { runpod_api_key: runpodApiKey } : {}),
     });
 
     await new Promise(r => setTimeout(r, 500));
@@ -379,7 +320,6 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
             owner_phone_number: ownerPhoneNumber,
             credentials,
             sessions,
-            ...(runpodApiKey ? { runpod_api_key: runpodApiKey } : {}),
         });
 
         p.log.success(`🛡️  Firewall activated for: ${pc.bold(ownerPhoneNumber)}@c.us`);
@@ -418,7 +358,6 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
             owner_phone_number: undefined,
             credentials,
             sessions,
-            ...(runpodApiKey ? { runpod_api_key: runpodApiKey } : {}),
         });
 
         if (hadSession || existingConfig?.owner_phone_number) {
@@ -509,17 +448,13 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
     });
     p.log.success(`✅ God Mode: ${shellGodMode ? pc.red('ACTIVATED') : pc.green('Secured with HITL')}.`);
 
-    const liveLabel = liveEngineConfig.provider === 'runpod'
-        ? `🚀 ${liveEngineConfig.model} (RunPod Serverless)`
-        : liveEngineConfig.provider === 'ollama'
-            ? `🏠 ${liveEngineConfig.model} (Local Ollama)`
-            : `${liveEngineConfig.provider}/${liveEngineConfig.model}`;
+    const liveLabel = liveEngineConfig.provider === 'ollama'
+        ? `🏠 ${liveEngineConfig.model} (Local Ollama)`
+        : `${liveEngineConfig.provider}/${liveEngineConfig.model}`;
     const workerLabel = !workerEngineConfig.enabled ? 'disabled'
-        : workerEngineConfig.provider === 'runpod'
-            ? `🚀 ${workerEngineConfig.model} (RunPod Serverless)`
-            : workerEngineConfig.provider === 'ollama'
-                ? `🏠 ${workerEngineConfig.model} (Local Ollama)`
-                : `${workerEngineConfig.provider}/${workerEngineConfig.model}`;
+        : workerEngineConfig.provider === 'ollama'
+            ? `🏠 ${workerEngineConfig.model} (Local Ollama)`
+            : `${workerEngineConfig.provider}/${workerEngineConfig.model}`;
 
     p.note(
         `⚡ Live Engine: ${pc.bold(pc.cyan(liveLabel))}\n` +

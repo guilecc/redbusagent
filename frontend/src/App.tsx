@@ -117,7 +117,7 @@ function App() {
                                     Meanwhile, a powerful reasoning model (<span className="text-blue-400 font-bold">Worker Engine</span>) runs in the background — handling deep analysis, memory distillation, and insight generation without ever blocking your conversation.
                                 </p>
                                 <p className="text-white/40">
-                                    Pick your providers: Gemini Flash for speed, Claude Sonnet for intelligence, or RunPod for your own GPU in the cloud. Mix and match.
+                                    Pick your providers: Gemini Flash for speed, Claude Sonnet for intelligence, or run local models via Ollama for free and private inference. Mix and match.
                                 </p>
                             </div>
                             <div className="flex flex-col gap-3 min-w-[220px]">
