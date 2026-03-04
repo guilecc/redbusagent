@@ -259,12 +259,15 @@ export function generateGemma3ToolPrompt(tools: Record<string, any>): string {
     return `\n\nYou have access to the following tools:
 ${JSON.stringify(schemas, null, 2)}
 
-To use a tool, you MUST output a JSON block wrapped EXACTLY in these XML tags:
-<tool_call>
-{"name": "tool_name", "arguments": {"param1": "value1"}}
+To use a tool, you MUST output an XML block exactly like this:
+<tool_call name="tool_name">
+{"param1": "value1"}
 </tool_call>
 
-CRITICAL RULE: When using a tool, DO NOT output ANY conversational text before or after the <tool_call> block. DO NOT say "Here is the tool call" or explain what you are doing. Just output the raw <tool_call> block and nothing else. If you do not need to use a tool, simply reply to the user normally.`;
+CRITICAL RULES: 
+1. The JSON must NOT be nested inside another "arguments" object. Just the parameters directly.
+2. The JSON MUST be correctly formatted and all braces must be closed.
+3. You should provide a short, helpful conversational reply to the user BEFORE outputting the <tool_call> block (e.g. "I am delegating this task to the engineering agent..."). Do not use markdown code blocks (\`\`\`xml) around the tool call.`;
 }
 
 // ─── Stream Callbacks ─────────────────────────────────────────────
@@ -438,7 +441,7 @@ export async function askLive(
 
                     if (isDetermining && fullText.trim().length > 0) {
                         const trimmed = fullText.trim();
-                        if (trimmed.startsWith('{') || trimmed.startsWith('[') || trimmed.startsWith('```')) {
+                        if (trimmed.startsWith('{') || trimmed.startsWith('[') || trimmed.startsWith('```') || trimmed.startsWith('<tool_call>')) {
                             isJsonMode = true;
                             isDetermining = false;
                             if (!hasSentThinking) {
@@ -446,11 +449,19 @@ export async function askLive(
                                 hasSentThinking = true;
                             }
                         } else if (trimmed.length > 15) {
-                            isDetermining = false;
-                            callbacks.onChunk(fullText); // Output standard buffer
+                            // Only exit determining phase if we haven't seen signs of an upcoming tool call
+                            if (!fullText.includes('<tool_call') && !fullText.includes('```xml')) {
+                                isDetermining = false;
+                                callbacks.onChunk(fullText); // Output standard buffer
+                            }
                         }
                     } else if (!isDetermining && !isJsonMode) {
-                        callbacks.onChunk(part.text);
+                        // Mid-stream switch to suppression mode if we hit a tool call block
+                        if (fullText.includes('<tool_call') || fullText.includes('```xml')) {
+                            isJsonMode = true; // Engage silence mode
+                        } else {
+                            callbacks.onChunk(part.text);
+                        }
                     }
                 } else if (part.type === 'tool-call') {
                     nativeToolUsed = true;
@@ -533,11 +544,22 @@ export async function askLive(
             if (!nativeToolUsed) {
                 try {
                     // GEMMA 3 XML ADAPTER
-                    const xmlMatch = fullText.match(/<tool_call>([\s\S]*?)<\/tool_call>/);
-                    if (xmlMatch && xmlMatch[1]) {
-                        const parsed = JSON.parse(xmlMatch[1].trim());
-                        if (parsed && typeof parsed.name === 'string' && typeof parsed.arguments === 'object') {
+                    const xmlMatch = fullText.match(/<tool_call(?: name="([^"]+)")?>([\s\S]*?)<\/tool_call>/);
+                    if (xmlMatch && xmlMatch[2]) {
+                        const parsedName = xmlMatch[1];
+                        let jsonStr = xmlMatch[2].trim();
+                        // Attempt emergency repair of unclosed JSON object (common with complex strings)
+                        if (!jsonStr.endsWith('}')) jsonStr += '}';
+                        if (!jsonStr.startsWith('{')) jsonStr = '{' + jsonStr;
+
+                        const parsed = JSON.parse(jsonStr);
+                        // Handle both full nested JSON or flat JSON with name attribute
+                        if (parsedName && typeof parsed === 'object') {
+                            rawToolCall = { name: parsedName, arguments: parsed };
+                        } else if (parsed && typeof parsed.name === 'string' && typeof parsed.arguments === 'object') {
                             rawToolCall = parsed;
+                        } else if (parsed && typeof parsed.name === 'string' && typeof parsed.parameters === 'object') {
+                            rawToolCall = { name: parsed.name, arguments: parsed.parameters };
                         }
                     } else {
                         // Original JSON fallback
