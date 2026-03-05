@@ -8,7 +8,7 @@
  * (e.g. via `redbus config`) take effect without daemon restart.
  */
 
-import { Vault, type VaultConfig, type Tier2Provider, type EngineProvider } from '@redbusagent/shared';
+import { Vault, type Tier2Provider, type EngineProvider } from '@redbusagent/shared';
 
 // Re-export the type for convenience
 export type { Tier2Provider, EngineProvider };
@@ -30,21 +30,21 @@ export function getLiveEngineConfig(): LiveEngineConfig {
     const config = Vault.read();
     if (config?.live_engine) {
         return {
-            url: config.live_engine.url ?? '',
-            model: config.live_engine.model ?? 'gemini-2.5-flash',
+            url: config.live_engine.url ?? 'http://localhost:11434',
+            model: config.live_engine.model ?? 'gemma3:4b',
             enabled: config.live_engine.enabled ?? true,
-            power_class: config.live_engine.power_class ?? 'gold',
-            provider: config.live_engine.provider ?? 'google',
+            power_class: config.live_engine.power_class ?? 'bronze',
+            provider: config.live_engine.provider ?? 'ollama',
             apiKey: config.live_engine.apiKey,
         };
     }
-    // Legacy fallback: use tier1 if live_engine not configured
+    // Default: Local Gemma 3 via Ollama (no legacy tier1 fallback)
     return {
-        url: config?.tier1?.url ?? '',
-        model: config?.tier1?.model ?? 'gemini-2.5-flash',
-        enabled: config?.tier1?.enabled ?? true,
-        power_class: config?.tier1?.power_class ?? 'gold',
-        provider: config?.tier1 ? 'ollama' : 'google',
+        url: 'http://localhost:11434',
+        model: 'gemma3:4b',
+        enabled: true,
+        power_class: 'bronze',
+        provider: 'ollama',
     };
 }
 
@@ -162,7 +162,7 @@ export function validateTier2Config(): Tier2Validation {
             }
             return { valid: true, authMethod: 'API key' };
         case 'ollama':
-            return { valid: true, authMethod: 'Local API' };
+            return { valid: false, error: 'Worker Engine must use a Cloud provider (anthropic/google/openai). Local Ollama is not supported. Run: redbus config' };
         default:
             return { valid: false, error: `Unknown provider: ${workerConfig.provider as string}` };
     }

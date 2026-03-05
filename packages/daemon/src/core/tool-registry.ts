@@ -18,6 +18,14 @@ import { Forge } from './forge.js';
 
 // ─── Types ────────────────────────────────────────────────────────
 
+/** A single few-shot usage example for a forged tool */
+export interface ToolUsageExample {
+    /** Simulated user input that triggers this tool */
+    user_input: string;
+    /** Expected JSON tool call the model should produce */
+    expected_tool_call: { name: string; args: Record<string, unknown> };
+}
+
 export interface ToolRegistryEntry {
     name: string;
     description: string;
@@ -25,6 +33,8 @@ export interface ToolRegistryEntry {
     createdAt: string;
     lastUsedAt: string;
     executionCount: number;
+    /** Few-shot usage examples for Gemma 3 alignment */
+    usage_examples?: ToolUsageExample[];
 }
 
 interface RegistryFile {
@@ -110,7 +120,7 @@ export class ToolRegistry {
             const entryFilename = entry.filename;
 
             tools[entryName] = tool({
-                description: `[Forjada] ${entry.description}`,
+                description: `[Forged] ${entry.description}`,
                 inputSchema: z.object({
                     input: z.string().optional().describe('Optional input to pass to the tool'),
                 }),
@@ -133,11 +143,36 @@ export class ToolRegistry {
     /** Get a summary of registered tools for system prompt context */
     static getToolsSummary(): string {
         const entries = this.getAll();
-        if (entries.length === 0) return 'Nenhuma ferramenta forjada ainda.';
+        if (entries.length === 0) return 'No forged tools yet.';
 
         const lines = entries.map(e =>
-            `- ${e.name}: ${e.description} (usada ${e.executionCount}x, arquivo: ${e.filename})`,
+            `- ${e.name}: ${e.description} (used ${e.executionCount}x, file: ${e.filename})`,
         );
-        return `Ferramentas forjadas disponíveis:\n${lines.join('\n')}`;
+        return `Available forged tools:\n${lines.join('\n')}`;
+    }
+
+    /**
+     * Build a Few-Shot Examples block for injection into the Live Engine
+     * (Gemma 3) system prompt. Extracts usage_examples from every registered
+     * tool and formats them so the small model can reliably produce tool calls.
+     */
+    static getFewShotExamplesBlock(): string {
+        const entries = this.getAll();
+        const lines: string[] = [];
+
+        for (const entry of entries) {
+            if (!entry.usage_examples || entry.usage_examples.length === 0) continue;
+            for (const ex of entry.usage_examples) {
+                lines.push(
+                    `Tool: ${entry.name}\n` +
+                    `Example User: "${ex.user_input}"\n` +
+                    `Example Action: <tool_call>${JSON.stringify({ name: ex.expected_tool_call.name, args: ex.expected_tool_call.args })}</tool_call>`,
+                );
+            }
+        }
+
+        if (lines.length === 0) return '';
+
+        return `\n## FEW-SHOT TOOL USAGE EXAMPLES (Follow these patterns EXACTLY)\n\n${lines.join('\n\n')}\n`;
     }
 }

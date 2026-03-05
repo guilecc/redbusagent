@@ -2,13 +2,13 @@
  * @redbusagent/cli — Onboarding Wizard
  *
  * Interactive step-by-step configuration assistant using @clack/prompts.
- * Guides the user through Live Engine + Worker Engine setup (Local or Cloud),
- * then persists everything to the Vault (~/.redbusagent/config.json).
+ * Guides the user through Live Engine + Worker Engine setup.
  *
- * Flow: Live Engine → Worker Engine → Save
+ * STRICT ARCHITECTURE:
+ *   Live Engine  → Exclusively Local Gemma 3 (via Ollama)
+ *   Worker Engine → Exclusively Cloud APIs (Anthropic, Google, OpenAI) — MANDATORY
  *
- * NO hardware detection is performed — the full model catalog is always
- * presented unrestricted so users can freely mix and match engines.
+ * Flow: Live Engine (Gemma selection) → Worker Engine (Cloud mandatory) → Save
  */
 
 import * as p from '@clack/prompts';
@@ -18,35 +18,23 @@ import { Vault, type VaultTier2Config, type VaultLiveEngineConfig, type VaultWor
 import { WhatsAppChannel } from '@redbusagent/daemon/dist/channels/whatsapp.js';
 import { OllamaManager } from '@redbusagent/daemon/dist/core/ollama-manager.js';
 
-// ─── Master Catalog: All Supported Local Models (sorted by size) ──
+// ─── Gemma 3 Catalog: The ONLY supported Live Engine models ──────
 
-const LOCAL_MODEL_CATALOG = [
-    { value: 'gemma3:1b', label: '🪶 gemma3:1b', hint: '~1B params — ultra-lightweight' },
-    { value: 'gemma3:4b', label: '🪶 gemma3:4b', hint: '~4B params — good all-rounder' },
+const GEMMA3_CATALOG = [
+    { value: 'gemma3:1b', label: '🪶 gemma3:1b', hint: '~1B params — ultra-lightweight, fastest' },
+    { value: 'gemma3:4b', label: '🪶 gemma3:4b', hint: '~4B params — good all-rounder (recommended)' },
     { value: 'gemma3:12b', label: '🪶 gemma3:12b', hint: '~12B params — strong reasoning' },
     { value: 'gemma3:27b', label: '🪶 gemma3:27b', hint: '~27B params — near cloud-quality' },
-    { value: '__custom__', label: '✏️  Custom (Type sua tag desejada)', hint: 'Recomendação: Mantenha na família Gemma 3' },
 ] as const;
 
-// ─── Helper: Local Model Selection ───────────────────────────────
+// ─── Helper: Gemma 3 Model Selection (Live Engine ONLY) ──────────
 
-async function selectLocalModel(engineLabel: string): Promise<string | null> {
+async function selectGemmaModel(): Promise<string | null> {
     const selected = await p.select({
-        message: `Select a local model for the ${engineLabel}:`,
-        options: LOCAL_MODEL_CATALOG.map(m => ({ value: m.value, label: m.label, hint: m.hint })),
+        message: 'Select a Gemma 3 model for the Live Engine:',
+        options: GEMMA3_CATALOG.map(m => ({ value: m.value, label: m.label, hint: m.hint })),
     });
     if (p.isCancel(selected)) return null;
-
-    if (selected === '__custom__') {
-        const custom = await p.text({
-            message: `Type the Ollama model tag for the ${engineLabel}:`,
-            placeholder: 'e.g. mistral:7b, codellama:13b, deepseek-coder:33b',
-            validate: (v) => { if (!v || v.trim().length < 2) return 'Invalid model tag.'; },
-        });
-        if (p.isCancel(custom)) return null;
-        return (custom as string).trim();
-    }
-
     return selected as string;
 }
 
@@ -133,113 +121,57 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
     }
 
     // ════════════════════════════════════════════════════════════
-    // ██  STEP A — LIVE ENGINE CONFIGURATION                   ██
+    // ██  STEP A — LIVE ENGINE: Strictly Local Gemma 3          ██
     // ════════════════════════════════════════════════════════════
 
     p.note(
         pc.bold(pc.cyan('⚡ LIVE ENGINE')) + ' — Your real-time chat brain.\n\n' +
-        'The Live Engine handles all interactive TUI and WhatsApp messages.\n' +
-        'It must be fast and low-latency for a responsive experience.\n\n' +
-        `${pc.dim('Local: Run a model via Ollama on your machine (free, private)')}\n` +
-        `${pc.dim('Cloud: Use Google, Anthropic, or OpenAI')}`,
-        '⚡ Step A — Live Engine',
+        'The Live Engine runs ' + pc.bold('exclusively on Local Gemma 3') + ' via Ollama.\n' +
+        'It handles all interactive TUI and WhatsApp messages with\n' +
+        'low-latency, private, on-device inference.\n\n' +
+        pc.dim('Select the Gemma 3 variant that fits your hardware.'),
+        '⚡ Step A — Live Engine (Local Gemma 3)',
     );
 
-    const liveEngineType = await p.select({
-        message: 'Select provider for the LIVE Engine:',
-        options: [
-            { value: 'local' as const, label: '🏠 Local (Ollama)', hint: 'free, private, runs on your machine' },
-            { value: 'cloud' as const, label: '☁️  Cloud API', hint: 'Google, Anthropic, or OpenAI' },
-        ],
-    });
-    if (p.isCancel(liveEngineType)) return false;
+    const gemmaModel = await selectGemmaModel();
+    if (!gemmaModel) return false;
 
-    let liveEngineConfig: VaultLiveEngineConfig;
+    p.log.success(`🏠 Live Engine: Local Gemma 3 — ${pc.bold(gemmaModel)}`);
+
+    let liveEngineConfig: VaultLiveEngineConfig = {
+        enabled: true,
+        provider: 'ollama',
+        url: 'http://localhost:11434',
+        model: gemmaModel,
+    };
     // Legacy tier2 config kept for backward compatibility
     let tier2Config: VaultTier2Config;
-    let skipTier2 = true;
-
-    if (liveEngineType === 'local') {
-        // ── Live Engine: Local Ollama ─────────────────────────────
-        const model = await selectLocalModel('Live Engine');
-        if (!model) return false;
-
-        p.log.success(`🏠 Live Engine: Local Ollama — ${pc.bold(model)}`);
-
-        liveEngineConfig = {
-            enabled: true,
-            provider: 'ollama',
-            url: 'http://localhost:11434',
-            model,
-        };
-        tier2Config = { provider: 'anthropic', model: 'none', apiKey: '' };
-    } else {
-        // ── Live Engine: Cloud Configuration ──────────────────────
-        const result = await configureCloudProvider('Live Engine');
-        if (!result) return false;
-
-        liveEngineConfig = {
-            enabled: true,
-            provider: result.provider as EngineProvider,
-            url: '',
-            model: result.model,
-            apiKey: result.apiKey,
-        };
-        tier2Config = { provider: result.provider as Tier2Provider, model: result.model, apiKey: result.apiKey };
-        skipTier2 = false;
-    }
 
     // ══════════════════════════════════════════════════════════════
-    // ██  STEP B — WORKER ENGINE CONFIGURATION                   ██
+    // ██  STEP B — WORKER ENGINE: Mandatory Cloud API            ██
     // ══════════════════════════════════════════════════════════════
 
     p.note(
-        pc.bold(pc.blue('🏗️  WORKER ENGINE')) + ' — Your background reasoning brain.\n\n' +
-        'The Worker Engine handles heavy tasks like memory distillation,\n' +
-        'insight generation, deep analysis — without blocking chat.\n\n' +
-        `${pc.dim('Local: Run a model via Ollama on your machine (free, private)')}\n` +
-        `${pc.dim('Cloud: Use Anthropic, Google, or OpenAI')}`,
-        '🏗️ Step B — Worker Engine',
+        pc.bold(pc.blue('🏗️  WORKER ENGINE')) + ' — Your cloud reasoning brain.\n\n' +
+        'The Worker Engine is ' + pc.bold('MANDATORY') + ' and runs exclusively on\n' +
+        pc.bold('Cloud APIs') + ' (Anthropic, Google, or OpenAI).\n' +
+        'It handles tool forging, deep analysis, memory distillation,\n' +
+        'and generates Few-Shot examples for the local Gemma model.\n\n' +
+        pc.dim('You must provide a Cloud API key to proceed.'),
+        '🏗️ Step B — Worker Engine (Cloud — MANDATORY)',
     );
 
-    const workerEngineType = await p.select({
-        message: 'Configure the WORKER Engine (for coding/forging):',
-        options: [
-            { value: 'local' as const, label: '🏠 Local (Ollama)', hint: 'free, private, runs on your machine' },
-            { value: 'cloud' as const, label: '☁️  Cloud API', hint: 'Anthropic, Google, or OpenAI' },
-            { value: 'disabled' as const, label: '⏭️  Skip — Use Live Engine for everything', hint: 'Simplifies routing' },
-        ],
-    });
-    if (p.isCancel(workerEngineType)) return false;
+    const workerResult = await configureCloudProvider('Worker Engine');
+    if (!workerResult) return false;
 
-    let workerEngineConfig: VaultWorkerEngineConfig;
-
-    if (workerEngineType === 'local') {
-        // ── Worker Engine: Local Ollama ───────────────────────────
-        const model = await selectLocalModel('Worker Engine');
-        if (!model) return false;
-
-        p.log.success(`🏠 Worker Engine: Local Ollama — ${pc.bold(model)}`);
-
-        workerEngineConfig = {
-            enabled: true,
-            provider: 'ollama',
-            url: 'http://localhost:11434',
-            model,
-        };
-    } else if (workerEngineType === 'cloud') {
-        const result = await configureCloudProvider('Worker Engine');
-        if (!result) return false;
-        workerEngineConfig = {
-            enabled: true,
-            provider: result.provider as EngineProvider,
-            url: '',
-            model: result.model,
-            apiKey: result.apiKey,
-        };
-    } else {
-        workerEngineConfig = { enabled: false, url: '', model: null, provider: null };
-    }
+    const workerEngineConfig: VaultWorkerEngineConfig = {
+        enabled: true,
+        provider: workerResult.provider as EngineProvider,
+        url: '',
+        model: workerResult.model,
+        apiKey: workerResult.apiKey,
+    };
+    tier2Config = { provider: workerResult.provider as Tier2Provider, model: workerResult.model, apiKey: workerResult.apiKey };
 
     let default_chat_tier: 1 | 2 = 1;
 
@@ -272,7 +204,7 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
 
     Vault.write({
         version: Vault.schemaVersion,
-        tier2_enabled: !skipTier2,
+        tier2_enabled: true,
         tier2: tier2Config,
         live_engine: liveEngineConfig,
         worker_engine: workerEngineConfig,
@@ -286,8 +218,9 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
     await new Promise(r => setTimeout(r, 500));
     saveSpinner.stop('Configuration saved!');
 
-    // ── Download Local Models (if any configured) ─────────────
-    if (!skipTier2 || liveEngineConfig.provider === 'ollama') {
+    // ── Download Local Gemma Model ──────────────────────────────
+    // Live Engine is always local Ollama, so always download
+    {
         try {
             p.note('Checking local AI Engine and downloading required models... This might take a few minutes if the models are large.', '📦 Ollama Engine Setup');
             const dlSpinner = p.spinner();
@@ -346,7 +279,7 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
         // Re-save Vault with owner_phone_number
         Vault.write({
             version: Vault.schemaVersion,
-            tier2_enabled: !skipTier2,
+            tier2_enabled: true,
             tier2: tier2Config,
             live_engine: liveEngineConfig,
             worker_engine: workerEngineConfig,
@@ -384,7 +317,7 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
         // Re-save Vault without owner_phone_number
         Vault.write({
             version: Vault.schemaVersion,
-            tier2_enabled: !skipTier2,
+            tier2_enabled: true,
             tier2: tier2Config,
             live_engine: liveEngineConfig,
             worker_engine: workerEngineConfig,
@@ -482,13 +415,8 @@ export async function runOnboardingWizard(options: { reconfigureOnly?: boolean }
     });
     p.log.success(`✅ God Mode: ${shellGodMode ? pc.red('ACTIVATED') : pc.green('Secured with HITL')}.`);
 
-    const liveLabel = liveEngineConfig.provider === 'ollama'
-        ? `🏠 ${liveEngineConfig.model} (Local Ollama)`
-        : `${liveEngineConfig.provider}/${liveEngineConfig.model}`;
-    const workerLabel = !workerEngineConfig.enabled ? 'disabled'
-        : workerEngineConfig.provider === 'ollama'
-            ? `🏠 ${workerEngineConfig.model} (Local Ollama)`
-            : `${workerEngineConfig.provider}/${workerEngineConfig.model}`;
+    const liveLabel = `🏠 ${liveEngineConfig.model} (Local Gemma 3)`;
+    const workerLabel = `☁️  ${workerEngineConfig.provider}/${workerEngineConfig.model} (Cloud)`;
 
     p.note(
         `⚡ Live Engine: ${pc.bold(pc.cyan(liveLabel))}\n` +

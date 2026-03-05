@@ -276,7 +276,7 @@ export class Vault {
         return `${config.owner_phone_number}@c.us`;
     }
 
-    /** Create a default config object (Cloud-First defaults) */
+    /** Create a default config object (Gemma-Local Live + Cloud Worker) */
     static createDefault(overrides?: Partial<VaultConfig>): VaultConfig {
         return {
             version: CURRENT_VERSION,
@@ -289,9 +289,10 @@ export class Vault {
             // tier1 intentionally omitted — legacy field
             live_engine: {
                 enabled: true,
-                provider: 'google',
-                url: '',
-                model: 'gemini-2.5-flash',
+                provider: 'ollama',
+                url: 'http://localhost:11434',
+                model: 'gemma3:4b',
+                power_class: 'bronze',
                 ...overrides?.live_engine,
             },
             worker_engine: {

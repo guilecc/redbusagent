@@ -63,7 +63,7 @@ export class OllamaManager {
 
         if (process.platform === 'darwin') {
             await this.downloadWithCurl('https://ollama.com/download/Ollama-darwin.zip', '/tmp/ollama.zip');
-            this.onProgress('Extraindo binário (Mac)...');
+            this.onProgress('Extracting binary (Mac)...');
             await this.runCommand('unzip', ['-o', '-j', '/tmp/ollama.zip', 'Ollama.app/Contents/Resources/ollama', '-d', this.binDir]);
             await this.runCommand('rm', ['/tmp/ollama.zip']);
         } else if (process.platform === 'linux') {
@@ -74,7 +74,7 @@ export class OllamaManager {
         } else if (process.platform === 'win32') {
             await this.downloadWithCurl('https://ollama.com/download/ollama-windows-amd64.exe', this.binaryPath);
         } else {
-            throw new Error(`Plataforma não suportada: ${process.platform}`);
+            throw new Error(`Unsupported platform: ${process.platform}`);
         }
 
         if (process.platform !== 'win32') {
@@ -120,7 +120,7 @@ export class OllamaManager {
 
     private static async startDaemon(): Promise<void> {
         console.log('  ⚙️  OllamaManager: Starting server...');
-        this.onProgress('Iniciando servidor local...');
+        this.onProgress('Starting local server...');
 
         this.process = spawn(this.binaryPath, ['serve'], {
             env: {
@@ -136,7 +136,7 @@ export class OllamaManager {
         });
 
         // Wait for it to become healthy
-        this.onProgress('Aguardando servidor local responder...');
+        this.onProgress('Waiting for local server to respond...');
         const isHealthy = await this.waitForHealth(30000); // 30s timeout
         if (!isHealthy) {
             throw new Error('Ollama server did not become healthy in time.');

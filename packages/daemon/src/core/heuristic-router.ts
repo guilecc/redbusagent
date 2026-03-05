@@ -10,7 +10,7 @@ export type TaskIntent = 'INTENT_FORGE' | 'INTENT_EXECUTE';
 export function classifyTaskIntent(prompt: string): TaskIntent {
     const lowerPrompt = prompt.toLowerCase();
 
-    const forgeRegex = /\b(create a tool|write a script|code|forge|refactor|build an integration|crie uma ferramenta|escreva um script|codar|refatorar|construir uma integração|build a tool|write code|modify architecture|edit_file_blocks|edit file|change line|crie uma rotina|criar uma rotina|automatizar|automate|crie um script|criar script|construir script|build script|automaton)\b/i;
+    const forgeRegex = /\b(create a tool|write a script|code|forge|refactor|build an integration|build a tool|write code|modify architecture|edit_file_blocks|edit file|change line|create a routine|build a routine|automate|create a script|build script|automaton)\b/i;
 
     if (forgeRegex.test(lowerPrompt)) {
         return 'INTENT_FORGE';
@@ -28,7 +28,7 @@ export function calculateComplexityScore(prompt: string, recentHistory: any[] = 
     score += lengthScore;
 
     // Coding & Infrastructure Keywords (+40)
-    const codingRegex = /\b(edit|change line|replace|modify|editar|modificar|trocar|substituir|code|script|function|api|regex|docker|bash|shell|schedule|cron|bug|error|refactor|deploy|compile|database|sql|query|optimize|git|commit|merge|architecture|endpoint|json|yaml|forge|build|fix|crie|código|codar|função|erro|banco de dados|refatore|refatorar|otimizar|compilar|servidor|infraestrutura|terminal|comando|agendar|automatizar|conserte|integrar|integração|task|tasks|timer|alarme|aviso|lembrar|lembre|registre|minutos|horas)\b/i;
+    const codingRegex = /\b(edit|change line|replace|modify|code|script|function|api|regex|docker|bash|shell|schedule|cron|bug|error|refactor|deploy|compile|database|sql|query|optimize|git|commit|merge|architecture|endpoint|json|yaml|forge|build|fix|server|infrastructure|terminal|command|automate|integrate|integration|task|tasks|timer|alarm|alert|remind|remember|register|minutes|hours)\b/i;
     if (codingRegex.test(lowerPrompt)) {
         score += 40;
     }
@@ -49,13 +49,13 @@ export function calculateComplexityScore(prompt: string, recentHistory: any[] = 
 
     // Infrastructure & Subsystem Keywords (+40)
     // Catches MCP, memory ops, visual inspection, background processes — all require Worker Engine reasoning
-    const infraRegex = /\b(mcp|plugin|install server|install plugin|background|monitor|visual|screenshot|inspect|layout|look at|memorize|remember|forget|memória|lembrar|esquecer|archival|core.?memory|approval|protocol)\b/i;
+    const infraRegex = /\b(mcp|plugin|install server|install plugin|background|monitor|visual|screenshot|inspect|layout|look at|memorize|remember|forget|archival|core.?memory|approval|protocol)\b/i;
     if (infraRegex.test(lowerPrompt)) {
         score += 40;
     }
 
     // Analytical & Reasoning Keywords (+20)
-    const analyticalRegex = /\b(analyze|summarize|compare|why|calculate|explain|evaluate|review|investigate|debug|troubleshoot|plan|design|analise|analisar|resuma|resumir|compare|comparar|por que|porque|calcule|calcular|explique|explicar|avalie|avaliar|revise|revisar|mudar|arquitetura|lógica)\b/i;
+    const analyticalRegex = /\b(analyze|summarize|compare|why|calculate|explain|evaluate|review|investigate|debug|troubleshoot|plan|design|architecture|logic)\b/i;
     if (analyticalRegex.test(lowerPrompt)) {
         score += 20;
     }

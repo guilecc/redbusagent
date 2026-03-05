@@ -108,6 +108,15 @@ export class CapabilityRegistry {
     }
 
     /**
+     * Returns the Few-Shot Examples block extracted from all forged tools.
+     * This MUST be injected into the Live Engine (Gemma 3) system prompt
+     * so the small model can reliably produce tool calls.
+     */
+    static getFewShotExamplesBlock(): string {
+        return ToolRegistry.getFewShotExamplesBlock();
+    }
+
+    /**
      * Returns a dynamic manifest string that grounds the Agent in reality,
      * ensuring it knows its boundaries and capabilities via prompt injection.
      */

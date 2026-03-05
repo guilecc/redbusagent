@@ -30,21 +30,21 @@ export interface FetchResult {
 
 const FALLBACK_MODELS: Record<Tier2Provider, ModelInfo[]> = {
     anthropic: [
-        { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6', hint: 'recomendado' },
-        { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5', hint: 'rápido' },
+        { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6', hint: 'recommended' },
+        { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5', hint: 'fast' },
     ],
     google: [
-        { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash', hint: 'recomendado' },
+        { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash', hint: 'recommended' },
         { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
     ],
     openai: [
-        { id: 'gpt-5.2', label: 'GPT-5.2', hint: 'recomendado' },
-        { id: 'gpt-5.1', label: 'GPT-5.1', hint: 'econômico' },
+        { id: 'gpt-5.2', label: 'GPT-5.2', hint: 'recommended' },
+        { id: 'gpt-5.1', label: 'GPT-5.1', hint: 'economical' },
     ],
 };
 
 const FALLBACK_OLLAMA: ModelInfo[] = [
-    { id: 'llama3', label: 'llama3', hint: 'padrão' },
+    { id: 'llama3', label: 'llama3', hint: 'default' },
     { id: 'qwen2.5', label: 'qwen2.5' },
     { id: 'mistral', label: 'mistral' },
     { id: 'codellama', label: 'codellama' },

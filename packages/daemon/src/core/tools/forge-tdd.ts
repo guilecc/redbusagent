@@ -32,16 +32,6 @@ interface SandboxResult {
     durationMs: number;
 }
 
-interface ForgeAndTestResult {
-    phase: 'sandbox_test' | 'deployment' | 'registry';
-    success: boolean;
-    output?: string;
-    error?: string;
-    stackTrace?: string;
-    durationMs: number;
-    skillPath?: string;
-    registeredAs?: string;
-}
 
 // ─── Constants ────────────────────────────────────────────────────
 
@@ -215,6 +205,9 @@ export const forgeAndTestSkillTool = tool({
 
 IMPORTANT: Your code must export an \`execute(payload)\` function or a \`run(payload)\` function that accepts the test_payload object and returns a result. Use console.log() for debug output.
 
+CRITICAL — FEW-SHOT EXAMPLES ARE MANDATORY:
+You are an elite Cloud Engineer forging a tool for a smaller, highly-aligned local model (Gemma 3). Small models fail to use tools without concrete Few-Shot examples. When generating the tool schema, you MUST include a \`usage_examples\` array containing at least two pairs of [Simulated User Input] and [Expected JSON Tool Call]. Do not skip this, or the executing model will fail.
+
 You MUST call read_tool_signatures on existing tools first to ensure compatibility.
 You MUST output a <thinking> block before calling this tool.`,
 
@@ -230,6 +223,13 @@ You MUST output a <thinking> block before calling this tool.`,
             .describe('A test payload object to pass to the skill during sandbox testing. Must exercise the skill\'s primary functionality.'),
         language: z.enum(['javascript', 'typescript']).default('javascript')
             .describe('Language of the skill code (default: javascript)'),
+        usage_examples: z.array(z.object({
+            user_input: z.string().describe('Simulated user input that would trigger this tool'),
+            expected_tool_call: z.object({
+                name: z.string().describe('The tool name'),
+                args: z.record(z.string(), z.unknown()).describe('The expected arguments'),
+            }).describe('The JSON tool call the model should produce'),
+        })).min(2).describe('MANDATORY: At least 2 few-shot usage examples showing [User Input] → [Expected Tool Call]. These are critical for the local Gemma 3 model to reliably invoke this tool.'),
     }),
 
     execute: async (params: {
@@ -238,8 +238,9 @@ You MUST output a <thinking> block before calling this tool.`,
         code: string;
         test_payload: Record<string, unknown>;
         language: 'javascript' | 'typescript';
+        usage_examples: Array<{ user_input: string; expected_tool_call: { name: string; args: Record<string, unknown> } }>;
     }) => {
-        const { skill_name, description, code, test_payload, language } = params;
+        const { skill_name, description, code, test_payload, language, usage_examples } = params;
         const startTime = Date.now();
 
         console.log(`  🔨 [tdd-forge] Testing skill "${skill_name}" in sandbox...`);
@@ -271,7 +272,13 @@ You MUST output a <thinking> block before calling this tool.`,
             const filename = `${skill_name}${ext}`;
             const skillPath = join(SKILLS_DIR, filename);
 
-            // Add metadata header to the skill file
+            // Add metadata header + usage examples to the skill file
+            const examplesBlock = usage_examples.map((ex, i) =>
+                ` * Example ${i + 1}:\n` +
+                ` *   User: "${ex.user_input}"\n` +
+                ` *   Call: ${JSON.stringify(ex.expected_tool_call)}`,
+            ).join('\n');
+
             const deployedCode = `/**
  * @redbusagent/skill — ${skill_name}
  * ${description}
@@ -279,7 +286,12 @@ You MUST output a <thinking> block before calling this tool.`,
  * Auto-forged by the TDD Forge on ${new Date().toISOString()}
  * Sandbox test: PASSED (${sandboxResult.durationMs}ms)
  * Test payload: ${JSON.stringify(Object.keys(test_payload))}
+ *
+ * Few-Shot Usage Examples (for Gemma 3 alignment):
+${examplesBlock}
  */
+
+// @usage_examples ${JSON.stringify(usage_examples)}
 
 ${code}
 `;
@@ -294,6 +306,7 @@ ${code}
                 description: `[TDD-Forged] ${description}`,
                 filename,
                 createdAt: new Date().toISOString(),
+                usage_examples,
             });
 
             console.log(`  🔧 [tdd-forge] Skill "${skill_name}" registered as tool "${toolName}"`);

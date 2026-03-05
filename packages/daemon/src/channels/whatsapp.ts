@@ -200,11 +200,11 @@ export class WhatsAppChannel {
                         this.broadcastToTui(`❌ [WhatsApp Error]: ${err.message}`, 'warn');
                     },
                     onToolCall: async (name) => {
-                        console.log(`  🔧 WhatsAppChannel Forjando: ${name}...`);
+                        console.log(`  🔧 WhatsAppChannel Forging: ${name}...`);
                         this.broadcastToTui(`🔧 [WhatsApp Tool]: ${name}`);
                     },
                     onToolResult: (name, success) => {
-                        console.log(`  ✅ WhatsAppChannel Forja finalizada: ${name} [${success}]`);
+                        console.log(`  ✅ WhatsAppChannel Forge complete: ${name} [${success}]`);
                     }
                 });
 
