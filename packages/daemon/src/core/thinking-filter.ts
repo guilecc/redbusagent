@@ -1,8 +1,13 @@
 /**
- * @redbusagent/daemon — Thinking Tag Stream Filter
+ * @redbusagent/daemon — Thinking & XML Tag Stream Filter
  *
- * Stateful streaming parser that intercepts `<thinking>...</thinking>` XML blocks
- * from LLM output, stripping raw XML and replacing it with an elegant indicator.
+ * Stateful streaming parser that intercepts and strips unwanted XML blocks
+ * from LLM output:
+ *   - `<thinking>...</thinking>` — internal reasoning (replaced with 💭 indicator)
+ *   - `<tool_call>...</tool_call>` — raw tool call XML that leaks from some models
+ *   - `<tool_code>...</tool_code>` — raw tool code fragments
+ *   - Any `<tool_` prefixed tags that models sometimes output as text
+ *
  * Designed to work with the incremental character-by-character streaming from
  * the AI SDK's `text-delta` events.
  *
@@ -23,65 +28,115 @@ export interface ThinkingFilter {
     get isThinking(): boolean;
 }
 
+// ─── Tag Definitions to Strip ────────────────────────────────────
+
+interface TagPair {
+    /** The opening tag prefix to detect (e.g. '<thinking>') */
+    open: string;
+    /** The closing tag to detect (e.g. '</thinking>') */
+    close: string;
+    /** If true, emit an indicator when this tag is first seen */
+    indicator?: string;
+}
+
+const TAGS_TO_STRIP: TagPair[] = [
+    { open: '<thinking>', close: '</thinking>', indicator: '\n💭 Reasoning...\n' },
+    { open: '<tool_call', close: '</tool_call>' },
+    { open: '<tool_code', close: '</tool_code>' },
+];
+
 /**
- * Creates a stateful streaming filter that strips `<thinking>` blocks.
+ * Creates a stateful streaming filter that strips `<thinking>`, `<tool_call>`,
+ * and other unwanted XML blocks from the LLM stream.
  *
- * @param emit - Called with clean text chunks (thinking content removed).
- *               The indicator `💭 Reasoning...\n` is emitted once when
- *               a thinking block opens.
+ * @param emit - Called with clean text chunks (stripped content removed).
  */
 export function createThinkingFilter(emit: (clean: string) => void): ThinkingFilter {
-    let insideThinking = false;
+    let insideBlock = false;
+    let activeCloseTag: string | null = null;
     let buffer = '';
-    let emittedIndicator = false;
+    let emittedIndicators = new Set<string>();
 
-    // Possible partial tag fragments we need to buffer
-    const OPEN_TAG = '<thinking>';
-    const CLOSE_TAG = '</thinking>';
+    function findEarliestOpenTag(text: string): { index: number; tag: TagPair; fullOpenEnd: number } | null {
+        let earliest: { index: number; tag: TagPair; fullOpenEnd: number } | null = null;
+
+        for (const tag of TAGS_TO_STRIP) {
+            const idx = text.indexOf(tag.open);
+            if (idx !== -1 && (earliest === null || idx < earliest.index)) {
+                // For tags like <tool_call that may have attributes (e.g. <tool_call name="...">),
+                // find the closing '>' to consume the full opening tag
+                let fullEnd = idx + tag.open.length;
+                if (!tag.open.endsWith('>')) {
+                    const closeBracket = text.indexOf('>', fullEnd);
+                    fullEnd = closeBracket !== -1 ? closeBracket + 1 : -1; // -1 = incomplete
+                }
+                earliest = { index: idx, tag, fullOpenEnd: fullEnd };
+            }
+        }
+
+        return earliest;
+    }
+
+    function couldBePartialOpenTag(text: string): boolean {
+        // Check if buffer ends with something that could be the start of any tag to strip
+        for (const tag of TAGS_TO_STRIP) {
+            if (couldBePartialTag(text, tag.open)) return true;
+        }
+        return false;
+    }
 
     function processBuffer(): void {
         while (buffer.length > 0) {
-            if (insideThinking) {
-                // Look for closing tag
-                const closeIdx = buffer.indexOf(CLOSE_TAG);
+            if (insideBlock && activeCloseTag) {
+                // Inside a block — look for closing tag
+                const closeIdx = buffer.indexOf(activeCloseTag);
                 if (closeIdx !== -1) {
-                    // End of thinking block — discard content, consume tag
-                    buffer = buffer.slice(closeIdx + CLOSE_TAG.length);
-                    insideThinking = false;
+                    buffer = buffer.slice(closeIdx + activeCloseTag.length);
+                    insideBlock = false;
+                    activeCloseTag = null;
                     continue;
                 }
-                // Check if buffer ends with a partial match of </thinking>
-                if (couldBePartialTag(buffer, CLOSE_TAG)) {
-                    // Keep buffering — might complete next push
-                    return;
+                // Check partial close tag
+                if (couldBePartialTag(buffer, activeCloseTag)) {
+                    return; // Keep buffering
                 }
-                // No close tag or partial — discard thinking content
+                // No close tag — discard content
                 buffer = '';
                 return;
             }
 
-            // Not inside thinking — look for opening tag
-            const openIdx = buffer.indexOf(OPEN_TAG);
-            if (openIdx !== -1) {
-                // Emit everything before the tag
-                if (openIdx > 0) {
-                    emit(buffer.slice(0, openIdx));
+            // Not inside a block — look for any opening tag
+            const match = findEarliestOpenTag(buffer);
+            if (match) {
+                // Emit clean text before the tag
+                if (match.index > 0) {
+                    emit(buffer.slice(0, match.index));
                 }
-                // Enter thinking mode
-                insideThinking = true;
-                buffer = buffer.slice(openIdx + OPEN_TAG.length);
-                // Emit a one-time indicator
-                if (!emittedIndicator) {
-                    emit('\n💭 Reasoning...\n');
-                    emittedIndicator = true;
+
+                if (match.fullOpenEnd === -1) {
+                    // Opening tag is incomplete (no closing '>') — buffer and wait
+                    buffer = buffer.slice(match.index);
+                    insideBlock = true;
+                    activeCloseTag = match.tag.close;
+                    return;
+                }
+
+                // Enter block suppression mode
+                insideBlock = true;
+                activeCloseTag = match.tag.close;
+                buffer = buffer.slice(match.fullOpenEnd);
+
+                // Emit one-time indicator if configured
+                if (match.tag.indicator && !emittedIndicators.has(match.tag.open)) {
+                    emit(match.tag.indicator);
+                    emittedIndicators.add(match.tag.open);
                 }
                 continue;
             }
 
-            // Check if buffer ends with a partial match of <thinking>
-            if (couldBePartialTag(buffer, OPEN_TAG)) {
-                // Keep the potential partial tag in the buffer
-                return;
+            // Check if buffer ends with a partial match of any open tag
+            if (couldBePartialOpenTag(buffer)) {
+                return; // Keep buffering
             }
 
             // No tag or partial — emit everything
@@ -99,18 +154,18 @@ export function createThinkingFilter(emit: (clean: string) => void): ThinkingFil
 
         flush(): void {
             if (buffer.length > 0) {
-                if (!insideThinking) {
-                    // Emit any remaining buffered text
+                if (!insideBlock) {
                     emit(buffer);
                 }
                 buffer = '';
             }
-            insideThinking = false;
-            emittedIndicator = false;
+            insideBlock = false;
+            activeCloseTag = null;
+            emittedIndicators = new Set();
         },
 
         get isThinking(): boolean {
-            return insideThinking;
+            return insideBlock;
         },
     };
 }

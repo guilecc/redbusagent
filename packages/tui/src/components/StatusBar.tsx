@@ -82,18 +82,19 @@ export function StatusBar({ connected, heartbeat, currentModel }: StatusBarProps
             {payload?.workerStatus?.enabled && (
                 <Box gap={1}>
                     <Text color="blue" bold>🏗️ Worker</Text>
+                    <Text color="gray">[{payload.workerStatus.model}]</Text>
                     {payload.workerStatus.running > 0 ? (
-                        <Text color="yellow" bold>⚙ Running</Text>
+                        <Text color="yellow" bold>⚙ Active</Text>
                     ) : payload.workerStatus.pending > 0 ? (
                         <Text color="cyan">◷ {payload.workerStatus.pending} queued</Text>
                     ) : (
-                        <Text color="gray">● idle</Text>
+                        <Text color="gray">● Idle</Text>
                     )}
                     {payload.workerStatus.completed > 0 && (
-                        <Text color="green">✓{payload.workerStatus.completed}</Text>
+                        <Text color="green"> ✓{payload.workerStatus.completed}</Text>
                     )}
                     {payload.workerStatus.failed > 0 && (
-                        <Text color="red">✗{payload.workerStatus.failed}</Text>
+                        <Text color="red"> ✗{payload.workerStatus.failed}</Text>
                     )}
                 </Box>
             )}

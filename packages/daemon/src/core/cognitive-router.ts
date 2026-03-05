@@ -348,6 +348,7 @@ export async function askLive(
                 let workerCharsGenerated = 0;
                 let lastToolName = '';
                 let lastStatusTime = Date.now();
+                let workerErrorMessage: string | null = null;
 
                 // ─── Wrap callbacks to emit bus events ────────────────
                 const workerCallbacks: StreamCallbacks = {
@@ -359,6 +360,7 @@ export async function askLive(
                         callbacks.onDone(fullText);
                     },
                     onError: (error: Error) => {
+                        workerErrorMessage = error.message;
                         engineBus.emitEvent('worker:error', {
                             taskId,
                             error: error.message,
@@ -422,6 +424,20 @@ export async function askLive(
                     await askTier2(params.task_prompt, workerCallbacks, undefined, messagesFromClient, senderRole, { disableTools: false });
 
                     const totalDuration = Date.now() - startTime;
+                    const durationSec = Math.round(totalDuration / 1000);
+
+                    // ─── Check if onError was called during execution ──
+                    if (workerErrorMessage) {
+                        engineBus.emitEvent('worker:error', {
+                            taskId,
+                            error: workerErrorMessage,
+                            timestamp: Date.now(),
+                        });
+                        console.log(`  ❌ [Router]: Worker task ${taskId} FAILED in ${durationSec}s — ${workerErrorMessage}`);
+                        callbacks.onChunk(`\n❌ [Live Observer] Worker Engine encountered an error: ${workerErrorMessage}\n`);
+                        return `The Worker Engine FAILED with error: "${workerErrorMessage}". Do NOT say the task was successful. Inform the user about the error in a friendly way and suggest they try again later or check the error details.`;
+                    }
+
                     engineBus.emitEvent('worker:done', {
                         taskId,
                         totalChars: workerCharsGenerated,
@@ -430,7 +446,6 @@ export async function askLive(
                         timestamp: Date.now(),
                     });
 
-                    const durationSec = Math.round(totalDuration / 1000);
                     console.log(`  ✅ [Router]: Worker task ${taskId} completed in ${durationSec}s (${workerToolCalls} tools, ${workerCharsGenerated} chars)`);
 
                     return `The Worker Engine executed the task successfully in ${durationSec}s using ${workerToolCalls} tool calls. The result was already communicated to the user. Just confirm the task is complete.`;

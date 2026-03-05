@@ -18,6 +18,7 @@ import { approvalGate } from '../approval-gate.js';
 import { HeavyTaskQueue } from '../heavy-task-queue.js';
 import { askWorkerEngine } from '../cognitive-router.js';
 import { getWorkerEngineConfig } from '../../infra/llm-config.js';
+import { engineBus } from '../engine-message-bus.js';
 
 // ─── Configuration ─────────────────────────────────────────────────
 export const DEFAULT_HEARTBEAT_INTERVAL_MS = 1_000;
@@ -155,6 +156,8 @@ export class HeartbeatManager {
 
         const workerConfig = getWorkerEngineConfig();
         const workerQueueStatus = HeavyTaskQueue.getStatus();
+        // Also check if the Worker Engine is active via delegate_to_worker_engine (engineBus)
+        const engineBusActive = engineBus.isWorkerActive() ? 1 : 0;
 
         const snapshot: StateSnapshot = {
             state: this.computeState(),
@@ -163,7 +166,7 @@ export class HeartbeatManager {
             awaitingApproval: approvalGate.hasPendingRequests(),
             connectedClients: this.wsServer.connectionCount,
             workerPending: workerQueueStatus.pending,
-            workerRunning: workerQueueStatus.running,
+            workerRunning: Math.max(workerQueueStatus.running, engineBusActive),
             workerCompleted: workerQueueStatus.completed,
         };
 
