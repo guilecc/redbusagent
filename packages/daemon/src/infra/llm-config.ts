@@ -62,14 +62,21 @@ export interface WorkerEngineConfig {
 
 export function getWorkerEngineConfig(): WorkerEngineConfig {
     const config = Vault.read();
+
+    // Fallbacks for legacy `tier2` configuration
+    const legacyTier2 = config?.tier2;
+    const provider = config?.worker_engine?.provider ?? legacyTier2?.provider as EngineProvider ?? 'anthropic';
+    const apiKey = config?.worker_engine?.apiKey ?? legacyTier2?.apiKey;
+    const model = config?.worker_engine?.model ?? legacyTier2?.model ?? 'claude-sonnet-4-20250514';
+
     return {
         url: config?.worker_engine?.url ?? '',
-        model: config?.worker_engine?.model ?? 'claude-sonnet-4-20250514',
-        enabled: config?.worker_engine?.enabled ?? true,
+        model: model,
+        enabled: config?.worker_engine?.enabled ?? config?.tier2_enabled ?? true,
         num_threads: config?.worker_engine?.num_threads ?? 8,
         num_ctx: config?.worker_engine?.num_ctx ?? 8192,
-        provider: config?.worker_engine?.provider ?? 'anthropic',
-        apiKey: config?.worker_engine?.apiKey,
+        provider: provider,
+        apiKey: apiKey,
     };
 }
 
@@ -94,13 +101,16 @@ export interface AnthropicAuth {
 
 export function resolveAnthropicAuth(): AnthropicAuth {
     const config = Vault.read();
-    if (!config?.tier2) return { method: 'none' };
 
-    if (config.tier2.authToken) {
-        return { method: 'oauth_token', authToken: config.tier2.authToken };
+    // Support dual configuration paths
+    const authToken = config?.worker_engine?.authToken ?? config?.tier2?.authToken;
+    const apiKey = config?.worker_engine?.apiKey ?? config?.tier2?.apiKey;
+
+    if (authToken) {
+        return { method: 'oauth_token', authToken: authToken };
     }
-    if (config.tier2.apiKey) {
-        return { method: 'api_key', apiKey: config.tier2.apiKey };
+    if (apiKey) {
+        return { method: 'api_key', apiKey: apiKey };
     }
     return { method: 'none' };
 }
@@ -122,15 +132,13 @@ export interface Tier2Validation {
 }
 
 export function validateTier2Config(): Tier2Validation {
-    const config = Vault.read();
-    if (!config?.tier2) {
-        return {
-            valid: false,
-            error: 'Vault not configured. Run: redbus config',
-        };
+    const workerConfig = getWorkerEngineConfig();
+
+    if (!workerConfig.enabled) {
+        return { valid: false, error: 'Worker Engine is disabled. Run: redbus config' };
     }
 
-    switch (config.tier2.provider) {
+    switch (workerConfig.provider) {
         case 'anthropic': {
             const auth = resolveAnthropicAuth();
             if (auth.method === 'none') {
@@ -145,16 +153,18 @@ export function validateTier2Config(): Tier2Validation {
             };
         }
         case 'google':
-            if (!config.tier2.apiKey) {
+            if (!workerConfig.apiKey) {
                 return { valid: false, error: 'Google API key not configured. Run: redbus config' };
             }
             return { valid: true, authMethod: 'API key' };
         case 'openai':
-            if (!config.tier2.apiKey) {
+            if (!workerConfig.apiKey) {
                 return { valid: false, error: 'OpenAI API key not configured. Run: redbus config' };
             }
             return { valid: true, authMethod: 'API key' };
+        case 'ollama':
+            return { valid: true, authMethod: 'Local API' };
         default:
-            return { valid: false, error: `Unknown provider: ${config.tier2.provider as string}` };
+            return { valid: false, error: `Unknown provider: ${workerConfig.provider as string}` };
     }
 }

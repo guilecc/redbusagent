@@ -84,6 +84,8 @@ export interface VaultWorkerEngineConfig {
     readonly num_threads?: number;
     /** Context window size (legacy, only for Ollama) */
     readonly num_ctx?: number;
+    /** OAuth token from `claude setup-token` (Authorization: Bearer) */
+    readonly authToken?: string;
 }
 
 export interface VaultConfig {
