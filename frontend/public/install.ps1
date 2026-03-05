@@ -47,21 +47,41 @@ Write-Host "✔️ Dependencies OK ($NodeVersionCheck, git, npm, ollama)" -Foreg
 Write-Host ">> Downloading Redbus Agent..." -ForegroundColor Yellow
 
 if (Test-Path $InstallDir) {
-    if (Test-Path "$InstallDir\.git") {
-        Write-Host "Directory $InstallDir already exists. Updating to the latest version..."
-        Set-Location $InstallDir
-        git fetch origin
-        git reset --hard origin/$Branch
-        # Always clean build artifacts on update to avoid stale cache issues
-        Write-Host ">> Cleaning previous build artifacts..." -ForegroundColor Yellow
-        Get-ChildItem -Path "packages" -Recurse -Include "dist","*.tsbuildinfo" -Directory -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-        Get-ChildItem -Path "packages" -Recurse -Include "*.tsbuildinfo" -File -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
-        if (Test-Path "frontend\dist") { Remove-Item -Recurse -Force "frontend\dist" -ErrorAction SilentlyContinue }
-    } else {
-        Write-Host "Directory $InstallDir exists but is not a valid git repository. Re-installing from scratch..." -ForegroundColor Yellow
-        Remove-Item -Recurse -Force $InstallDir
+    Write-Host "An existing Redbus Agent installation was found at $InstallDir." -ForegroundColor Yellow
+    Write-Host "Do you want to (1) completely delete it and reinstall from scratch, or (2) just update and build?"
+    Write-Host "1) Reinstall completely (warning: deletes existing files and config vault)"
+    Write-Host "2) Update only (default)"
+    
+    try {
+        $install_opt = Read-Host "Select option [1/2] (default 2)"
+    } catch {
+        $install_opt = "2"
+    }
+    
+    if ([string]::IsNullOrWhiteSpace($install_opt)) { $install_opt = "2" }
+
+    if ($install_opt -eq "1") {
+        Write-Host "Deleting everything at $InstallDir..." -ForegroundColor Red
+        Remove-Item -Recurse -Force $InstallDir -ErrorAction SilentlyContinue
         git clone -b $Branch $RepoUrl $InstallDir
         Set-Location $InstallDir
+    } else {
+        if (Test-Path "$InstallDir\.git") {
+            Write-Host "Updating to the latest version..."
+            Set-Location $InstallDir
+            git fetch origin
+            git reset --hard origin/$Branch
+            # Always clean build artifacts on update to avoid stale cache issues
+            Write-Host ">> Cleaning previous build artifacts..." -ForegroundColor Yellow
+            Get-ChildItem -Path "packages" -Recurse -Include "dist","*.tsbuildinfo" -Directory -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+            Get-ChildItem -Path "packages" -Recurse -Include "*.tsbuildinfo" -File -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+            if (Test-Path "frontend\dist") { Remove-Item -Recurse -Force "frontend\dist" -ErrorAction SilentlyContinue }
+        } else {
+            Write-Host "Directory $InstallDir exists but is not a valid git repository. Re-installing from scratch..." -ForegroundColor Yellow
+            Remove-Item -Recurse -Force $InstallDir
+            git clone -b $Branch $RepoUrl $InstallDir
+            Set-Location $InstallDir
+        }
     }
 } else {
     Write-Host "Cloning repository to $InstallDir..."

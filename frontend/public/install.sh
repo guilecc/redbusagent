@@ -107,16 +107,35 @@ echo ""
 echo -e "${YELLOW}>> Downloading Redbus Agent...${NC}"
 
 if [ -d "$INSTALL_DIR" ]; then
-    if [ -d "$INSTALL_DIR/.git" ]; then
-        echo -e "Directory $INSTALL_DIR already exists. Updating to the latest version..."
-        cd "$INSTALL_DIR"
-        git fetch origin
-        git reset --hard origin/$BRANCH
-    else
-        echo -e "${YELLOW}Directory $INSTALL_DIR exists but is not a valid git repository. Re-installing from scratch...${NC}"
+    echo -e "${YELLOW}An existing Redbus Agent installation was found at $INSTALL_DIR.${NC}"
+    echo "Do you want to (1) completely delete it and reinstall from scratch, or (2) just update and build?"
+    echo "1) Reinstall completely (warning: deletes existing files and config vault)"
+    echo "2) Update only (default)"
+    
+    install_opt="2"
+    if [ -t 0 ]; then
+        read -p "Select option [1/2] (default 2): " install_opt
+    elif [ -c /dev/tty ]; then
+        read -p "Select option [1/2] (default 2): " install_opt < /dev/tty || install_opt="2"
+    fi
+
+    if [ "$install_opt" = "1" ]; then
+        echo -e "${RED}Deleting everything at ${INSTALL_DIR}...${NC}"
         rm -rf "$INSTALL_DIR"
         git clone -b $BRANCH "$REPO_URL" "$INSTALL_DIR"
         cd "$INSTALL_DIR"
+    else
+        if [ -d "$INSTALL_DIR/.git" ]; then
+            echo -e "Updating to the latest version..."
+            cd "$INSTALL_DIR"
+            git fetch origin
+            git reset --hard origin/$BRANCH
+        else
+            echo -e "${YELLOW}Directory $INSTALL_DIR exists but is not a valid git repository. Re-installing from scratch...${NC}"
+            rm -rf "$INSTALL_DIR"
+            git clone -b $BRANCH "$REPO_URL" "$INSTALL_DIR"
+            cd "$INSTALL_DIR"
+        fi
     fi
 else
     echo -e "Cloning repository to $INSTALL_DIR..."
