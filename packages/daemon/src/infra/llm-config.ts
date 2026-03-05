@@ -82,12 +82,12 @@ export function getWorkerEngineConfig(): WorkerEngineConfig {
 
 // ─── Tier 2 (Cloud / Premium) ─────────────────────────────────────
 
-export function getTier2Config(): { provider: Tier2Provider; model: string } | null {
-    const config = Vault.read();
-    if (!config?.tier2) return null;
+export function getTier2Config(): { provider: string; model: string } | null {
+    const workerConfig = getWorkerEngineConfig();
+    if (!workerConfig.model || !workerConfig.provider) return null;
     return {
-        provider: config.tier2.provider,
-        model: config.tier2.model,
+        provider: workerConfig.provider,
+        model: workerConfig.model,
     };
 }
 
@@ -117,10 +117,9 @@ export function resolveAnthropicAuth(): AnthropicAuth {
 
 // ─── Credential Retrieval ─────────────────────────────────────────
 
-/** Get the API key for non-Anthropic providers */
+/** Get the API key for the worker engine (supports legacy tier2 fallback) */
 export function getTier2ApiKey(): string | undefined {
-    const config = Vault.read();
-    return config?.tier2?.apiKey;
+    return getWorkerEngineConfig().apiKey;
 }
 
 // ─── Validation ───────────────────────────────────────────────────

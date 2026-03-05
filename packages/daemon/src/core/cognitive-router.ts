@@ -171,10 +171,9 @@ function createLiveModel(): LanguageModel {
 }
 
 export function createTier2Model(): LanguageModel {
-    const config = getTier2Config();
-    if (!config) throw new Error('Tier 2 not configured. Run: redbus config');
+    const workerConfig = getWorkerEngineConfig();
 
-    switch (config.provider) {
+    switch (workerConfig.provider) {
         case 'anthropic': {
             const auth = resolveAnthropicAuth();
             const anthropic = createAnthropic(
@@ -182,20 +181,18 @@ export function createTier2Model(): LanguageModel {
                     ? { apiKey: '', authToken: auth.authToken }
                     : { apiKey: auth.apiKey },
             );
-            return anthropic(config.model);
+            return anthropic(workerConfig.model);
         }
         case 'google': {
-            const apiKey = getTier2ApiKey();
-            const google = createGoogleGenerativeAI({ apiKey: apiKey! });
-            return google(config.model);
+            const google = createGoogleGenerativeAI({ apiKey: workerConfig.apiKey! });
+            return google(workerConfig.model);
         }
         case 'openai': {
-            const apiKey = getTier2ApiKey();
-            const openai = createOpenAI({ apiKey: apiKey! });
-            return openai(config.model);
+            const openai = createOpenAI({ apiKey: workerConfig.apiKey! });
+            return openai(workerConfig.model);
         }
         default:
-            throw new Error(`Unknown provider: ${config.provider as string}`);
+            throw new Error(`Unknown provider: ${workerConfig.provider as string}`);
     }
 }
 
@@ -761,38 +758,53 @@ export async function askTier2(
     }
 
     try {
-        // ── Sanitize tool schemas: Anthropic requires input_schema.type = "object" ──
-        // Some tools (MCP, Forged) may produce schemas missing the `type` field.
-        // This belt-and-suspenders check catches ANY broken schema before sending to the provider.
+        // ── Exhaustive schema sanitization: Anthropic requires input_schema.type = "object" ──
+        // The AI SDK can represent schemas in multiple ways depending on the tool source.
+        // We must handle ALL of them to prevent Anthropic rejecting with:
+        //   "tools.N.custom.input_schema.type: Field required"
         const toolEntries = Object.entries(tools);
         for (let i = 0; i < toolEntries.length; i++) {
             const [name, t] = toolEntries[i]!;
-            const params = (t as any)?.parameters;
+            const toolObj = t as any;
 
-            // Check jsonSchema-wrapped tools (MCP tools use `parameters` with jsonSchema)
-            if (params?.jsonSchema) {
-                if (!params.jsonSchema.type) {
-                    console.warn(`  ⚠️ [tier2] Tool[${i}] "${name}" — missing schema.type, injecting "object"`);
-                    params.jsonSchema.type = 'object';
+            // Helper: ensure a schema object has type + properties
+            function sanitizeSchema(schema: any): void {
+                if (!schema || typeof schema !== 'object') return;
+                if (!schema.type) {
+                    console.warn(`  ⚠️ [tier2] Tool[${i}] "${name}" — schema missing type, injecting "object"`);
+                    schema.type = 'object';
                 }
-                if (!params.jsonSchema.properties) {
-                    params.jsonSchema.properties = {};
+                if (!schema.properties) {
+                    schema.properties = {};
                 }
             }
 
-            // Check Zod-based tools that use `inputSchema` (native + forged tools)
-            const inputSchema = (t as any)?.inputSchema;
-            if (inputSchema?.jsonSchema) {
-                if (!inputSchema.jsonSchema.type) {
-                    console.warn(`  ⚠️ [tier2] Tool[${i}] "${name}" — inputSchema missing type, injecting "object"`);
-                    inputSchema.jsonSchema.type = 'object';
+            // Shape 1: Zod-based native tools — schema lives at tool.inputSchema?.jsonSchema
+            if (toolObj?.inputSchema?.jsonSchema) {
+                sanitizeSchema(toolObj.inputSchema.jsonSchema);
+            }
+
+            // Shape 2: jsonSchema()-wrapped tools — schema at tool.parameters?.jsonSchema
+            if (toolObj?.parameters?.jsonSchema) {
+                sanitizeSchema(toolObj.parameters.jsonSchema);
+            }
+
+            // Shape 3: some forged/dynamic tools expose schema directly at tool.parameters (no .jsonSchema wrapper)
+            if (toolObj?.parameters && !toolObj.parameters.jsonSchema && typeof toolObj.parameters === 'object') {
+                const p = toolObj.parameters;
+                // Only patch if it looks like a raw JSON schema (has properties or type field already, or is plain object)
+                if (p.type !== undefined || p.properties !== undefined || p.$schema !== undefined) {
+                    sanitizeSchema(p);
                 }
-                if (!inputSchema.jsonSchema.properties) {
-                    inputSchema.jsonSchema.properties = {};
-                }
+            }
+
+            // Shape 4: tool.schema (some MCP bridges emit this)
+            if (toolObj?.schema) {
+                sanitizeSchema(toolObj.schema);
             }
         }
-        console.log(`  🧠 [tier2] Calling ${config.provider}/${config.model} with ${Object.keys(tools).length} tools (AutoRAG: ${ragResult.chunksFound} chunks)`);
+        const workerCfg = getWorkerEngineConfig();
+        console.log(`  🧠 [tier2] Calling ${workerCfg.provider}/${workerCfg.model} with ${Object.keys(tools).length} tools (AutoRAG: ${ragResult.chunksFound} chunks)`);
 
         // ─── Transcript: Log user turn ───
         Transcript.append({ role: 'user', content: prompt, meta: { tier: 'cloud', model: config.model } });
