@@ -1,14 +1,17 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { ApprovalGateManager, DEFAULT_APPROVAL_TIMEOUT_MS } from './approval-gate.js';
+import { engineBus } from './engine-message-bus.js';
 
 let gate: ApprovalGateManager;
 
 beforeEach(() => {
     vi.useFakeTimers();
+    engineBus.reset();
     gate = new ApprovalGateManager();
 });
 
 afterEach(() => {
+    engineBus.reset();
     vi.useRealTimers();
 });
 
@@ -137,6 +140,51 @@ describe('grace period', () => {
         // Still accessible during grace
         expect(gate.getSnapshot('g1')).toBeTruthy();
         expect(gate.awaitDecision('g1')).toBeTruthy();
+    });
+});
+
+describe('orchestration lifecycle', () => {
+    it('resumes the original approval session when the decision arrives after another session becomes active', async () => {
+        engineBus.startTask('approval-task', 'Wait for command approval');
+
+        const promise = gate.requestApproval({ id: 'approval-ctx', ...PAYLOAD });
+
+        expect(engineBus.getSession('approval-task')).toMatchObject({
+            state: 'paused',
+            pauseKind: 'awaiting_approval',
+            pauseReason: `${PAYLOAD.toolName}: ${PAYLOAD.description}`,
+            activeActor: 'worker',
+        });
+
+        vi.advanceTimersByTime(1);
+        engineBus.startTask('approval-other-task', 'Handle a separate workflow');
+        expect(engineBus.getLatestActiveSession()?.taskId).toBe('approval-other-task');
+
+        expect(gate.resolveApproval('approval-ctx', true)).toBe(true);
+        await expect(promise).resolves.toBe(true);
+
+        const resumedSession = engineBus.getSession('approval-task');
+        expect(resumedSession).toMatchObject({
+            state: 'running',
+            activeActor: 'worker',
+            pauseKind: undefined,
+            pauseReason: `Approval decision received for ${PAYLOAD.toolName}.`,
+        });
+        expect(resumedSession?.history.map(event => event.type)).toEqual([
+            'task_created',
+            'yield_requested',
+            'user_reply_received',
+            'resumed',
+        ]);
+        expect(resumedSession?.history[2]).toMatchObject({
+            type: 'user_reply_received',
+            sessionId: 'approval-task',
+            taskId: 'approval-task',
+            mode: 'collaborative',
+            actor: 'user',
+            replyPreview: 'Approval granted once',
+        });
+        expect(engineBus.getSession('approval-other-task')?.lastEventType).toBe('task_created');
     });
 });
 
