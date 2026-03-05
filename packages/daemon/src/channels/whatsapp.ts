@@ -152,19 +152,40 @@ export class WhatsAppChannel {
 
         this.client.on('ready', async () => {
             console.log('  ✅ WhatsAppChannel: Ready!');
-            console.log(`  🛡️ WhatsAppChannel: Firewall ACTIVE — listening ONLY to: ${this.ownerJid}`);
+            console.log(`  🛡️ WhatsAppChannel: Firewall ACTIVE — listening ONLY to "Note to Self" from: ${this.ownerJid}`);
+            console.log(`  🛡️ WhatsAppChannel: Messages from groups, other contacts, and strangers will be silently dropped.`);
         });
 
         // 🛡️ INBOUND FIREWALL on 'message_create' (all messages: sent + received)
         // This single listener handles BOTH incoming messages AND self-messages (fromMe).
         // The 'message' event is NOT needed — message_create covers everything.
         this.client.on('message_create', async (message: pkg.Message) => {
-            // 🛡️ FIREWALL: Accept ONLY messages from the owner's own number.
-            // - Incoming messages from owner: message.from === ownerJid
-            // - Self-messages (fromMe / "Note to Self"): message.fromMe === true AND message.from === ownerJid
-            // Block everything else (groups, other contacts, strangers).
-            if (message.from !== this.ownerJid) {
-                return; // 🛡️ FIREWALL: not from owner — silently blocked
+            // 🛡️ FIREWALL LAYER 0: ownerJid must be loaded — hard block if not.
+            if (!this.ownerJid) {
+                console.error('  🛡️❌ [Firewall] CRITICAL: ownerJid is null — dropping ALL messages.');
+                return;
+            }
+
+            // 🛡️ FIREWALL LAYER 1: Reject group messages immediately (defense-in-depth).
+            // Group JIDs always end with @g.us — never process them.
+            if (message.from?.endsWith('@g.us') || message.to?.endsWith('@g.us')) {
+                return; // 🛡️ FIREWALL: group message — silently blocked
+            }
+
+            // 🛡️ FIREWALL LAYER 2: "Note to Self" pattern — accept ONLY messages
+            // where BOTH sender AND recipient are the owner's own JID.
+            // This is critical because message_create fires for ALL messages,
+            // including messages the owner sends to OTHER contacts (where
+            // message.from === ownerJid but message.to !== ownerJid).
+            const isFromOwner = message.from === this.ownerJid;
+            const isToOwner = message.to === this.ownerJid;
+
+            if (!isFromOwner || !isToOwner) {
+                // Debug: log rejected messages so we can verify the firewall works
+                if (isFromOwner && !isToOwner) {
+                    console.log(`  🛡️ [Firewall] BLOCKED: owner sent message to ${message.to?.slice(0, 8)}... (not self-chat)`);
+                }
+                return; // 🛡️ FIREWALL: not a Note-to-Self message — silently blocked
             }
 
             // Skip bot replies (our own responses start with 🔴)
@@ -175,6 +196,7 @@ export class WhatsAppChannel {
             const body = message.body.trim();
             if (!body) return;
 
+            console.log(`  🛡️✅ [Firewall] ACCEPTED: Note-to-Self message from owner (${body.length} chars)`);
             console.log(`  📱 WhatsAppChannel: Received [${body.slice(0, 40)}...] -> Routing to Worker Engine...`);
 
             // ── Omnichannel: Mirror input to TUI ──────────────────

@@ -18,6 +18,9 @@ import { enqueueCommandInLane, CommandLane } from './task-queue.js';
 import { processMonitorEmitter } from './tools/process-manager.js';
 import { HeavyTaskQueue } from './heavy-task-queue.js';
 import type { HeartbeatManager } from './gateway/heartbeat.js';
+import { createThinkingFilter } from './thinking-filter.js';
+import { userInputManager } from './tools/ask-user.js';
+import { engineBus } from './engine-message-bus.js';
 
 export class ChatHandler {
     private forceLive = false;
@@ -42,6 +45,21 @@ export class ChatHandler {
                 type: 'chat:stream:done',
                 timestamp: new Date().toISOString(),
                 payload: { requestId: request.id, fullText: '', tier: 'live', model: 'system' }
+            });
+        });
+
+        // ─── User Input Gate (ask_user_for_input yield/resume) ─────────
+        userInputManager.on('question_asked', ({ id, question }) => {
+            console.log(`  ❓ [ChatHandler] Relaying question to TUI: "${question.slice(0, 60)}..."`);
+            this.wsServer.broadcast({
+                type: 'chat:stream:chunk',
+                timestamp: new Date().toISOString(),
+                payload: { requestId: id, delta: `❓ **Agent needs your input:**\n${question}` }
+            });
+            this.wsServer.broadcast({
+                type: 'chat:stream:done',
+                timestamp: new Date().toISOString(),
+                payload: { requestId: id, fullText: '', tier: 'worker', model: 'system' }
             });
         });
 
@@ -90,6 +108,25 @@ export class ChatHandler {
 
         const vaultConfig = Vault.read();
         let targetTier = this.forceLive ? 'live' : tier;
+
+        // ─── User Input Gate Interception (ask_user_for_input) ──────
+        if (userInputManager.hasPendingQuestions()) {
+            const pendingId = userInputManager.getFirstPendingId()!;
+            userInputManager.resolveInput(pendingId, content);
+
+            this.wsServer.broadcast({
+                type: 'log',
+                timestamp: new Date().toISOString(),
+                payload: { level: 'info', source: 'System', message: `✅ Response received. Agent resuming...` }
+            });
+
+            this.wsServer.broadcast({
+                type: 'chat:stream:done',
+                timestamp: new Date().toISOString(),
+                payload: { requestId, fullText: '', tier: 'worker', model: 'system' }
+            });
+            return;
+        }
 
         // ─── Generalized Approval Gate Interception ──────────────────
         if (approvalGate.hasPendingRequests()) {
@@ -215,13 +252,20 @@ Return ONLY the JSON object. Do not explain.`;
             : `session:${clientId}`;
         await enqueueCommandInLane(lane, async () => {
             let result;
+            // Thinking tag filter: strips <thinking>...</thinking> from stream,
+            // emits a 💭 indicator instead of raw XML
+            const thinkingFilter = createThinkingFilter((cleanDelta: string) => {
+                if (!cleanDelta) return;
+                this.wsServer.broadcast({
+                    type: 'chat:stream:chunk',
+                    timestamp: new Date().toISOString(),
+                    payload: { requestId, delta: cleanDelta },
+                });
+            });
+
             const callbacks = {
                 onChunk: (delta: string) => {
-                    this.wsServer.broadcast({
-                        type: 'chat:stream:chunk',
-                        timestamp: new Date().toISOString(),
-                        payload: { requestId, delta },
-                    });
+                    thinkingFilter.push(delta);
                 },
                 onDone: (fullText: string) => {
                 },
@@ -253,13 +297,63 @@ Return ONLY the JSON object. Do not explain.`;
 
             const senderRole = resolveSenderRole(clientId);
             this.heartbeat?.setThinking(true);
+
+            // ─── Zero Abandonment Guard ───────────────────────────────
+            // If no activity (chunks, tool calls) for 30s, send a status ping.
+            // Ensures the user NEVER waits in silence.
+            const SILENCE_THRESHOLD_MS = 30_000;
+            let lastActivityTime = Date.now();
+            let silenceCheckCount = 0;
+
+            const markActivity = () => { lastActivityTime = Date.now(); };
+
+            // Patch callbacks to track activity
+            const originalOnChunk = callbacks.onChunk;
+            callbacks.onChunk = (delta: string) => { markActivity(); originalOnChunk(delta); };
+            const originalOnToolCall = callbacks.onToolCall;
+            callbacks.onToolCall = (toolName: string, args: Record<string, unknown>) => { markActivity(); originalOnToolCall(toolName, args); };
+
+            const silenceGuard = setInterval(() => {
+                const silentMs = Date.now() - lastActivityTime;
+                if (silentMs >= SILENCE_THRESHOLD_MS) {
+                    silenceCheckCount++;
+                    const elapsed = Math.round((Date.now() - lastActivityTime) / 1000);
+                    const isWorkerActive = engineBus.isWorkerActive();
+                    const statusMsg = isWorkerActive
+                        ? `⏳ Still working... Worker Engine is processing (${elapsed}s since last update)`
+                        : `⏳ Still working... processing your request (${elapsed}s since last update)`;
+
+                    console.log(`  ⏳ [ZeroAbandon] Silence detected (${elapsed}s). Sending status ping #${silenceCheckCount}.`);
+                    this.wsServer.broadcast({
+                        type: 'chat:stream:chunk',
+                        timestamp: new Date().toISOString(),
+                        payload: { requestId, delta: `\n${statusMsg}\n` },
+                    });
+                    markActivity(); // Reset so we don't spam
+                }
+            }, SILENCE_THRESHOLD_MS);
+
             try {
                 if (targetTier === 'live') {
                     result = await askLive(content, callbacks, messages, senderRole);
                 } else {
                     result = await askTier2(content, callbacks, undefined, messages, senderRole);
                 }
+            } catch (err) {
+                // ─── Zero Abandonment: Error path MUST respond ────────
+                const error = err instanceof Error ? err : new Error(String(err));
+                console.error(`  ❌ [${targetTier}] Unhandled error:`, error.message);
+                this.wsServer.broadcast({
+                    type: 'chat:error',
+                    timestamp: new Date().toISOString(),
+                    payload: { requestId, error: `Something went wrong: ${error.message}. Please try again or rephrase your request.` },
+                });
+                // Ensure we still signal completion so the TUI resets
+                result = { tier: targetTier as 'live' | 'cloud', model: 'error' };
             } finally {
+                clearInterval(silenceGuard);
+                // Flush any buffered thinking content before signalling done
+                thinkingFilter.flush();
                 this.heartbeat?.setThinking(false);
             }
 

@@ -80,19 +80,20 @@ function tierToEngineLabel(tier: string): string {
 
 /** Maps tool names to user-friendly action labels for the chat display */
 function getToolActivityLabel(toolName: string): string {
-    if (toolName.startsWith('core_memory_') || toolName === 'memorize') return '💭 registrando na memória...';
-    if (toolName === 'search_memory' || toolName === 'search_memory_all') return '🔍 buscando na memória...';
-    if (toolName === 'forget_memory') return '🗑️ removendo da memória...';
-    if (toolName.startsWith('web_') || toolName === 'visual_inspect_page') return '🌐 acessando a web...';
-    if (toolName === 'create_and_run_tool') return '🔨 forjando ferramenta...';
-    if (toolName === 'run_shell_command' || toolName === 'start_background_process') return '⚙️ executando comando...';
-    if (toolName === 'read_file' || toolName === 'write_file' || toolName === 'edit_file_blocks') return '📄 manipulando arquivo...';
-    if (toolName === 'install_mcp') return '🔌 instalando MCP...';
-    if (toolName === 'send_whatsapp_message') return '📱 enviando mensagem...';
-    if (toolName === 'schedule_recurring_task') return '⏰ agendando tarefa...';
-    if (toolName === 'update_persona') return '👤 atualizando persona...';
+    if (toolName.startsWith('core_memory_') || toolName === 'memorize') return '💭 saving to memory...';
+    if (toolName === 'search_memory' || toolName === 'search_memory_all') return '🔍 searching memory...';
+    if (toolName === 'forget_memory') return '🗑️ removing from memory...';
+    if (toolName.startsWith('web_') || toolName === 'visual_inspect_page') return '🌐 accessing the web...';
+    if (toolName === 'create_and_run_tool') return '🔨 forging tool...';
+    if (toolName === 'run_shell_command' || toolName === 'start_background_process') return '⚙️ executing command...';
+    if (toolName === 'read_file' || toolName === 'write_file' || toolName === 'edit_file_blocks') return '📄 manipulating file...';
+    if (toolName === 'install_mcp') return '🔌 installing MCP...';
+    if (toolName === 'send_whatsapp_message') return '📱 sending message...';
+    if (toolName === 'schedule_recurring_task') return '⏰ scheduling task...';
+    if (toolName === 'update_persona') return '👤 updating persona...';
+    if (toolName === 'ask_user_for_input') return '❓ waiting for your input...';
     // MCP or forged tools
-    return `🔧 usando ${toolName}...`;
+    return `🔧 using ${toolName}...`;
 }
 
 /** Formats a tool result into a compact, friendly summary instead of raw JSON */

@@ -26,6 +26,7 @@ import { visualInspectPageTool } from './tools/visual-inspect-page.js';
 import { installMcpTool } from './tools/install-mcp.js';
 import { readOwnArchitectureTool, readToolSignaturesTool } from './tools/introspection.js';
 import { forgeAndTestSkillTool, listForgedSkillsTool } from './tools/forge-tdd.js';
+import { askUserForInputTool } from './tools/ask-user.js';
 import { Forge } from './forge.js';
 import { Vault } from '@redbusagent/shared';
 import { WhatsAppChannel } from '../channels/whatsapp.js';
@@ -97,6 +98,8 @@ export class CapabilityRegistry {
             kill_background_process: killBackgroundProcessTool,
             visual_inspect_page: visualInspectPageTool,
             install_mcp: installMcpTool,
+            // ─── User Interaction ─────────────────────────────
+            ask_user_for_input: askUserForInputTool,
             // ─── Self-Improvement Tools ────────────────────────
             read_own_architecture: readOwnArchitectureTool,
             read_tool_signatures: readToolSignaturesTool,
@@ -144,6 +147,8 @@ ${hasWhatsapp ? `- 📱 WhatsApp: You are connected to the user's WhatsApp. You 
 - ⚙️ Self-Improvement Mode: You are an autonomous engineer of your own system. When the user asks for a new capability: 1) Plan in a <thinking> block. 2) Use read_tool_signatures to understand how your existing tools are structured. 3) Write the new tool code. 4) Use forge_and_test_skill to validate it in the sandbox. 5) Never deploy untested code into your own registry. Tools: read_own_architecture, read_tool_signatures, forge_and_test_skill, list_forged_skills.
 - 🔌 MCP (Model Context Protocol): You are connected to MCP servers exposing ${mcpCount} external tools dynamically.
 - 🧩 MCP Discovery & Install: You can discover and install new MCP servers at runtime using install_mcp. Workflow: (1) Use web_search to find MCPs (e.g. "MCP server for X site:github.com", "npm @modelcontextprotocol/server-*", "registry.modelcontextprotocol.io"). (2) Use web_read_page to read the MCP's README for the correct command/args. (3) Ask the user for any required API keys/tokens. (4) Call install_mcp with the id, name, command, args, and env. The MCP will be activated immediately and its tools will become available.
+- ❓ User Input (Yield & Ask): When you need information from the user (API keys, credentials, preferences, clarifications), use \`ask_user_for_input\`. This SUSPENDS your execution, shows the question in the user's terminal/WhatsApp, waits for their response, then RESUMES. NEVER guess credentials or output text hoping the user sees it — always use this tool.
+- 🤝 Collaborative Dual-Engine: You operate as part of a unified team. The Live Engine coordinates and delegates; the Worker Engine executes. Real-time status updates are sent automatically every ~12s during Worker execution. Every request MUST receive a definitive answer (success, failure explanation, or clarification question).
 - 🔒 Approval Gates: The following tools require explicit user approval before execution:
 ${Object.entries(approvalGate.getToolFlags()).map(([name, flags]) => {
             const reasons = [];

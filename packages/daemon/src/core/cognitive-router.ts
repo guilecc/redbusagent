@@ -42,6 +42,7 @@ import { repairToolUseResultPairing } from './transcript-repair.js';
 import { compactHistory } from './compaction.js';
 import { applyToolPolicy, type SenderRole } from './tool-policy.js';
 import { getRelevantSkillPrompt } from './skills.js';
+import { engineBus } from './engine-message-bus.js';
 
 // ─── Constants ────────────────────────────────────────────────────
 
@@ -332,13 +333,120 @@ export async function askLive(
                 task_prompt: z.string().describe('Detailed prompt explaining exactly what the user wants to build or automate. Include all necessary context, and specify any tools the worker should use (like Playwright, Vault, etc).')
             }),
             execute: async (params: { task_prompt: string }) => {
-                callbacks.onChunk('\n\n🛠️  [Live Engine] Delegating complex task to the Engineering Worker Engine...\n\n');
-                console.log(`  🧠 [Router]: Intent FORGE/DELEGATE → Routing to Worker Engine via tool call`);
-                // Dynamically invoke askTier2 to run the heavy processing 
-                // Using { disableTools: false } ensures the worker can use its tools
-                await askTier2(params.task_prompt, callbacks, undefined, messagesFromClient, senderRole, { disableTools: false });
+                const taskId = `worker-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+                const startTime = Date.now();
 
-                return `The Worker Engine executed the task successfully and communicated the result to the user. You do not need to repeat its output. Just inform the user the task is complete.`;
+                // ─── Immediate Acknowledgment ─────────────────────────
+                callbacks.onChunk('\n\n🛠️  [Live Engine] Delegating complex task to the Engineering Worker Engine...\n\n');
+                console.log(`  🧠 [Router]: Intent FORGE/DELEGATE → Routing to Worker Engine via tool call (task: ${taskId})`);
+
+                // ─── Emit bus start event ─────────────────────────────
+                engineBus.startTask(taskId, params.task_prompt);
+
+                // ─── Track Worker activity for status updates ─────────
+                let workerToolCalls = 0;
+                let workerCharsGenerated = 0;
+                let lastToolName = '';
+                let lastStatusTime = Date.now();
+
+                // ─── Wrap callbacks to emit bus events ────────────────
+                const workerCallbacks: StreamCallbacks = {
+                    onChunk: (delta: string) => {
+                        workerCharsGenerated += delta.length;
+                        callbacks.onChunk(delta);
+                    },
+                    onDone: (fullText: string) => {
+                        callbacks.onDone(fullText);
+                    },
+                    onError: (error: Error) => {
+                        engineBus.emitEvent('worker:error', {
+                            taskId,
+                            error: error.message,
+                            timestamp: Date.now(),
+                        });
+                        callbacks.onError(error);
+                    },
+                    onToolCall: (toolName: string, args: Record<string, unknown>) => {
+                        workerToolCalls++;
+                        lastToolName = toolName;
+                        engineBus.emitEvent('worker:tool_call', {
+                            taskId,
+                            toolName,
+                            args,
+                            timestamp: Date.now(),
+                        });
+                        callbacks.onToolCall?.(toolName, args);
+                    },
+                    onToolResult: (toolName: string, success: boolean, result: string) => {
+                        engineBus.emitEvent('worker:tool_result', {
+                            taskId,
+                            toolName,
+                            success,
+                            durationMs: 0,
+                            timestamp: Date.now(),
+                        });
+                        callbacks.onToolResult?.(toolName, success, result);
+                    },
+                };
+
+                // ─── Live Observer: Periodic status updates ───────────
+                const STATUS_INTERVAL_MS = 12_000;
+                const statusInterval = setInterval(() => {
+                    const elapsed = Math.round((Date.now() - startTime) / 1000);
+                    let statusMsg = '';
+
+                    if (lastToolName) {
+                        statusMsg = `⏳ [Live Observer] Worker is active (${elapsed}s) — ${workerToolCalls} tool call${workerToolCalls !== 1 ? 's' : ''}, last: \`${lastToolName}\``;
+                    } else if (workerCharsGenerated > 0) {
+                        statusMsg = `⏳ [Live Observer] Worker is reasoning (${elapsed}s) — ${workerCharsGenerated} chars generated so far`;
+                    } else {
+                        statusMsg = `⏳ [Live Observer] Worker is initializing (${elapsed}s)...`;
+                    }
+
+                    engineBus.emitEvent('worker:progress', {
+                        taskId,
+                        charsGenerated: workerCharsGenerated,
+                        toolCallCount: workerToolCalls,
+                        elapsed,
+                        timestamp: Date.now(),
+                    });
+
+                    // Only emit status if we haven't recently sent text
+                    if (Date.now() - lastStatusTime >= STATUS_INTERVAL_MS - 1000) {
+                        callbacks.onChunk(`\n${statusMsg}\n`);
+                        lastStatusTime = Date.now();
+                    }
+                }, STATUS_INTERVAL_MS);
+
+                try {
+                    await askTier2(params.task_prompt, workerCallbacks, undefined, messagesFromClient, senderRole, { disableTools: false });
+
+                    const totalDuration = Date.now() - startTime;
+                    engineBus.emitEvent('worker:done', {
+                        taskId,
+                        totalChars: workerCharsGenerated,
+                        totalToolCalls: workerToolCalls,
+                        totalDurationMs: totalDuration,
+                        timestamp: Date.now(),
+                    });
+
+                    const durationSec = Math.round(totalDuration / 1000);
+                    console.log(`  ✅ [Router]: Worker task ${taskId} completed in ${durationSec}s (${workerToolCalls} tools, ${workerCharsGenerated} chars)`);
+
+                    return `The Worker Engine executed the task successfully in ${durationSec}s using ${workerToolCalls} tool calls. The result was already communicated to the user. Just confirm the task is complete.`;
+                } catch (err) {
+                    const error = err instanceof Error ? err : new Error(String(err));
+                    engineBus.emitEvent('worker:error', {
+                        taskId,
+                        error: error.message,
+                        timestamp: Date.now(),
+                    });
+                    callbacks.onChunk(`\n❌ [Live Observer] Worker Engine encountered an error: ${error.message}\n`);
+                    return `The Worker Engine failed with error: ${error.message}. Inform the user and ask if they want to retry.`;
+                } finally {
+                    clearInterval(statusInterval);
+                    engineBus.clearTask();
+                }
             }
         };
     }
