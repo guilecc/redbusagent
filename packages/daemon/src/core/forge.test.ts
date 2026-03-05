@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { existsSync, unlinkSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
-import { Forge, formatForgeFailureDetails } from './forge.js';
+import { Forge, buildForgeCritiqueSignal, formatForgeFailureDetails } from './forge.js';
 import { executeCreateAndRun } from './tools/create-and-run.js';
 
 const createdFiles = new Set<string>();
+const createdDirs = new Set<string>();
 
 function trackForgeFile(filename: string): string {
     const path = join(Forge.dir, filename);
@@ -16,7 +17,11 @@ afterEach(() => {
     for (const path of createdFiles) {
         if (existsSync(path)) unlinkSync(path);
     }
+    for (const dir of createdDirs) {
+        if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
+    }
     createdFiles.clear();
+    createdDirs.clear();
 });
 
 describe('Forge execution diagnostics', () => {
@@ -56,6 +61,22 @@ fs.writeFileSync('bad-output.txt', { broken: true });
         expect(diagnostics).toContain('stderr:\nTypeError [ERR_INVALID_ARG_TYPE]');
         expect(diagnostics).toContain('stdout:\npartial stdout');
     });
+
+    it('builds structured critique signals for repair loops', () => {
+        const critique = buildForgeCritiqueSignal({
+            phase: 'execution',
+            filename: 'outlook-summary.js',
+            evidence: 'TypeError [ERR_INVALID_ARG_TYPE]: bad write',
+        });
+
+        expect(critique).toMatchObject({
+            verdict: 'revise',
+            phase: 'execution',
+        });
+        expect(critique.summary).toContain('outlook-summary.js');
+        expect(critique.instruction).toContain('retry the same tool call');
+        expect(critique.evidence).toContain('ERR_INVALID_ARG_TYPE');
+    });
 });
 
 describe('executeCreateAndRun', () => {
@@ -81,5 +102,61 @@ fs.writeFileSync('should-not-exist.txt', { nope: true });
         expect(result.failedCommand).toContain(filename);
         expect(result.diagnostics).toContain(`Command: node ${join(Forge.dir, filename)}`);
         expect(result.diagnostics).toContain('stderr:');
+        if (result.success) {
+            throw new Error('Expected executeCreateAndRun to fail for the forged runtime error case.');
+        }
+        expect(result.critique).toMatchObject({
+            verdict: 'revise',
+            phase: 'execution',
+        });
+        expect(result.critique.summary).toContain(filename);
+        expect(result.critique.instruction).toContain('create_and_run_tool again');
+    });
+});
+
+describe('Forge skill packages', () => {
+    it('persists structured skill packages with executable artifacts and student instructions', async () => {
+        const skillName = `skill-package-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        const packageDir = Forge.getSkillPackageDir(skillName);
+        createdDirs.add(packageDir);
+
+        const persisted = Forge.persistSkillPackage({
+            skillName,
+            toolName: 'package_echo',
+            description: 'Echo back a structured payload',
+            code: `async function execute(payload) { return { echoed: payload.message ?? null }; }`,
+            language: 'javascript',
+            source: 'forge-tdd',
+            studentInstructions: {
+                tool_name: 'package_echo',
+                summary: 'Use package_echo when the user wants a structured echo response.',
+                usage_examples: [
+                    {
+                        user_input: 'Echo hello back to me',
+                        expected_tool_call: { name: 'package_echo', args: { message: 'hello' } },
+                    },
+                    {
+                        user_input: 'Repeat the word redbus',
+                        expected_tool_call: { name: 'package_echo', args: { message: 'redbus' } },
+                    },
+                ],
+            },
+            testPayload: { message: 'from-test' },
+            sandboxDurationMs: 12,
+        });
+
+        expect(existsSync(persisted.packagePath)).toBe(true);
+        expect(existsSync(persisted.entrypointPath)).toBe(true);
+
+        const onDisk = JSON.parse(readFileSync(persisted.packagePath, 'utf-8'));
+        expect(onDisk.schemaVersion).toBe(1);
+        expect(onDisk.manifest.skillName).toBe(skillName);
+        expect(onDisk.manifest.entrypoint).toBe('index.js');
+        expect(onDisk.student_instructions.tool_name).toBe('package_echo');
+        expect(onDisk.student_instructions.usage_examples).toHaveLength(2);
+
+        const result = await Forge.executeScriptAtPath(persisted.entrypointPath, JSON.stringify({ message: 'from-runtime' }));
+        expect(result.success).toBe(true);
+        expect(result.stdout).toContain('from-runtime');
     });
 });

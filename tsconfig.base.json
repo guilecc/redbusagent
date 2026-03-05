@@ -18,6 +18,9 @@
         "paths": {
             "@redbusagent/shared": [
                 "./packages/shared/src/index.ts"
+            ],
+            "@redbusagent/shared/studio": [
+                "./packages/shared/src/types/studio.ts"
             ]
         },
         /* Emit */

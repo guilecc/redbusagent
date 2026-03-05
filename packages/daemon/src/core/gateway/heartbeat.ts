@@ -42,6 +42,14 @@ interface StateSnapshot {
     workerPending: number;
     workerRunning: number;
     workerCompleted: number;
+    workerFailed: number;
+    orchestrationRunning: number;
+    orchestrationPaused: number;
+    orchestrationCompleted: number;
+    orchestrationFailed: number;
+    orchestrationMode: string | null;
+    orchestrationState: string | null;
+    orchestrationEvent: string | null;
 }
 
 function snapshotsEqual(a: StateSnapshot | null, b: StateSnapshot): boolean {
@@ -54,7 +62,15 @@ function snapshotsEqual(a: StateSnapshot | null, b: StateSnapshot): boolean {
         a.connectedClients === b.connectedClients &&
         a.workerPending === b.workerPending &&
         a.workerRunning === b.workerRunning &&
-        a.workerCompleted === b.workerCompleted
+        a.workerCompleted === b.workerCompleted &&
+        a.workerFailed === b.workerFailed &&
+        a.orchestrationRunning === b.orchestrationRunning &&
+        a.orchestrationPaused === b.orchestrationPaused &&
+        a.orchestrationCompleted === b.orchestrationCompleted &&
+        a.orchestrationFailed === b.orchestrationFailed &&
+        a.orchestrationMode === b.orchestrationMode &&
+        a.orchestrationState === b.orchestrationState &&
+        a.orchestrationEvent === b.orchestrationEvent
     );
 }
 
@@ -103,9 +119,10 @@ export class HeartbeatManager {
      *  4. IDLE — nothing happening
      */
     computeState(): DaemonState {
+        if (engineBus.hasPausedSessions()) return 'BLOCKED_WAITING_USER';
         if (approvalGate.hasPendingRequests()) return 'BLOCKED_WAITING_USER';
         if (this._thinking) return 'THINKING';
-        if (getActiveTaskCount() > 0) return 'EXECUTING_TOOL';
+        if (getActiveTaskCount() > 0 || engineBus.hasRunningSessions()) return 'EXECUTING_TOOL';
         return 'IDLE';
     }
 
@@ -156,8 +173,8 @@ export class HeartbeatManager {
 
         const workerConfig = getWorkerEngineConfig();
         const workerQueueStatus = HeavyTaskQueue.getStatus();
-        // Also check if the Worker Engine is active via delegate_to_worker_engine (engineBus)
-        const engineBusActive = engineBus.isWorkerActive() ? 1 : 0;
+        const orchestrationCounts = engineBus.getSessionCounts();
+        const latestSession = engineBus.getLatestSession();
 
         const snapshot: StateSnapshot = {
             state: this.computeState(),
@@ -166,8 +183,16 @@ export class HeartbeatManager {
             awaitingApproval: approvalGate.hasPendingRequests(),
             connectedClients: this.wsServer.connectionCount,
             workerPending: workerQueueStatus.pending,
-            workerRunning: Math.max(workerQueueStatus.running, engineBusActive),
+            workerRunning: Math.max(workerQueueStatus.running, orchestrationCounts.running),
             workerCompleted: workerQueueStatus.completed,
+            workerFailed: workerQueueStatus.failed,
+            orchestrationRunning: orchestrationCounts.running,
+            orchestrationPaused: orchestrationCounts.paused,
+            orchestrationCompleted: orchestrationCounts.completed,
+            orchestrationFailed: orchestrationCounts.failed,
+            orchestrationMode: latestSession?.mode ?? null,
+            orchestrationState: latestSession?.state ?? null,
+            orchestrationEvent: latestSession?.lastEventType ?? null,
         };
 
         // HEARTBEAT_OK suppression: skip if nothing changed
@@ -194,9 +219,23 @@ export class HeartbeatManager {
                     enabled: true,
                     model: workerConfig.model,
                     pending: workerQueueStatus.pending,
-                    running: workerQueueStatus.running,
+                    running: snapshot.workerRunning,
                     completed: workerQueueStatus.completed,
                     failed: workerQueueStatus.failed,
+                    orchestration: {
+                        running: snapshot.orchestrationRunning,
+                        paused: snapshot.orchestrationPaused,
+                        completed: snapshot.orchestrationCompleted,
+                        failed: snapshot.orchestrationFailed,
+                        activeSession: latestSession ? {
+                            sessionId: latestSession.sessionId,
+                            taskId: latestSession.taskId,
+                            mode: latestSession.mode,
+                            state: latestSession.state,
+                            actor: latestSession.activeActor,
+                            lastEventType: latestSession.lastEventType,
+                        } : undefined,
+                    },
                 } : undefined,
             },
         });
@@ -217,9 +256,47 @@ export class HeartbeatManager {
         if (!task) return;
 
         this._workerProcessing = true;
+        const sessionId = `heavy-${task.id}`;
+        engineBus.createSession({
+            sessionId,
+            taskId: task.id,
+            prompt: task.prompt,
+            mode: 'cloud-only',
+            actor: 'cloud',
+        });
+        engineBus.emitOrchestrationEvent({
+            type: 'task_created',
+            sessionId,
+            taskId: task.id,
+            mode: 'cloud-only',
+            actor: 'system',
+            prompt: task.prompt.slice(0, 200),
+            timestamp: Date.now(),
+        });
+        engineBus.emitOrchestrationEvent({
+            type: 'delegated',
+            sessionId,
+            taskId: task.id,
+            mode: 'cloud-only',
+            actor: 'system',
+            from: 'system',
+            to: 'cloud',
+            summary: `Heartbeat dispatched queued worker task ${task.id}.`,
+            timestamp: Date.now(),
+        });
         try {
             const { result } = await askWorkerEngine(task.prompt);
             HeavyTaskQueue.complete(task.id, result);
+            engineBus.emitOrchestrationEvent({
+                type: 'completed',
+                sessionId,
+                taskId: task.id,
+                mode: 'cloud-only',
+                actor: 'cloud',
+                summary: 'Background worker task completed.',
+                totalChars: result.length,
+                timestamp: Date.now(),
+            });
 
             // Broadcast worker completion to connected TUI clients
             this.wsServer.broadcast({
@@ -235,6 +312,15 @@ export class HeartbeatManager {
         } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             HeavyTaskQueue.fail(task.id, msg);
+            engineBus.emitOrchestrationEvent({
+                type: 'failed',
+                sessionId,
+                taskId: task.id,
+                mode: 'cloud-only',
+                actor: 'cloud',
+                error: msg,
+                timestamp: Date.now(),
+            });
 
             this.wsServer.broadcast({
                 type: 'worker_task_failed',
@@ -247,6 +333,7 @@ export class HeartbeatManager {
             });
         } finally {
             this._workerProcessing = false;
+            engineBus.clearTask(task.id);
         }
     }
 }

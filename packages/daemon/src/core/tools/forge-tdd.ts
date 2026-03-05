@@ -17,9 +17,10 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { existsSync, mkdirSync, writeFileSync, unlinkSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { Vault } from '@redbusagent/shared';
+import { Forge, buildForgeCritiqueSignal } from '../forge.js';
 import { ToolRegistry } from '../tool-registry.js';
 
 // ─── Types ────────────────────────────────────────────────────────
@@ -259,6 +260,13 @@ You MUST output a <thinking> block before calling this tool.`,
                 stackTrace: sandboxResult.stackTrace || '',
                 durationMs: sandboxResult.durationMs,
                 instruction: 'Fix the code and call forge_and_test_skill again. DO NOT attempt to save broken code manually.',
+                critique: buildForgeCritiqueSignal({
+                    phase: 'sandbox_test',
+                    filename: skill_name,
+                    summary: `Sandbox validation failed for ${skill_name}. Repair the skill and rerun forge_and_test_skill before deployment.`,
+                    instruction: 'Fix the failing skill implementation, ensure the test payload passes in sandbox, and retry forge_and_test_skill.',
+                    evidence: [sandboxResult.error, sandboxResult.stackTrace].filter(Boolean).join('\n\n'),
+                }),
             };
         }
 
@@ -266,47 +274,36 @@ You MUST output a <thinking> block before calling this tool.`,
 
         // ── Phase 2: Deploy to Skills Directory ───────────────
         try {
-            ensureDir(SKILLS_DIR);
+            const toolName = skill_name.replace(/[^a-zA-Z0-9]/g, '_');
+            const createdAt = new Date().toISOString();
+            const persisted = Forge.persistSkillPackage({
+                skillName: skill_name,
+                toolName,
+                description,
+                code,
+                language,
+                source: 'forge-tdd',
+                createdAt,
+                sandboxDurationMs: sandboxResult.durationMs,
+                testPayload: test_payload,
+                studentInstructions: {
+                    tool_name: toolName,
+                    summary: description,
+                    usage_examples,
+                },
+            });
 
-            const ext = language === 'typescript' ? '.ts' : '.js';
-            const filename = `${skill_name}${ext}`;
-            const skillPath = join(SKILLS_DIR, filename);
-
-            // Add metadata header + usage examples to the skill file
-            const examplesBlock = usage_examples.map((ex, i) =>
-                ` * Example ${i + 1}:\n` +
-                ` *   User: "${ex.user_input}"\n` +
-                ` *   Call: ${JSON.stringify(ex.expected_tool_call)}`,
-            ).join('\n');
-
-            const deployedCode = `/**
- * @redbusagent/skill — ${skill_name}
- * ${description}
- *
- * Auto-forged by the TDD Forge on ${new Date().toISOString()}
- * Sandbox test: PASSED (${sandboxResult.durationMs}ms)
- * Test payload: ${JSON.stringify(Object.keys(test_payload))}
- *
- * Few-Shot Usage Examples (for Gemma 3 alignment):
-${examplesBlock}
- */
-
-// @usage_examples ${JSON.stringify(usage_examples)}
-
-${code}
-`;
-
-            writeFileSync(skillPath, deployedCode, { encoding: 'utf-8', mode: 0o644 });
-            console.log(`  💾 [tdd-forge] Skill saved to: ${skillPath}`);
+            console.log(`  💾 [tdd-forge] Skill package saved to: ${persisted.packagePath}`);
 
             // ── Phase 3: Register in ToolRegistry ─────────────
-            const toolName = skill_name.replace(/[^a-zA-Z0-9]/g, '_');
             ToolRegistry.register({
                 name: toolName,
                 description: `[TDD-Forged] ${description}`,
-                filename,
-                createdAt: new Date().toISOString(),
+                filename: persisted.skillPackage.manifest.entrypoint,
+                createdAt,
                 usage_examples,
+                student_instructions: persisted.skillPackage.student_instructions,
+                skillPackagePath: persisted.packagePath,
             });
 
             console.log(`  🔧 [tdd-forge] Skill "${skill_name}" registered as tool "${toolName}"`);
@@ -316,7 +313,8 @@ ${code}
                 success: true,
                 output: sandboxResult.output,
                 durationMs: Date.now() - startTime,
-                skillPath,
+                skillPath: persisted.entrypointPath,
+                skillPackagePath: persisted.packagePath,
                 registeredAs: toolName,
                 message: `[Success: Skill "${skill_name}" deployed and loaded into memory]`,
             };
@@ -329,6 +327,13 @@ ${code}
                 success: false,
                 error: `Sandbox test passed but deployment failed: ${error.message}`,
                 durationMs: Date.now() - startTime,
+                critique: buildForgeCritiqueSignal({
+                    phase: 'deployment',
+                    filename: skill_name,
+                    summary: `Deployment failed for ${skill_name} after sandbox success. Repair the persistence or registration issue before retrying.`,
+                    instruction: 'Fix the deployment failure and call forge_and_test_skill again so the validated skill can be persisted and registered.',
+                    evidence: error.message,
+                }),
             };
         }
     },
@@ -363,7 +368,8 @@ export const listForgedSkillsTool = tool({
             created: e.createdAt,
             lastUsed: e.lastUsedAt,
             executions: e.executionCount,
-            path: join(SKILLS_DIR, e.filename),
+            path: e.skillPackagePath ? join(dirname(e.skillPackagePath), e.filename) : join(SKILLS_DIR, e.filename),
+            skillPackagePath: e.skillPackagePath,
         }));
 
         return {

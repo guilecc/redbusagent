@@ -1,0 +1,14 @@
+appId: dev.redbusagent.studio
+productName: Redbus Studio
+directories:
+  output: dist
+files:
+  - out/**
+  - package.json
+mac:
+  target:
+    - dmg
+    - zip
+win:
+  target:
+    - nsis

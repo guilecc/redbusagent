@@ -12,14 +12,16 @@
     "packages/daemon",
     "packages/tui",
     "packages/cli",
+    "apps/studio",
     "frontend"
   ],
   "scripts": {
     "start": "bin/redbus",
     "dev:daemon": "npm run dev --workspace=packages/daemon",
     "dev:tui": "npm run dev --workspace=packages/tui",
-    "build": "npm run build --workspace=@redbusagent/shared && npm run build --workspace=@redbusagent/daemon && npm run build --workspace=@redbusagent/tui && npm run build --workspace=@redbusagent/cli && npm run build --workspace=redbus-frontend",
-    "clean": "rm -rf packages/*/dist packages/*/*.tsbuildinfo packages/*/node_modules node_modules"
+    "dev:studio": "npm run dev --workspace=@redbusagent/studio",
+    "build": "npm run build --workspace=@redbusagent/shared && npm run build --workspace=@redbusagent/daemon && npm run build --workspace=@redbusagent/tui && npm run build --workspace=@redbusagent/cli && npm run build --workspace=@redbusagent/studio && npm run build --workspace=redbus-frontend",
+    "clean": "rm -rf packages/*/dist packages/*/*.tsbuildinfo packages/*/node_modules apps/*/dist apps/*/out apps/*/*.tsbuildinfo apps/*/node_modules node_modules"
   },
   "engines": {
     "node": ">= 18.0.0"

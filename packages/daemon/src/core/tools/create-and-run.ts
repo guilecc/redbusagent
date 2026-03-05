@@ -7,7 +7,7 @@
 
 import { tool } from 'ai';
 import { z } from 'zod';
-import { Forge, formatForgeFailureDetails } from '../forge.js';
+import { Forge, buildForgeCritiqueSignal, formatForgeFailureDetails } from '../forge.js';
 import { ToolRegistry } from '../tool-registry.js';
 
 export interface CreateAndRunParams {
@@ -64,6 +64,13 @@ export async function executeCreateAndRun(params: CreateAndRunParams) {
             stderr: result.stderr,
             error: diagnostics,
             diagnostics,
+            critique: buildForgeCritiqueSignal({
+                phase: 'execution',
+                filename,
+                summary: `Execution failed for ${filename}. Review the diagnostics, repair the script, and retry create_and_run_tool.`,
+                instruction: 'Fix the runtime or dependency issue in the generated script and call create_and_run_tool again with the corrected code.',
+                evidence: diagnostics,
+            }),
             durationMs: result.durationMs,
             errorMessage: result.errorMessage,
             errorCode: result.errorCode,

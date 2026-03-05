@@ -42,7 +42,8 @@ import { repairToolUseResultPairing } from './transcript-repair.js';
 import { compactHistory } from './compaction.js';
 import { applyToolPolicy, type SenderRole } from './tool-policy.js';
 import { getRelevantSkillPrompt } from './skills.js';
-import { engineBus } from './engine-message-bus.js';
+import { calculateComplexityScore, classifyTaskIntent } from './heuristic-router.js';
+import { engineBus, type OrchestrationExecutionMode } from './engine-message-bus.js';
 
 // ─── Constants ────────────────────────────────────────────────────
 
@@ -298,6 +299,63 @@ export interface CognitiveRouterResult {
     model: string;
 }
 
+export type RouterExecutionMode = OrchestrationExecutionMode;
+
+interface ExecutionModeSelectionOptions {
+    forceLocal?: boolean;
+    forceCloud?: boolean;
+    preferCollaborative?: boolean;
+    workerEnabled?: boolean;
+    recentHistory?: any[];
+}
+
+export function selectExecutionMode(
+    prompt: string,
+    options: ExecutionModeSelectionOptions = {},
+): RouterExecutionMode {
+    const workerEnabled = options.workerEnabled ?? getWorkerEngineConfig().enabled;
+    if (options.forceLocal || !workerEnabled) return 'local-only';
+    if (options.forceCloud) return 'cloud-only';
+    if (options.preferCollaborative) return 'collaborative';
+
+    const intent = classifyTaskIntent(prompt);
+    if (intent === 'INTENT_FORGE') return 'collaborative';
+
+    const complexity = calculateComplexityScore(prompt, options.recentHistory ?? []);
+    return complexity >= 70 ? 'cloud-only' : 'local-only';
+}
+
+export interface LiveExecutionPlan {
+    mode: RouterExecutionMode;
+    routeTier: 'live' | 'cloud';
+    enableDelegation: boolean;
+}
+
+export interface AskLiveOptions {
+    disableTools?: boolean;
+    forceExecutionMode?: RouterExecutionMode;
+}
+
+export function resolveLiveExecutionPlan(
+    prompt: string,
+    options: ExecutionModeSelectionOptions & { forceExecutionMode?: RouterExecutionMode } = {},
+): LiveExecutionPlan {
+    const workerEnabled = options.workerEnabled ?? getWorkerEngineConfig().enabled;
+    const mode = options.forceExecutionMode ?? selectExecutionMode(prompt, {
+        forceLocal: options.forceLocal,
+        forceCloud: options.forceCloud,
+        preferCollaborative: options.preferCollaborative,
+        workerEnabled,
+        recentHistory: options.recentHistory,
+    });
+
+    return {
+        mode,
+        routeTier: mode === 'cloud-only' ? 'cloud' : 'live',
+        enableDelegation: mode === 'collaborative' && workerEnabled,
+    };
+}
+
 interface DelegatedWorkerOutcomeInput {
     durationSec: number;
     workerToolCalls: number;
@@ -305,7 +363,14 @@ interface DelegatedWorkerOutcomeInput {
     workerErrorMessage?: string | null;
     failedToolName?: string | null;
     failedToolResult?: string | null;
-    workerProducedTextAfterFailure?: boolean;
+    workerFinalText?: string | null;
+    unresolvedCritiqueVerdict?: 'approved' | 'revise' | 'blocked' | null;
+    repairAttempts?: number;
+}
+
+interface DelegatedToolFailureSignal {
+    verdict: 'revise' | 'blocked';
+    feedback: string;
 }
 
 function summarizeDelegatedWorkerFailureDetail(detail?: string | null): string {
@@ -314,31 +379,89 @@ function summarizeDelegatedWorkerFailureDetail(detail?: string | null): string {
     return trimmed.length <= 500 ? trimmed : `${trimmed.slice(0, 500)}…`;
 }
 
-export function buildDelegatedWorkerOutcome(input: DelegatedWorkerOutcomeInput): { status: 'success' | 'failure' | 'caution'; message: string } {
+function summarizeDelegatedWorkerFinalText(text?: string | null): string {
+    const trimmed = text?.trim();
+    if (!trimmed) return 'No final worker result was captured.';
+    return trimmed.length <= 1_200 ? trimmed : `${trimmed.slice(0, 1_200)}…`;
+}
+
+function parseDelegatedToolResult(result?: string | null): Record<string, unknown> | null {
+    if (!result) return null;
+    try {
+        const parsed = JSON.parse(result);
+        return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : null;
+    } catch {
+        return null;
+    }
+}
+
+function readStringField(record: Record<string, unknown> | null, field: string): string | null {
+    const value = record?.[field];
+    return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
+}
+
+function deriveDelegatedToolFailureSignal(toolName: string, result?: string | null): DelegatedToolFailureSignal {
+    const parsed = parseDelegatedToolResult(result);
+    const critique = parsed?.['critique'];
+
+    if (critique && typeof critique === 'object') {
+        const critiqueRecord = critique as Record<string, unknown>;
+        const verdict = critiqueRecord['verdict'] === 'blocked' ? 'blocked' : 'revise';
+        const feedback = [
+            readStringField(critiqueRecord, 'summary'),
+            readStringField(critiqueRecord, 'instruction'),
+            readStringField(critiqueRecord, 'evidence'),
+        ].filter(Boolean).join(' ');
+
+        if (feedback) {
+            return { verdict, feedback };
+        }
+    }
+
+    const parsedError = readStringField(parsed, 'error');
+    const parsedInstruction = readStringField(parsed, 'instruction');
+    const fallback = parsedError
+        ? `Tool ${toolName} failed: ${parsedError}`
+        : `Tool ${toolName} failed: ${summarizeDelegatedWorkerFailureDetail(result)}`;
+    const blocked = toolName === 'ask_user_for_input'
+        || /did not respond within|approval denied|user denied|denied permission|expired without a user decision/i.test(`${fallback} ${result ?? ''}`);
+
+    return {
+        verdict: blocked ? 'blocked' : 'revise',
+        feedback: [fallback, parsedInstruction].filter(Boolean).join(' '),
+    };
+}
+
+export function buildDelegatedWorkerOutcome(input: DelegatedWorkerOutcomeInput): { status: 'success' | 'blocked' | 'bounded_failure'; message: string } {
+    const repairSummary = input.repairAttempts && input.repairAttempts > 0
+        ? ` after ${input.repairAttempts} repair attempt${input.repairAttempts === 1 ? '' : 's'}`
+        : '';
+    const workerResult = summarizeDelegatedWorkerFinalText(input.workerFinalText);
+
     if (input.workerErrorMessage) {
         return {
-            status: 'failure',
-            message: `The Worker Engine FAILED with error: "${input.workerErrorMessage}". Do NOT say the task was successful. Inform the user about the failure clearly and suggest a retry or next step.`,
+            status: 'blocked',
+            message: `The Worker Engine is BLOCKED${repairSummary} by an execution error: "${input.workerErrorMessage}". The user has not seen a final answer yet. Inform the user about the blocker, ask for any missing approval/input if needed, and do not claim success.`,
         };
     }
 
-    if (input.failedToolName && !input.workerProducedTextAfterFailure) {
+    if (input.unresolvedCritiqueVerdict === 'blocked') {
         return {
-            status: 'failure',
-            message: `The Worker Engine FAILED while running tool "${input.failedToolName}". Latest failure detail: ${summarizeDelegatedWorkerFailureDetail(input.failedToolResult)}. Do NOT say the task was successful. Explain the failure clearly to the user and offer next steps or a retry.`,
+            status: 'blocked',
+            message: `The Worker Engine is BLOCKED${repairSummary}. The user has not seen a final answer yet. Latest blocker: ${summarizeDelegatedWorkerFailureDetail(input.failedToolResult)}. Latest worker context (not yet shown to the user): ${workerResult}`,
         };
     }
 
     if (input.failedToolName) {
         return {
-            status: 'caution',
-            message: `The Worker Engine encountered a tool failure in "${input.failedToolName}" and already streamed follow-up output to the user. Do NOT blindly confirm success. Base your reply on the worker output already shown to the user; if the task is incomplete, acknowledge the issue and offer next steps. Latest failure detail: ${summarizeDelegatedWorkerFailureDetail(input.failedToolResult)}`,
+            status: 'bounded_failure',
+            message: `The Worker Engine reached a BOUNDED FAILURE${repairSummary} while running tool "${input.failedToolName}". The user has not seen a final answer yet. Latest failure detail: ${summarizeDelegatedWorkerFailureDetail(input.failedToolResult)}. Latest worker context (not yet shown to the user): ${workerResult}. Explain the failure clearly, do not claim success, and offer a retry or next step.`,
         };
     }
 
     return {
         status: 'success',
-        message: `The Worker Engine executed the task successfully in ${input.durationSec}s using ${input.workerToolCalls} tool calls. The result was already communicated to the user. Just confirm the task is complete.`,
+        message: `The Worker Engine completed successfully${repairSummary} in ${input.durationSec}s using ${input.workerToolCalls} tool calls. The user has not seen the worker's final answer yet. Use this final worker result to answer naturally: ${workerResult}`,
     };
 }
 
@@ -349,8 +472,27 @@ export async function askLive(
     callbacks: StreamCallbacks,
     messagesFromClient?: any[],
     senderRole: SenderRole = 'owner',
-    options?: { disableTools?: boolean }
+    options?: AskLiveOptions,
 ): Promise<CognitiveRouterResult> {
+    const workerConfig = getWorkerEngineConfig();
+    const executionPlan = resolveLiveExecutionPlan(prompt, {
+        forceExecutionMode: options?.forceExecutionMode,
+        workerEnabled: workerConfig.enabled && !!workerConfig.model,
+        recentHistory: messagesFromClient,
+    });
+
+    if (executionPlan.routeTier === 'cloud') {
+        console.log('  🧠 [Router]: Execution mode selected → cloud-only');
+        return askTier2(
+            prompt,
+            callbacks,
+            'Execution mode: cloud-only. Handle this request entirely in the cloud lane without delegating it back to the live lane.',
+            messagesFromClient,
+            senderRole,
+            options ? { disableTools: options.disableTools } : undefined,
+        );
+    }
+
     const liveEngineConf = getLiveEngineConfig();
     const modelName = liveEngineConf.model;
     const model = createLiveModel();
@@ -367,10 +509,9 @@ export async function askLive(
 
     // ─── Dynamic Handoff Tool Injection ───
     const runtimeTools: Record<string, any> = { ...filteredTools };
-    const workerConfig = getWorkerEngineConfig();
 
     // Only inject if Worker Engine is explicitly enabled and properly configured
-    if (workerConfig.enabled && workerConfig.model) {
+    if (executionPlan.enableDelegation && workerConfig.enabled && workerConfig.model) {
         runtimeTools['delegate_to_worker_engine'] = {
             description: 'Delegate complex engineering, coding, forging, automation scripts, or deep analysis tasks to the powerful Worker Engine. Use this whenever the user asks to build a script, create a routine, automate a workflow, or do something you cannot do natively. The Worker Engine is an advanced agent with full access to Node.js/Python sandbox, Playwright for web automation/scraping, full terminal shell, and a secure Vault for managing credentials or passwords. It can read emails, interact with internal systems, and do advanced ops.',
             parameters: z.object({
@@ -379,51 +520,80 @@ export async function askLive(
             execute: async (params: { task_prompt: string }) => {
                 const taskId = `worker-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
                 const startTime = Date.now();
+                const mode = selectExecutionMode(params.task_prompt, {
+                    preferCollaborative: true,
+                    workerEnabled: workerConfig.enabled,
+                });
 
                 // ─── Immediate Acknowledgment ─────────────────────────
                 callbacks.onChunk('\n\n🛠️  [Live Engine] Delegating complex task to the Engineering Worker Engine...\n\n');
                 console.log(`  🧠 [Router]: Intent FORGE/DELEGATE → Routing to Worker Engine via tool call (task: ${taskId})`);
 
                 // ─── Emit bus start event ─────────────────────────────
-                engineBus.startTask(taskId, params.task_prompt);
+                engineBus.startTask(taskId, params.task_prompt, mode);
+                engineBus.emitOrchestrationEvent({
+                    type: 'delegated',
+                    sessionId: taskId,
+                    taskId,
+                    mode,
+                    actor: 'live',
+                    from: 'live',
+                    to: 'worker',
+                    summary: 'Live Engine delegated a complex task to the Worker Engine.',
+                    timestamp: Date.now(),
+                });
 
                 // ─── Track Worker activity for status updates ─────────
                 let workerToolCalls = 0;
                 let workerCharsGenerated = 0;
                 let lastToolName = '';
-                let lastStatusTime = Date.now();
+                let lastVisibleStatusTime = Date.now();
                 let workerErrorMessage: string | null = null;
                 let lastFailedToolName: string | null = null;
                 let lastFailedToolResult: string | null = null;
-                let workerProducedTextAfterFailure = false;
+                let workerFinalText: string | null = null;
+                let unresolvedCritique: DelegatedToolFailureSignal | null = null;
+                let repairRequestOpen = false;
+                let repairAttempts = 0;
 
                 // ─── Wrap callbacks to emit bus events ────────────────
                 const workerCallbacks: StreamCallbacks = {
                     onChunk: (delta: string) => {
                         workerCharsGenerated += delta.length;
-                        if (lastFailedToolName && delta.trim()) {
-                            workerProducedTextAfterFailure = true;
-                        }
-                        lastStatusTime = Date.now();
-                        callbacks.onChunk(delta);
+                        workerFinalText = `${workerFinalText ?? ''}${delta}`;
                     },
                     onDone: (fullText: string) => {
-                        callbacks.onDone(fullText);
+                        workerFinalText = fullText;
                     },
                     onError: (error: Error) => {
                         workerErrorMessage = error.message;
-                        engineBus.emitEvent('worker:error', {
-                            taskId,
-                            error: error.message,
-                            timestamp: Date.now(),
-                        });
-                        callbacks.onError(error);
                     },
                     onToolCall: (toolName: string, args: Record<string, unknown>) => {
                         workerToolCalls++;
                         lastToolName = toolName;
-                        engineBus.emitEvent('worker:tool_call', {
+                        if (unresolvedCritique && !repairRequestOpen && unresolvedCritique.verdict === 'revise') {
+                            repairAttempts += 1;
+                            repairRequestOpen = true;
+                            engineBus.emitOrchestrationEvent({
+                                type: 'repair_requested',
+                                sessionId: taskId,
+                                taskId,
+                                mode,
+                                actor: 'cloud',
+                                critic: 'cloud',
+                                target: 'worker',
+                                attempt: repairAttempts,
+                                reason: unresolvedCritique.feedback,
+                                toolName,
+                                timestamp: Date.now(),
+                            });
+                        }
+                        engineBus.emitOrchestrationEvent({
+                            type: 'tool_called',
+                            sessionId: taskId,
                             taskId,
+                            mode,
+                            actor: 'worker',
                             toolName,
                             args,
                             timestamp: Date.now(),
@@ -434,13 +604,48 @@ export async function askLive(
                         if (!success) {
                             lastFailedToolName = toolName;
                             lastFailedToolResult = result;
-                            workerProducedTextAfterFailure = false;
+                            unresolvedCritique = deriveDelegatedToolFailureSignal(toolName, result);
+                            repairRequestOpen = false;
+                            engineBus.emitOrchestrationEvent({
+                                type: 'critic_feedback',
+                                sessionId: taskId,
+                                taskId,
+                                mode,
+                                actor: 'cloud',
+                                critic: 'cloud',
+                                target: 'worker',
+                                verdict: unresolvedCritique.verdict,
+                                feedback: unresolvedCritique.feedback,
+                                timestamp: Date.now(),
+                            });
+                        } else if (unresolvedCritique) {
+                            engineBus.emitOrchestrationEvent({
+                                type: 'critic_feedback',
+                                sessionId: taskId,
+                                taskId,
+                                mode,
+                                actor: 'cloud',
+                                critic: 'cloud',
+                                target: 'worker',
+                                verdict: 'approved',
+                                feedback: `Repair validated after tool "${toolName}" completed successfully.`,
+                                timestamp: Date.now(),
+                            });
+                            unresolvedCritique = null;
+                            repairRequestOpen = false;
+                            lastFailedToolName = null;
+                            lastFailedToolResult = null;
                         }
-                        engineBus.emitEvent('worker:tool_result', {
+                        engineBus.emitOrchestrationEvent({
+                            type: 'tool_result',
+                            sessionId: taskId,
                             taskId,
+                            mode,
+                            actor: 'worker',
                             toolName,
                             success,
                             durationMs: 0,
+                            resultPreview: success ? undefined : summarizeDelegatedWorkerFailureDetail(result),
                             timestamp: Date.now(),
                         });
                         callbacks.onToolResult?.(toolName, success, result);
@@ -461,18 +666,22 @@ export async function askLive(
                         statusMsg = `⏳ [Live Observer] Worker is initializing (${elapsed}s)...`;
                     }
 
-                    engineBus.emitEvent('worker:progress', {
+                    engineBus.emitOrchestrationEvent({
+                        type: 'progress_updated',
+                        sessionId: taskId,
                         taskId,
+                        mode,
+                        actor: 'worker',
                         charsGenerated: workerCharsGenerated,
                         toolCallCount: workerToolCalls,
                         elapsed,
+                        detail: lastToolName || undefined,
                         timestamp: Date.now(),
                     });
 
-                    // Only emit status if we haven't recently sent text
-                    if (Date.now() - lastStatusTime >= STATUS_INTERVAL_MS - 1000) {
+                    if (Date.now() - lastVisibleStatusTime >= STATUS_INTERVAL_MS - 1000) {
                         callbacks.onChunk(`\n${statusMsg}\n`);
-                        lastStatusTime = Date.now();
+                        lastVisibleStatusTime = Date.now();
                     }
                 }, STATUS_INTERVAL_MS);
 
@@ -481,6 +690,7 @@ export async function askLive(
 
                     const totalDuration = Date.now() - startTime;
                     const durationSec = Math.round(totalDuration / 1000);
+                    const unresolvedCritiqueVerdict = (unresolvedCritique as DelegatedToolFailureSignal | null)?.verdict ?? null;
                     const outcome = buildDelegatedWorkerOutcome({
                         durationSec,
                         workerToolCalls,
@@ -488,18 +698,39 @@ export async function askLive(
                         workerErrorMessage,
                         failedToolName: lastFailedToolName,
                         failedToolResult: lastFailedToolResult,
-                        workerProducedTextAfterFailure,
+                        workerFinalText,
+                        unresolvedCritiqueVerdict,
+                        repairAttempts,
                     });
 
                     // ─── Check if onError was called during execution ──
-                    if (outcome.status === 'failure') {
+                    if (outcome.status !== 'success') {
                         const failureMessage = workerErrorMessage
                             || (lastFailedToolName
                                 ? `${lastFailedToolName} failed. Latest failure detail: ${summarizeDelegatedWorkerFailureDetail(lastFailedToolResult)}`
                                 : 'Worker tool failed.');
-                        engineBus.emitEvent('worker:error', {
+                        if (workerErrorMessage) {
+                            engineBus.emitOrchestrationEvent({
+                                type: 'critic_feedback',
+                                sessionId: taskId,
+                                taskId,
+                                mode,
+                                actor: 'cloud',
+                                critic: 'cloud',
+                                target: 'worker',
+                                verdict: 'blocked',
+                                feedback: workerErrorMessage,
+                                timestamp: Date.now(),
+                            });
+                        }
+                        engineBus.emitOrchestrationEvent({
+                            type: 'failed',
+                            sessionId: taskId,
                             taskId,
+                            mode,
+                            actor: 'worker',
                             error: failureMessage,
+                            failureKind: outcome.status,
                             timestamp: Date.now(),
                         });
                         console.log(`  ❌ [Router]: Worker task ${taskId} FAILED in ${durationSec}s — ${failureMessage}`);
@@ -507,33 +738,51 @@ export async function askLive(
                         return outcome.message;
                     }
 
-                    engineBus.emitEvent('worker:done', {
+                    engineBus.emitOrchestrationEvent({
+                        type: 'completed',
+                        sessionId: taskId,
                         taskId,
+                        mode,
+                        actor: 'worker',
+                        summary: `Worker execution completed successfully${repairAttempts > 0 ? ` after ${repairAttempts} repair attempt${repairAttempts === 1 ? '' : 's'}` : ''}.`,
                         totalChars: workerCharsGenerated,
                         totalToolCalls: workerToolCalls,
                         totalDurationMs: totalDuration,
                         timestamp: Date.now(),
                     });
 
-                    if (outcome.status === 'caution') {
-                        console.log(`  ⚠️ [Router]: Worker task ${taskId} completed with tool failure context in ${durationSec}s (${workerToolCalls} tools, ${workerCharsGenerated} chars)`);
-                    } else {
-                        console.log(`  ✅ [Router]: Worker task ${taskId} completed in ${durationSec}s (${workerToolCalls} tools, ${workerCharsGenerated} chars)`);
-                    }
+                    console.log(`  ✅ [Router]: Worker task ${taskId} completed in ${durationSec}s (${workerToolCalls} tools, ${workerCharsGenerated} chars)`);
 
                     return outcome.message;
                 } catch (err) {
                     const error = err instanceof Error ? err : new Error(String(err));
-                    engineBus.emitEvent('worker:error', {
+                    engineBus.emitOrchestrationEvent({
+                        type: 'critic_feedback',
+                        sessionId: taskId,
                         taskId,
+                        mode,
+                        actor: 'cloud',
+                        critic: 'cloud',
+                        target: 'worker',
+                        verdict: 'blocked',
+                        feedback: error.message,
+                        timestamp: Date.now(),
+                    });
+                    engineBus.emitOrchestrationEvent({
+                        type: 'failed',
+                        sessionId: taskId,
+                        taskId,
+                        mode,
+                        actor: 'worker',
                         error: error.message,
+                        failureKind: 'blocked',
                         timestamp: Date.now(),
                     });
                     callbacks.onChunk(`\n❌ [Live Observer] Worker Engine encountered an error: ${error.message}\n`);
-                    return `The Worker Engine failed with error: ${error.message}. Inform the user and ask if they want to retry.`;
+                    return `The Worker Engine is blocked by error: ${error.message}. The user has not seen a final answer yet. Inform the user about the blocker and ask whether they want to retry.`;
                 } finally {
                     clearInterval(statusInterval);
-                    engineBus.clearTask();
+                    engineBus.clearTask(taskId);
                 }
             }
         };

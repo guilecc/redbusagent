@@ -11,6 +11,11 @@
             "types": "./dist/index.d.ts",
             "import": "./dist/index.js",
             "default": "./dist/index.js"
+        },
+        "./studio": {
+            "types": "./dist/types/studio.d.ts",
+            "import": "./dist/types/studio.js",
+            "default": "./dist/types/studio.js"
         }
     },
     "scripts": {

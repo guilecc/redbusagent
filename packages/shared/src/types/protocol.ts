@@ -18,6 +18,23 @@ export interface BaseMessage {
 /** Global daemon state machine states */
 export type DaemonState = 'IDLE' | 'THINKING' | 'EXECUTING_TOOL' | 'BLOCKED_WAITING_USER';
 
+export interface WorkerOrchestrationSessionRef {
+    readonly sessionId: string;
+    readonly taskId: string;
+    readonly mode: 'local-only' | 'cloud-only' | 'collaborative';
+    readonly state: 'running' | 'paused' | 'completed' | 'failed';
+    readonly actor: 'system' | 'live' | 'cloud' | 'worker' | 'user';
+    readonly lastEventType?: string;
+}
+
+export interface WorkerOrchestrationStatus {
+    readonly running: number;
+    readonly paused: number;
+    readonly completed: number;
+    readonly failed: number;
+    readonly activeSession?: WorkerOrchestrationSessionRef;
+}
+
 /** Worker Engine queue status (Dual-Local Architecture) */
 export interface WorkerQueueStatus {
     /** Whether the Worker Engine is configured and enabled */
@@ -32,6 +49,8 @@ export interface WorkerQueueStatus {
     readonly completed: number;
     /** Number of tasks that failed since daemon start */
     readonly failed: number;
+    /** MAS orchestration/session visibility layered on top of the queue */
+    readonly orchestration?: WorkerOrchestrationStatus;
 }
 
 export interface HeartbeatMessage extends BaseMessage {

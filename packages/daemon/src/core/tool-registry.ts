@@ -10,11 +10,11 @@
  */
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { tool } from 'ai';
 import { z } from 'zod';
 import { Vault } from '@redbusagent/shared';
-import { Forge } from './forge.js';
+import { Forge, type SkillStudentInstructions } from './forge.js';
 
 // ─── Types ────────────────────────────────────────────────────────
 
@@ -35,6 +35,10 @@ export interface ToolRegistryEntry {
     executionCount: number;
     /** Few-shot usage examples for Gemma 3 alignment */
     usage_examples?: ToolUsageExample[];
+    /** Teacher-generated student instructions persisted with skill packages */
+    student_instructions?: SkillStudentInstructions;
+    /** Optional package manifest path for package-backed skills */
+    skillPackagePath?: string;
 }
 
 interface RegistryFile {
@@ -118,16 +122,21 @@ export class ToolRegistry {
         for (const entry of entries) {
             const entryName = entry.name;
             const entryFilename = entry.filename;
+            const executionTarget = entry.skillPackagePath
+                ? join(dirname(entry.skillPackagePath), entryFilename)
+                : entryFilename;
 
             tools[entryName] = tool({
                 description: `[Forged] ${entry.description}`,
                 inputSchema: z.object({
                     input: z.string().optional().describe('Optional input to pass to the tool'),
-                }),
-                execute: async (params: { input?: string }) => {
-                    console.log(`  🔧 Forge: Re-executing "${entryName}" (${entryFilename})`);
+                }).catchall(z.unknown()),
+                execute: async (params: Record<string, unknown>) => {
+                    console.log(`  🔧 Forge: Re-executing "${entryName}" (${executionTarget})`);
                     ToolRegistry.recordExecution(entryName);
-                    const result = await Forge.executeScript(entryFilename, params.input);
+                    const result = entry.skillPackagePath
+                        ? await Forge.executeScriptAtPath(executionTarget, JSON.stringify(params))
+                        : await Forge.executeScript(entryFilename, typeof params['input'] === 'string' ? params['input'] : undefined);
                     if (result.success) {
                         return { success: true, output: result.stdout, durationMs: result.durationMs };
                     } else {
@@ -156,15 +165,27 @@ export class ToolRegistry {
      * (Gemma 3) system prompt. Extracts usage_examples from every registered
      * tool and formats them so the small model can reliably produce tool calls.
      */
-    static getFewShotExamplesBlock(): string {
+    static getStudentInstructionsBlock(): string {
         const entries = this.getAll();
         const lines: string[] = [];
 
         for (const entry of entries) {
-            if (!entry.usage_examples || entry.usage_examples.length === 0) continue;
-            for (const ex of entry.usage_examples) {
+            const studentInstructions = entry.student_instructions;
+            const usageExamples = studentInstructions?.usage_examples ?? entry.usage_examples;
+            if (!usageExamples || usageExamples.length === 0) continue;
+
+            const headerLines = [
+                `Tool: ${entry.name}`,
+                `Student Summary: ${studentInstructions?.summary ?? entry.description}`,
+            ];
+
+            if (studentInstructions?.tool_name) {
+                headerLines.push(`Preferred Tool Name: ${studentInstructions.tool_name}`);
+            }
+
+            for (const ex of usageExamples) {
                 lines.push(
-                    `Tool: ${entry.name}\n` +
+                    `${headerLines.join('\n')}\n` +
                     `Example User: "${ex.user_input}"\n` +
                     `Example Action: <tool_call>${JSON.stringify({ name: ex.expected_tool_call.name, args: ex.expected_tool_call.args })}</tool_call>`,
                 );
@@ -173,6 +194,10 @@ export class ToolRegistry {
 
         if (lines.length === 0) return '';
 
-        return `\n## FEW-SHOT TOOL USAGE EXAMPLES (Follow these patterns EXACTLY)\n\n${lines.join('\n\n')}\n`;
+        return `\n## STUDENT TOOL INSTRUCTIONS (teacher-generated; follow these patterns EXACTLY)\n\n${lines.join('\n\n')}\n`;
+    }
+
+    static getFewShotExamplesBlock(): string {
+        return this.getStudentInstructionsBlock();
     }
 }

@@ -20,16 +20,37 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { EventEmitter } from 'node:events';
+import { engineBus, type OrchestrationActor, type OrchestrationExecutionMode } from '../engine-message-bus.js';
 
 // ─── User Input Manager (Singleton) ────────────────────────────────
 
 const DEFAULT_TIMEOUT_MS = 300_000; // 5 minutes
+
+interface PendingRequestOrchestrationContext {
+    sessionId: string;
+    taskId: string;
+    mode: OrchestrationExecutionMode;
+    actor: OrchestrationActor;
+}
+
+function getPendingRequestContext(): PendingRequestOrchestrationContext | null {
+    const session = engineBus.getLatestActiveSession();
+    if (!session) return null;
+
+    return {
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+        mode: session.mode,
+        actor: session.activeActor,
+    };
+}
 
 class UserInputManager extends EventEmitter {
     private pendingRequests = new Map<string, {
         resolve: (response: string) => void;
         question: string;
         timer: ReturnType<typeof setTimeout>;
+        orchestration: PendingRequestOrchestrationContext | null;
     }>();
 
     /**
@@ -38,12 +59,37 @@ class UserInputManager extends EventEmitter {
      */
     requestInput(id: string, question: string, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<string> {
         return new Promise((resolve, reject) => {
+            const orchestration = getPendingRequestContext();
             const timer = setTimeout(() => {
+                const pending = this.pendingRequests.get(id);
                 this.pendingRequests.delete(id);
+                if (pending?.orchestration) {
+                    engineBus.emitOrchestrationEvent({
+                        type: 'resumed',
+                        sessionId: pending.orchestration.sessionId,
+                        taskId: pending.orchestration.taskId,
+                        mode: pending.orchestration.mode,
+                        actor: pending.orchestration.actor,
+                        reason: 'User input request expired before a reply arrived.',
+                        timestamp: Date.now(),
+                    });
+                }
                 reject(new Error(`User did not respond within ${Math.round(timeoutMs / 1000)}s. The question was: "${question}". Try again later or rephrase the question.`));
             }, timeoutMs);
 
-            this.pendingRequests.set(id, { resolve, question, timer });
+            this.pendingRequests.set(id, { resolve, question, timer, orchestration });
+            if (orchestration) {
+                engineBus.emitOrchestrationEvent({
+                    type: 'yield_requested',
+                    sessionId: orchestration.sessionId,
+                    taskId: orchestration.taskId,
+                    mode: orchestration.mode,
+                    actor: orchestration.actor,
+                    waitFor: 'awaiting_user_reply',
+                    reason: question,
+                    timestamp: Date.now(),
+                });
+            }
             this.emit('question_asked', { id, question });
         });
     }
@@ -58,6 +104,27 @@ class UserInputManager extends EventEmitter {
             clearTimeout(req.timer);
             req.resolve(response);
             this.pendingRequests.delete(id);
+            if (req.orchestration) {
+                const timestamp = Date.now();
+                engineBus.emitOrchestrationEvent({
+                    type: 'user_reply_received',
+                    sessionId: req.orchestration.sessionId,
+                    taskId: req.orchestration.taskId,
+                    mode: req.orchestration.mode,
+                    actor: 'user',
+                    replyPreview: response.slice(0, 200),
+                    timestamp,
+                });
+                engineBus.emitOrchestrationEvent({
+                    type: 'resumed',
+                    sessionId: req.orchestration.sessionId,
+                    taskId: req.orchestration.taskId,
+                    mode: req.orchestration.mode,
+                    actor: req.orchestration.actor,
+                    reason: 'User reply received. Resume the current execution context.',
+                    timestamp: timestamp + 1,
+                });
+            }
             return true;
         }
         return false;

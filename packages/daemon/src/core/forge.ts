@@ -12,7 +12,7 @@
  */
 
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { execFile, type ExecFileException } from 'node:child_process';
 import { Vault } from '@redbusagent/shared';
 
@@ -32,13 +32,87 @@ export interface ForgeExecutionResult {
     combinedOutput?: string;
 }
 
+export interface ForgeCritiqueSignal {
+    verdict: 'revise' | 'blocked';
+    phase: 'sandbox_test' | 'execution' | 'deployment';
+    summary: string;
+    instruction: string;
+    evidence?: string;
+}
+
 export type ForgeLanguage = 'node' | 'python';
+
+export type SkillPackageLanguage = 'javascript' | 'typescript' | 'python';
+
+export interface SkillUsageExample {
+    user_input: string;
+    expected_tool_call: {
+        name: string;
+        args: Record<string, unknown>;
+    };
+}
+
+export interface SkillStudentInstructions {
+    tool_name: string;
+    summary: string;
+    usage_examples: SkillUsageExample[];
+}
+
+export interface SkillPackageArtifact {
+    kind: 'script';
+    filename: string;
+    runtime: ForgeLanguage;
+    language: SkillPackageLanguage;
+    entrypoint: boolean;
+}
+
+export interface SkillPackageManifest {
+    skillName: string;
+    toolName: string;
+    description: string;
+    source: 'forge' | 'forge-tdd';
+    createdAt: string;
+    language: SkillPackageLanguage;
+    entrypoint: string;
+    inputMode: 'json-arguments-object';
+    sandboxDurationMs?: number;
+    testPayloadKeys?: string[];
+}
+
+export interface SkillPackage {
+    schemaVersion: 1;
+    manifest: SkillPackageManifest;
+    artifacts: SkillPackageArtifact[];
+    student_instructions: SkillStudentInstructions;
+}
+
+export interface PersistSkillPackageParams {
+    skillName: string;
+    toolName: string;
+    description: string;
+    code: string;
+    language: SkillPackageLanguage;
+    source: 'forge' | 'forge-tdd';
+    createdAt?: string;
+    sandboxDurationMs?: number;
+    testPayload?: Record<string, unknown>;
+    studentInstructions: SkillStudentInstructions;
+}
+
+export interface PersistedSkillPackage {
+    packageDir: string;
+    packagePath: string;
+    entrypointPath: string;
+    skillPackage: SkillPackage;
+}
 
 // ─── Constants ────────────────────────────────────────────────────
 
 const FORGE_DIR = join(Vault.dir, 'forge');
 const FORGE_PACKAGE_JSON = join(FORGE_DIR, 'package.json');
 const FORGE_VENV_DIR = join(FORGE_DIR, '.venv');
+const SKILLS_DIR = join(Vault.dir, 'skills');
+const SKILL_PACKAGE_FILENAME = 'skill-package.json';
 const EXECUTION_TIMEOUT_MS = 30_000; // 30 seconds max per script
 
 // ─── Helpers ─────────────────────────────────────────────────────
@@ -46,6 +120,30 @@ const EXECUTION_TIMEOUT_MS = 30_000; // 30 seconds max per script
 function detectLanguage(filename: string): ForgeLanguage {
     if (filename.endsWith('.py')) return 'python';
     return 'node';
+}
+
+function ensureDir(dir: string): void {
+    if (!existsSync(dir)) {
+        mkdirSync(dir, { recursive: true, mode: 0o700 });
+    }
+}
+
+function artifactFilenameForLanguage(language: SkillPackageLanguage): string {
+    if (language === 'python') return 'index.py';
+    if (language === 'typescript') return 'index.ts';
+    return 'index.js';
+}
+
+function runtimeForSkillLanguage(language: SkillPackageLanguage): ForgeLanguage {
+    return language === 'python' ? 'python' : 'node';
+}
+
+function buildExecutableArtifact(language: SkillPackageLanguage, code: string): string {
+    if (language === 'python') {
+        return `import asyncio\nimport inspect\nimport json\nimport sys\n\n${code}\n\ndef __redbus_parse_payload():\n    raw = sys.argv[1] if len(sys.argv) > 1 else ''\n    if not raw:\n        return {}\n    try:\n        return json.loads(raw)\n    except Exception:\n        return {\"input\": raw}\n\nasync def __redbus_main():\n    payload = __redbus_parse_payload()\n    execute_fn = globals().get('execute') or globals().get('run')\n    if execute_fn is None:\n        return\n    if inspect.iscoroutinefunction(execute_fn):\n        result = await execute_fn(payload)\n    else:\n        result = execute_fn(payload)\n    if result is None:\n        return\n    if isinstance(result, str):\n        print(result)\n    else:\n        print(json.dumps(result, indent=2))\n\nif __name__ == '__main__':\n    asyncio.run(__redbus_main())\n`;
+    }
+
+    return `function __redbusParsePayload() {\n    const raw = process.argv[2];\n    if (!raw) return {};\n    try {\n        return JSON.parse(raw);\n    } catch {\n        return { input: raw };\n    }\n}\n\n${code}\n\nasync function __redbusMain() {\n    const payload = __redbusParsePayload();\n    let executeFn;\n    if (typeof execute === 'function') {\n        executeFn = execute;\n    } else if (typeof run === 'function') {\n        executeFn = run;\n    } else if (typeof module !== 'undefined' && typeof module.exports === 'function') {\n        executeFn = module.exports;\n    }\n\n    if (!executeFn) return;\n\n    const result = await executeFn(payload);\n    if (typeof result === 'undefined') return;\n    if (typeof result === 'string') {\n        console.log(result);\n        return;\n    }\n\n    console.log(JSON.stringify(result, null, 2));\n}\n\nvoid __redbusMain();\n`;
 }
 
 /** Returns the path to the Python interpreter inside the venv */
@@ -118,6 +216,25 @@ export function formatForgeFailureDetails(filename: string, result: ForgeExecuti
     return lines.join('\n');
 }
 
+export function buildForgeCritiqueSignal(input: {
+    phase: ForgeCritiqueSignal['phase'];
+    filename?: string;
+    verdict?: ForgeCritiqueSignal['verdict'];
+    summary?: string;
+    instruction?: string;
+    evidence?: string;
+}): ForgeCritiqueSignal {
+    const filenamePrefix = input.filename ? `${input.filename}: ` : '';
+
+    return {
+        verdict: input.verdict ?? 'revise',
+        phase: input.phase,
+        summary: input.summary ?? `${filenamePrefix}${input.phase.replace(/_/g, ' ')} failed and needs repair before the workflow can complete.`,
+        instruction: input.instruction ?? 'Revise the implementation, address the reported failure, and retry the same tool call.',
+        ...(input.evidence?.trim() ? { evidence: truncateOutput(input.evidence.trim(), 600) } : {}),
+    };
+}
+
 // ─── Forge Service ────────────────────────────────────────────────
 
 export class Forge {
@@ -131,14 +248,24 @@ export class Forge {
         return FORGE_VENV_DIR;
     }
 
+    static get skillsDir(): string {
+        return SKILLS_DIR;
+    }
+
+    static getSkillPackageDir(skillName: string): string {
+        return join(SKILLS_DIR, skillName);
+    }
+
+    static getSkillPackagePath(skillName: string): string {
+        return join(this.getSkillPackageDir(skillName), SKILL_PACKAGE_FILENAME);
+    }
+
     /**
      * Ensures the forge workspace exists with a valid package.json.
      * Called once at daemon startup.
      */
     static ensureWorkspace(): void {
-        if (!existsSync(FORGE_DIR)) {
-            mkdirSync(FORGE_DIR, { recursive: true, mode: 0o700 });
-        }
+        ensureDir(FORGE_DIR);
 
         if (!existsSync(FORGE_PACKAGE_JSON)) {
             const packageJson = {
@@ -262,6 +389,68 @@ export class Forge {
         return filepath;
     }
 
+    static persistSkillPackage(params: PersistSkillPackageParams): PersistedSkillPackage {
+        const createdAt = params.createdAt ?? new Date().toISOString();
+        const entrypoint = artifactFilenameForLanguage(params.language);
+        const packageDir = this.getSkillPackageDir(params.skillName);
+        const packagePath = this.getSkillPackagePath(params.skillName);
+        const entrypointPath = join(packageDir, entrypoint);
+
+        const skillPackage: SkillPackage = {
+            schemaVersion: 1,
+            manifest: {
+                skillName: params.skillName,
+                toolName: params.toolName,
+                description: params.description,
+                source: params.source,
+                createdAt,
+                language: params.language,
+                entrypoint,
+                inputMode: 'json-arguments-object',
+                ...(params.sandboxDurationMs != null ? { sandboxDurationMs: params.sandboxDurationMs } : {}),
+                ...(params.testPayload ? { testPayloadKeys: Object.keys(params.testPayload) } : {}),
+            },
+            artifacts: [
+                {
+                    kind: 'script',
+                    filename: entrypoint,
+                    runtime: runtimeForSkillLanguage(params.language),
+                    language: params.language,
+                    entrypoint: true,
+                },
+            ],
+            student_instructions: params.studentInstructions,
+        };
+
+        ensureDir(SKILLS_DIR);
+        ensureDir(packageDir);
+
+        writeFileSync(entrypointPath, buildExecutableArtifact(params.language, params.code), {
+            encoding: 'utf-8',
+            mode: 0o644,
+        });
+        writeFileSync(packagePath, JSON.stringify(skillPackage, null, 2), {
+            encoding: 'utf-8',
+            mode: 0o600,
+        });
+
+        return {
+            packageDir,
+            packagePath,
+            entrypointPath,
+            skillPackage,
+        };
+    }
+
+    static readSkillPackage(packagePath: string): SkillPackage | null {
+        try {
+            const raw = readFileSync(packagePath, 'utf-8');
+            return JSON.parse(raw) as SkillPackage;
+        } catch {
+            return null;
+        }
+    }
+
     /**
      * Read a script file from the forge workspace.
      */
@@ -276,9 +465,8 @@ export class Forge {
      * Detects language from file extension (.py → python3, .js → node).
      * Captures stdout, stderr, exit code, and execution duration.
      */
-    static async executeScript(filename: string, input?: string): Promise<ForgeExecutionResult> {
-        const filepath = join(FORGE_DIR, filename);
-        const lang = detectLanguage(filename);
+    static async executeScriptAtPath(filepath: string, input?: string): Promise<ForgeExecutionResult> {
+        const lang = detectLanguage(filepath);
         const startTime = Date.now();
 
         // For Python scripts, ensure venv exists so imports resolve
@@ -311,7 +499,7 @@ export class Forge {
                 interpreter,
                 args,
                 {
-                    cwd: FORGE_DIR,
+                    cwd: dirname(filepath),
                     timeout: EXECUTION_TIMEOUT_MS,
                     maxBuffer: 1024 * 1024, // 1MB output buffer
                     env: envVars,
@@ -336,5 +524,9 @@ export class Forge {
 
             void child; // prevent unused warning
         });
+    }
+
+    static async executeScript(filename: string, input?: string): Promise<ForgeExecutionResult> {
+        return this.executeScriptAtPath(join(FORGE_DIR, filename), input);
     }
 }

@@ -105,6 +105,7 @@ export class ChatHandler {
     ): Promise<void> {
         const { requestId } = message.payload;
         let { content, tier, isOnboarding, messages } = message.payload;
+        let forcedExecutionMode: 'local-only' | undefined;
 
         const vaultConfig = Vault.read();
         let targetTier = this.forceLive ? 'live' : tier;
@@ -223,6 +224,7 @@ Return ONLY the JSON object. Do not explain.`;
         // Trivial escape hatch force-routing to Live Engine (Slash Command menu equivalent)
         if (content.trim().toLowerCase().startsWith('/local')) {
             targetTier = 'live';
+            forcedExecutionMode = 'local-only';
             content = content.replace(/^\/local\s*/i, '');
         }
 
@@ -335,7 +337,13 @@ Return ONLY the JSON object. Do not explain.`;
 
             try {
                 if (targetTier === 'live') {
-                    result = await askLive(content, callbacks, messages, senderRole);
+                    result = await askLive(
+                        content,
+                        callbacks,
+                        messages,
+                        senderRole,
+                        forcedExecutionMode ? { forceExecutionMode: forcedExecutionMode } : undefined,
+                    );
                 } else {
                     result = await askTier2(content, callbacks, undefined, messages, senderRole);
                 }

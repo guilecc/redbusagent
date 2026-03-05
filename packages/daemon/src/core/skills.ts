@@ -9,6 +9,7 @@
 
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { join, basename } from 'node:path';
+import { Forge, type SkillPackage } from './forge.js';
 
 // ─── Types ───────────────────────────────────────────────────────
 
@@ -23,6 +24,12 @@ export interface SkillMeta {
     dirPath: string;
     /** Full path to the SKILL.md file */
     filePath: string;
+    /** Where instructions should be loaded from */
+    instructionSource?: 'markdown' | 'package';
+    /** Optional package path for teacher-student skill packages */
+    packagePath?: string;
+    /** Optional tool name for package-backed skills */
+    toolName?: string;
 }
 
 export interface SkillMatch {
@@ -89,6 +96,38 @@ function extractKeywords(description: string, body: string): string[] {
     return [...new Set(keywords)];
 }
 
+function extractPackageKeywords(skillPackage: SkillPackage): string[] {
+    const keywords: string[] = [];
+    const texts = [
+        skillPackage.manifest.description,
+        skillPackage.student_instructions.summary,
+        skillPackage.manifest.toolName,
+        ...skillPackage.student_instructions.usage_examples.map(ex => ex.user_input),
+    ];
+
+    for (const text of texts) {
+        keywords.push(...text.toLowerCase().split(/[^a-z0-9_-]+/).filter(word => word.length > 3));
+    }
+
+    return [...new Set(keywords)];
+}
+
+function formatSkillPackageInstructions(skillPackage: SkillPackage): string {
+    const exampleLines = skillPackage.student_instructions.usage_examples.map(example => (
+        `Example User: "${example.user_input}"\n` +
+        `Example Action: <tool_call>${JSON.stringify({ name: example.expected_tool_call.name, args: example.expected_tool_call.args })}</tool_call>`
+    ));
+
+    const sections = [
+        `Student Summary: ${skillPackage.student_instructions.summary}`,
+        `Preferred Tool Name: ${skillPackage.student_instructions.tool_name}`,
+        'Invoke the tool with a JSON arguments object that matches these examples exactly:',
+        ...exampleLines,
+    ];
+
+    return sections.join('\n\n');
+}
+
 // ─── Discovery ───────────────────────────────────────────────────
 
 /** Scan a directory for subdirectories containing SKILL.md */
@@ -109,6 +148,26 @@ export async function discoverSkills(skillsDir: string): Promise<SkillMeta[]> {
             const s = await stat(dirPath);
             if (!s.isDirectory()) continue;
 
+            const packagePath = join(dirPath, 'skill-package.json');
+            try {
+                const rawPackage = await readFile(packagePath, 'utf-8');
+                const skillPackage = JSON.parse(rawPackage) as SkillPackage;
+
+                skills.push({
+                    name: skillPackage.manifest.skillName || basename(dirPath),
+                    description: skillPackage.manifest.description || skillPackage.student_instructions.summary,
+                    keywords: extractPackageKeywords(skillPackage),
+                    dirPath,
+                    filePath: packagePath,
+                    instructionSource: 'package',
+                    packagePath,
+                    toolName: skillPackage.manifest.toolName,
+                });
+                continue;
+            } catch {
+                // Not a skill package — fall back to legacy SKILL.md discovery.
+            }
+
             const filePath = join(dirPath, 'SKILL.md');
             const raw = await readFile(filePath, 'utf-8');
             const { frontmatter, body } = parseFrontmatter(raw);
@@ -122,6 +181,7 @@ export async function discoverSkills(skillsDir: string): Promise<SkillMeta[]> {
                 keywords: extractKeywords(description, body),
                 dirPath,
                 filePath,
+                instructionSource: 'markdown',
             });
         } catch {
             // No SKILL.md or unreadable — skip
@@ -167,6 +227,13 @@ export function matchSkills(query: string, skills: SkillMeta[], minScore = 15): 
 
 /** Load the full SKILL.md content for injection into the system prompt */
 export async function loadSkillContent(skill: SkillMeta): Promise<string> {
+    if (skill.instructionSource === 'package' && skill.packagePath) {
+        const skillPackage = Forge.readSkillPackage(skill.packagePath);
+        if (skillPackage) {
+            return formatSkillPackageInstructions(skillPackage);
+        }
+    }
+
     const raw = await readFile(skill.filePath, 'utf-8');
     const { body } = parseFrontmatter(raw);
     return body;

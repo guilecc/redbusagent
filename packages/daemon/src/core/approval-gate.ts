@@ -14,6 +14,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
+import { engineBus, type OrchestrationActor, type OrchestrationExecutionMode } from './engine-message-bus.js';
 
 // ─── Constants ───────────────────────────────────────────────────────
 
@@ -60,6 +61,24 @@ interface PendingEntry {
     reject: (err: Error) => void;
     timer: ReturnType<typeof setTimeout>;
     promise: Promise<ApprovalDecision | null>;
+    orchestration: {
+        sessionId: string;
+        taskId: string;
+        mode: OrchestrationExecutionMode;
+        actor: OrchestrationActor;
+    } | null;
+}
+
+function getPendingApprovalContext() {
+    const session = engineBus.getLatestActiveSession();
+    if (!session) return null;
+
+    return {
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+        mode: session.mode,
+        actor: session.activeActor,
+    };
 }
 
 // ─── Tool Flags Registry ────────────────────────────────────────────
@@ -145,6 +164,7 @@ export class ApprovalGateManager extends EventEmitter {
             reject: rejectPromise,
             timer: null as unknown as ReturnType<typeof setTimeout>,
             promise,
+            orchestration: getPendingApprovalContext(),
         };
         entry.timer = setTimeout(() => this.expire(record.id), timeoutMs);
         this.pending.set(record.id, entry);
@@ -160,6 +180,19 @@ export class ApprovalGateManager extends EventEmitter {
     requestApproval(request: ApprovalRequest): Promise<boolean> {
         const record = this.create(request, DEFAULT_APPROVAL_TIMEOUT_MS, request.id);
         const promise = this.register(record, DEFAULT_APPROVAL_TIMEOUT_MS);
+        const entry = this.pending.get(record.id);
+        if (entry?.orchestration) {
+            engineBus.emitOrchestrationEvent({
+                type: 'yield_requested',
+                sessionId: entry.orchestration.sessionId,
+                taskId: entry.orchestration.taskId,
+                mode: entry.orchestration.mode,
+                actor: entry.orchestration.actor,
+                waitFor: 'awaiting_approval',
+                reason: `${request.toolName}: ${request.description}`,
+                timestamp: Date.now(),
+            });
+        }
         this.emit('approval_requested', request);
         return promise.then((d) => d === 'allow-once' || d === 'allow-always');
     }
@@ -177,6 +210,28 @@ export class ApprovalGateManager extends EventEmitter {
         entry.record.resolvedAtMs = Date.now();
         entry.record.decision = decision;
         entry.record.resolvedBy = resolvedBy ?? null;
+        if (entry.orchestration) {
+            const timestamp = Date.now();
+            const preview = decision === 'deny' ? 'Approval denied' : decision === 'allow-always' ? 'Approval granted permanently' : 'Approval granted once';
+            engineBus.emitOrchestrationEvent({
+                type: 'user_reply_received',
+                sessionId: entry.orchestration.sessionId,
+                taskId: entry.orchestration.taskId,
+                mode: entry.orchestration.mode,
+                actor: 'user',
+                replyPreview: preview,
+                timestamp,
+            });
+            engineBus.emitOrchestrationEvent({
+                type: 'resumed',
+                sessionId: entry.orchestration.sessionId,
+                taskId: entry.orchestration.taskId,
+                mode: entry.orchestration.mode,
+                actor: entry.orchestration.actor,
+                reason: `Approval decision received for ${entry.record.request.toolName}.`,
+                timestamp: timestamp + 1,
+            });
+        }
         entry.resolve(decision);
         // Grace window: keep entry for late awaitDecision callers
         setTimeout(() => {
@@ -197,6 +252,17 @@ export class ApprovalGateManager extends EventEmitter {
         entry.record.resolvedAtMs = Date.now();
         entry.record.decision = undefined;
         entry.record.resolvedBy = resolvedBy ?? null;
+        if (entry.orchestration) {
+            engineBus.emitOrchestrationEvent({
+                type: 'resumed',
+                sessionId: entry.orchestration.sessionId,
+                taskId: entry.orchestration.taskId,
+                mode: entry.orchestration.mode,
+                actor: entry.orchestration.actor,
+                reason: `Approval request for ${entry.record.request.toolName} expired without a user decision.`,
+                timestamp: Date.now(),
+            });
+        }
         entry.resolve(null);
         setTimeout(() => {
             if (this.pending.get(recordId) === entry) this.pending.delete(recordId);

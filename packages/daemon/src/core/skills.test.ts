@@ -8,6 +8,9 @@ import { tmpdir } from 'node:os';
 import {
     parseFrontmatter,
     discoverSkills,
+    getRelevantSkillPrompt,
+    initSkills,
+    loadSkillContent,
     scoreSkillMatch,
     matchSkills,
     type SkillMeta,
@@ -70,6 +73,53 @@ Use curl to get weather.`);
         expect(skills[0]!.name).toBe('weather');
         expect(skills[0]!.description).toBe('Get weather forecasts');
         expect(skills[0]!.keywords.length).toBeGreaterThan(0);
+    });
+
+    it('discovers teacher-student skill packages in subdirectories', async () => {
+        const skillDir = join(tempDir, 'echo-package');
+        mkdirSync(skillDir);
+        writeFileSync(join(skillDir, 'skill-package.json'), JSON.stringify({
+            schemaVersion: 1,
+            manifest: {
+                skillName: 'echo-package',
+                toolName: 'echo_package',
+                description: 'Echo structured messages',
+                source: 'forge-tdd',
+                createdAt: '2026-03-05T00:00:00.000Z',
+                language: 'javascript',
+                entrypoint: 'index.js',
+                inputMode: 'json-arguments-object',
+            },
+            artifacts: [
+                {
+                    kind: 'script',
+                    filename: 'index.js',
+                    runtime: 'node',
+                    language: 'javascript',
+                    entrypoint: true,
+                },
+            ],
+            student_instructions: {
+                tool_name: 'echo_package',
+                summary: 'Use this skill when the user wants an echo response.',
+                usage_examples: [
+                    {
+                        user_input: 'Echo hello',
+                        expected_tool_call: { name: 'echo_package', args: { message: 'hello' } },
+                    },
+                    {
+                        user_input: 'Repeat redbus',
+                        expected_tool_call: { name: 'echo_package', args: { message: 'redbus' } },
+                    },
+                ],
+            },
+        }, null, 2));
+
+        const skills = await discoverSkills(tempDir);
+        expect(skills).toHaveLength(1);
+        expect(skills[0]!.instructionSource).toBe('package');
+        expect(skills[0]!.toolName).toBe('echo_package');
+        expect(skills[0]!.keywords).toContain('hello');
     });
 
     it('returns empty array for nonexistent directory', async () => {
@@ -141,6 +191,69 @@ describe('matchSkills', () => {
         const matches = matchSkills('weather', skills, 100);
         // Very high threshold may exclude
         expect(matches.length).toBeLessThanOrEqual(1);
+    });
+});
+
+describe('teacher-student prompt loading', () => {
+    let tempDir: string;
+
+    beforeEach(() => {
+        tempDir = mkdtempSync(join(tmpdir(), 'skills-prompt-test-'));
+    });
+
+    afterEach(() => {
+        rmSync(tempDir, { recursive: true, force: true });
+    });
+
+    it('formats package-backed student instructions for prompt injection', async () => {
+        const skillDir = join(tempDir, 'echo-package');
+        mkdirSync(skillDir);
+        writeFileSync(join(skillDir, 'skill-package.json'), JSON.stringify({
+            schemaVersion: 1,
+            manifest: {
+                skillName: 'echo-package',
+                toolName: 'echo_package',
+                description: 'Echo structured messages',
+                source: 'forge-tdd',
+                createdAt: '2026-03-05T00:00:00.000Z',
+                language: 'javascript',
+                entrypoint: 'index.js',
+                inputMode: 'json-arguments-object',
+            },
+            artifacts: [
+                {
+                    kind: 'script',
+                    filename: 'index.js',
+                    runtime: 'node',
+                    language: 'javascript',
+                    entrypoint: true,
+                },
+            ],
+            student_instructions: {
+                tool_name: 'echo_package',
+                summary: 'Use this skill when the user asks for an echo.',
+                usage_examples: [
+                    {
+                        user_input: 'Echo hello',
+                        expected_tool_call: { name: 'echo_package', args: { message: 'hello' } },
+                    },
+                    {
+                        user_input: 'Repeat redbus',
+                        expected_tool_call: { name: 'echo_package', args: { message: 'redbus' } },
+                    },
+                ],
+            },
+        }, null, 2));
+
+        const [skill] = await discoverSkills(tempDir);
+        const content = await loadSkillContent(skill!);
+        expect(content).toContain('Student Summary: Use this skill when the user asks for an echo.');
+        expect(content).toContain('Preferred Tool Name: echo_package');
+
+        await initSkills(tempDir);
+        const prompt = await getRelevantSkillPrompt('please echo hello for me');
+        expect(prompt).toContain('echo-package');
+        expect(prompt).toContain('<tool_call>{"name":"echo_package","args":{"message":"hello"}}</tool_call>');
     });
 });
 

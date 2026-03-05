@@ -6,6 +6,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { HeartbeatManager, DEFAULT_HEARTBEAT_INTERVAL_MS } from './heartbeat.js';
 import * as taskQueue from '../task-queue.js';
 import { approvalGate } from '../approval-gate.js';
+import { engineBus } from '../engine-message-bus.js';
+import * as llmConfig from '../../infra/llm-config.js';
 
 // ─── Mock WS Server ────────────────────────────────────────────────
 function createMockWsServer() {
@@ -22,14 +24,23 @@ describe('HeartbeatManager', () => {
     beforeEach(() => {
         vi.useFakeTimers();
         ws = createMockWsServer();
+        engineBus.reset();
         vi.spyOn(taskQueue, 'getActiveTaskCount').mockReturnValue(0);
         vi.spyOn(taskQueue, 'getTotalQueueSize').mockReturnValue(0);
+        vi.spyOn(llmConfig, 'getWorkerEngineConfig').mockReturnValue({
+            enabled: true,
+            model: 'claude-test',
+            num_threads: 4,
+            provider: 'anthropic',
+            apiKey: 'test-key',
+        } as any);
         // Reset approval gate
         approvalGate.removeAllListeners();
     });
 
     afterEach(() => {
         hb?.stop();
+        engineBus.reset();
         vi.useRealTimers();
         vi.restoreAllMocks();
     });
@@ -55,9 +66,31 @@ describe('HeartbeatManager', () => {
             expect(hb.computeState()).toBe('EXECUTING_TOOL');
         });
 
+        it('returns EXECUTING_TOOL when a MAS orchestration session is running', () => {
+            engineBus.startTask('worker-123', 'Investigate the failure');
+            hb = new HeartbeatManager(ws);
+            expect(hb.computeState()).toBe('EXECUTING_TOOL');
+        });
+
         it('returns BLOCKED_WAITING_USER when approval is pending', () => {
             hb = new HeartbeatManager(ws);
             vi.spyOn(approvalGate, 'hasPendingRequests').mockReturnValue(true);
+            expect(hb.computeState()).toBe('BLOCKED_WAITING_USER');
+        });
+
+        it('returns BLOCKED_WAITING_USER when a MAS session is paused', () => {
+            engineBus.startTask('worker-456', 'Need approval');
+            engineBus.emitOrchestrationEvent({
+                type: 'yield_requested',
+                sessionId: 'worker-456',
+                taskId: 'worker-456',
+                mode: 'collaborative',
+                actor: 'worker',
+                waitFor: 'awaiting_user_reply',
+                reason: 'Need confirmation before proceeding',
+                timestamp: Date.now(),
+            });
+            hb = new HeartbeatManager(ws);
             expect(hb.computeState()).toBe('BLOCKED_WAITING_USER');
         });
 
@@ -129,6 +162,29 @@ describe('HeartbeatManager', () => {
             expect(payload.state).toBe('EXECUTING_TOOL');
             expect(payload.pid).toBe(process.pid);
             expect(typeof payload.uptimeMs).toBe('number');
+        });
+
+        it('includes orchestration session status in the heartbeat payload', () => {
+            engineBus.startTask('worker-789', 'Build the integration');
+            engineBus.emitOrchestrationEvent({
+                type: 'delegated',
+                sessionId: 'worker-789',
+                taskId: 'worker-789',
+                mode: 'collaborative',
+                actor: 'live',
+                from: 'live',
+                to: 'worker',
+                summary: 'Delegated by the live engine',
+                timestamp: Date.now(),
+            });
+
+            hb = new HeartbeatManager(ws, { suppressUnchanged: false });
+            hb.start();
+
+            const payload = ws.broadcast.mock.calls[0][0].payload;
+            expect(payload.workerStatus.orchestration.running).toBe(1);
+            expect(payload.workerStatus.orchestration.activeSession.mode).toBe('collaborative');
+            expect(payload.workerStatus.orchestration.activeSession.lastEventType).toBe('delegated');
         });
     });
 
