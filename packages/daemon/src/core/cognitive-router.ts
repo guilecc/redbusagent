@@ -814,6 +814,18 @@ export async function askTier2(
             if (toolObj?.schema) {
                 sanitizeSchema(toolObj.schema);
             }
+
+            // Shape 5: tool has NO inputSchema at all (e.g. used `parameters` instead of `inputSchema`).
+            // The AI SDK's asSchema(undefined) fallback produces { properties: {}, additionalProperties: false }
+            // which is missing `type: "object"`. Fix by injecting a minimal valid schema.
+            if (toolObj && !toolObj.inputSchema && !toolObj.parameters) {
+                console.warn(`  ⚠️ [tier2] Tool[${i}] "${name}" — no inputSchema or parameters, injecting fallback`);
+                toolObj.inputSchema = z.object({});
+            } else if (toolObj && !toolObj.inputSchema && toolObj.parameters) {
+                // Tool was defined with `parameters` instead of `inputSchema` — copy it over
+                console.warn(`  ⚠️ [tier2] Tool[${i}] "${name}" — has parameters but no inputSchema, copying`);
+                toolObj.inputSchema = toolObj.parameters;
+            }
         }
         const workerCfg = getWorkerEngineConfig();
         console.log(`  🧠 [tier2] Calling ${workerCfg.provider}/${workerCfg.model} with ${Object.keys(tools).length} tools (AutoRAG: ${ragResult.chunksFound} chunks)`);

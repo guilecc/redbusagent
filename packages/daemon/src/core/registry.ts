@@ -50,7 +50,7 @@ export class CapabilityRegistry {
             //   "tools.N.custom.input_schema.type: Field required"
             let schema;
             if (t.inputSchema && Object.keys(t.inputSchema).length > 0) {
-                const sanitized = { type: 'object', ...t.inputSchema };
+                const sanitized = { ...t.inputSchema, type: 'object' };
                 // Ensure properties exists (Anthropic also requires it for object types)
                 if (!sanitized.properties) {
                     sanitized.properties = {};
@@ -62,7 +62,7 @@ export class CapabilityRegistry {
 
             mcpSdkTools[`mcp_x_${safeName}`] = tool({
                 description: `[MCP: ${t.mcpId}] ${t.description}`,
-                parameters: schema,
+                inputSchema: schema,
                 execute: async (args: any) => {
                     return await MCPEngine.getInstance().callTool(t.mcpId, t.toolName, args);
                 }
