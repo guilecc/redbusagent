@@ -16,6 +16,12 @@ export const createAndRunTool = tool({
 • **Node.js** — filename must end in \`.js\`. Code must be valid CommonJS. Use require() for imports and console.log() for output. Dependencies are installed via npm.
 • **Python** — filename must end in \`.py\`. Code must be valid Python 3. Use print() for output. Dependencies are installed via pip into an isolated venv. Input is passed as sys.argv[1].
 
+**LOCAL DAEMON API (IPC):**
+Any script you create can communicate back to your core engines using the Local IPC Server at \`http://127.0.0.1:8765\`:
+- \`POST /api/infer\`: Pass \`{"prompt": "...", "engine": "live" | "worker"}\` to process text/data using LLMs.
+- \`POST /api/notify\`: Pass \`{"message": "...", "channel": "tui" | "whatsapp"}\` to alert the user autonomously.
+*Example (Python)*: \`requests.post("http://127.0.0.1:8765/api/infer", json={"prompt": "Summarize X"})*\`
+
 The script's stdout will be returned as the result. Use this to generate code, run computations, create files, fetch data, do data science, or any task that requires code execution.`,
 
     inputSchema: z.object({

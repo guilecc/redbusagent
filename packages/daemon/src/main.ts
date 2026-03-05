@@ -30,6 +30,7 @@ import { OllamaManager } from './core/ollama-manager.js';
 import { WhatsAppChannel } from './channels/whatsapp.js';
 import { CoreMemory } from './core/core-memory.js';
 import { MCPEngine } from './core/mcp-engine.js';
+import { LocalApiServer } from './core/daemon/server.js';
 
 // ── Configuration ─────────────────────────────────────────────────
 
@@ -211,6 +212,10 @@ TaskScheduler.init(wsServer, chatHandler);
 console.log('  💓 Heartbeat manager started (1s tick loop)');
 console.log('  ⏱️  Task Scheduler started (deterministic cron engine)');
 console.log('  💬 Chat handler initialized');
+
+const apiServer = new LocalApiServer(wsServer, 8765);
+apiServer.start();
+
 console.log('  ✅ Daemon is ready. Waiting for TUI connections...\n');
 
 // ── Cloud-First: No local engine management needed ───────────────
@@ -235,6 +240,7 @@ async function shutdown(signal: string): Promise<void> {
     await whatsapp.stop();
     TaskScheduler.stopAll();
     await wsServer.shutdown();
+    apiServer.stop();
 
     // Clean up PID file
     try { unlinkSync(PID_FILE); } catch { /* ignore if already removed */ }

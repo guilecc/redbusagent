@@ -549,11 +549,31 @@ export async function askLive(
                     if (xmlMatch && xmlMatch[2]) {
                         const parsedName = xmlMatch[1];
                         let jsonStr = xmlMatch[2].trim();
-                        // Attempt emergency repair of unclosed JSON object (common with complex strings)
-                        if (!jsonStr.endsWith('}')) jsonStr += '}';
-                        if (!jsonStr.startsWith('{')) jsonStr = '{' + jsonStr;
 
-                        const parsed = JSON.parse(jsonStr);
+                        let parsed: any = null;
+                        try {
+                            // Attempt emergency repair of unclosed JSON object (common with complex strings)
+                            let repairedStr = jsonStr;
+                            if (!repairedStr.endsWith('}')) repairedStr += '}';
+                            if (!repairedStr.startsWith('{')) repairedStr = '{' + repairedStr;
+                            parsed = JSON.parse(repairedStr);
+                        } catch (e) {
+                            // XML Tags Fallback! Gemma 3 often generates <param_name>value</param_name> instead of JSON inside <tool_call>
+                            const xmlParamsRegex = /<([a-zA-Z0-9_]+)>([\s\S]*?)<\/\1>/g;
+                            let match: RegExpExecArray | null;
+                            parsed = {};
+                            let foundXml = false;
+                            while ((match = xmlParamsRegex.exec(jsonStr)) !== null) {
+                                const key = match[1];
+                                const val = match[2];
+                                if (key) {
+                                    parsed[key] = val ? val.trim() : '';
+                                    foundXml = true;
+                                }
+                            }
+                            if (!foundXml) throw e; // Rethrow if not XML either
+                        }
+
                         // Handle both full nested JSON or flat JSON with name attribute
                         if (parsedName && typeof parsed === 'object') {
                             rawToolCall = { name: parsedName, arguments: parsed };
@@ -587,7 +607,7 @@ export async function askLive(
                         }
                     }
                 } catch (e) {
-                    // Not JSON — normal text response, no action needed
+                    // Not JSON/XML — normal text response, no action needed
                 }
             }
 
