@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import StatusBar from './StatusBar';
 import ForgePanel from './ForgePanel';
 import ChatPanel from './ChatPanel';
@@ -5,14 +6,14 @@ import ThoughtStreamPanel from './ThoughtStreamPanel';
 import YieldModal from './YieldModal';
 import { useStudioBridge } from '../hooks/useStudioBridge';
 import { useStudioState } from '../hooks/useStudioStore';
-import { STUDIO_IPC_VERSION } from '@redbusagent/shared/studio';
+import type { YieldRespondCommand } from '@redbusagent/shared/studio';
 
 export default function StudioShell(): JSX.Element {
     const { sendChat, respondToYield, connect, disconnect } = useStudioBridge();
-    const { session } = useStudioState();
-
+    const { session, yieldRequest } = useStudioState();
     const isConnected = session.connection === 'connected';
     const isConnecting = session.connection === 'connecting';
+    const [yieldPending, setYieldPending] = useState(false);
 
     const handleQuickConnect = async () => {
         await connect('default', {
@@ -26,14 +27,14 @@ export default function StudioShell(): JSX.Element {
         });
     };
 
-    const handleTestYield = async () => {
-        // Fire a simulated yield event for demo/testing purposes
-        // In production this comes from main process; here we invoke a chat that triggers it
-        await window.redbusStudio.invoke({
-            version: STUDIO_IPC_VERSION,
-            type: 'chat/send',
-            payload: { requestId: crypto.randomUUID(), content: '[demo] trigger yield test' },
-        });
+    const handleYieldRespond = async (payload: YieldRespondCommand['payload']) => {
+        setYieldPending(true);
+
+        try {
+            await respondToYield(payload.yieldId, payload.decision, payload.note);
+        } finally {
+            setYieldPending(false);
+        }
     };
 
     return (
@@ -58,12 +59,6 @@ export default function StudioShell(): JSX.Element {
                         >
                             Disconnect
                         </button>
-                        <button
-                            onClick={() => void handleTestYield()}
-                            className="rounded border border-white/15 px-3 py-1 text-xs text-slate-300 hover:bg-white/5"
-                        >
-                            Test Yield
-                        </button>
                     </>
                 )}
             </div>
@@ -87,7 +82,7 @@ export default function StudioShell(): JSX.Element {
             </div>
 
             {/* Yield & Ask interception modal */}
-            <YieldModal onRespond={respondToYield} />
+            <YieldModal onRespond={handleYieldRespond} pending={yieldPending} request={yieldRequest} />
         </div>
     );
 }
