@@ -298,6 +298,50 @@ export interface CognitiveRouterResult {
     model: string;
 }
 
+interface DelegatedWorkerOutcomeInput {
+    durationSec: number;
+    workerToolCalls: number;
+    workerCharsGenerated: number;
+    workerErrorMessage?: string | null;
+    failedToolName?: string | null;
+    failedToolResult?: string | null;
+    workerProducedTextAfterFailure?: boolean;
+}
+
+function summarizeDelegatedWorkerFailureDetail(detail?: string | null): string {
+    const trimmed = detail?.trim();
+    if (!trimmed) return 'No additional tool output was captured.';
+    return trimmed.length <= 500 ? trimmed : `${trimmed.slice(0, 500)}…`;
+}
+
+export function buildDelegatedWorkerOutcome(input: DelegatedWorkerOutcomeInput): { status: 'success' | 'failure' | 'caution'; message: string } {
+    if (input.workerErrorMessage) {
+        return {
+            status: 'failure',
+            message: `The Worker Engine FAILED with error: "${input.workerErrorMessage}". Do NOT say the task was successful. Inform the user about the failure clearly and suggest a retry or next step.`,
+        };
+    }
+
+    if (input.failedToolName && !input.workerProducedTextAfterFailure) {
+        return {
+            status: 'failure',
+            message: `The Worker Engine FAILED while running tool "${input.failedToolName}". Latest failure detail: ${summarizeDelegatedWorkerFailureDetail(input.failedToolResult)}. Do NOT say the task was successful. Explain the failure clearly to the user and offer next steps or a retry.`,
+        };
+    }
+
+    if (input.failedToolName) {
+        return {
+            status: 'caution',
+            message: `The Worker Engine encountered a tool failure in "${input.failedToolName}" and already streamed follow-up output to the user. Do NOT blindly confirm success. Base your reply on the worker output already shown to the user; if the task is incomplete, acknowledge the issue and offer next steps. Latest failure detail: ${summarizeDelegatedWorkerFailureDetail(input.failedToolResult)}`,
+        };
+    }
+
+    return {
+        status: 'success',
+        message: `The Worker Engine executed the task successfully in ${input.durationSec}s using ${input.workerToolCalls} tool calls. The result was already communicated to the user. Just confirm the task is complete.`,
+    };
+}
+
 // ─── Public API ───────────────────────────────────────────────────
 
 export async function askLive(
@@ -349,11 +393,18 @@ export async function askLive(
                 let lastToolName = '';
                 let lastStatusTime = Date.now();
                 let workerErrorMessage: string | null = null;
+                let lastFailedToolName: string | null = null;
+                let lastFailedToolResult: string | null = null;
+                let workerProducedTextAfterFailure = false;
 
                 // ─── Wrap callbacks to emit bus events ────────────────
                 const workerCallbacks: StreamCallbacks = {
                     onChunk: (delta: string) => {
                         workerCharsGenerated += delta.length;
+                        if (lastFailedToolName && delta.trim()) {
+                            workerProducedTextAfterFailure = true;
+                        }
+                        lastStatusTime = Date.now();
                         callbacks.onChunk(delta);
                     },
                     onDone: (fullText: string) => {
@@ -380,6 +431,11 @@ export async function askLive(
                         callbacks.onToolCall?.(toolName, args);
                     },
                     onToolResult: (toolName: string, success: boolean, result: string) => {
+                        if (!success) {
+                            lastFailedToolName = toolName;
+                            lastFailedToolResult = result;
+                            workerProducedTextAfterFailure = false;
+                        }
                         engineBus.emitEvent('worker:tool_result', {
                             taskId,
                             toolName,
@@ -425,17 +481,30 @@ export async function askLive(
 
                     const totalDuration = Date.now() - startTime;
                     const durationSec = Math.round(totalDuration / 1000);
+                    const outcome = buildDelegatedWorkerOutcome({
+                        durationSec,
+                        workerToolCalls,
+                        workerCharsGenerated,
+                        workerErrorMessage,
+                        failedToolName: lastFailedToolName,
+                        failedToolResult: lastFailedToolResult,
+                        workerProducedTextAfterFailure,
+                    });
 
                     // ─── Check if onError was called during execution ──
-                    if (workerErrorMessage) {
+                    if (outcome.status === 'failure') {
+                        const failureMessage = workerErrorMessage
+                            || (lastFailedToolName
+                                ? `${lastFailedToolName} failed. Latest failure detail: ${summarizeDelegatedWorkerFailureDetail(lastFailedToolResult)}`
+                                : 'Worker tool failed.');
                         engineBus.emitEvent('worker:error', {
                             taskId,
-                            error: workerErrorMessage,
+                            error: failureMessage,
                             timestamp: Date.now(),
                         });
-                        console.log(`  ❌ [Router]: Worker task ${taskId} FAILED in ${durationSec}s — ${workerErrorMessage}`);
-                        callbacks.onChunk(`\n❌ [Live Observer] Worker Engine encountered an error: ${workerErrorMessage}\n`);
-                        return `The Worker Engine FAILED with error: "${workerErrorMessage}". Do NOT say the task was successful. Inform the user about the error in a friendly way and suggest they try again later or check the error details.`;
+                        console.log(`  ❌ [Router]: Worker task ${taskId} FAILED in ${durationSec}s — ${failureMessage}`);
+                        callbacks.onChunk(`\n❌ [Live Observer] Worker Engine encountered an error: ${failureMessage}\n`);
+                        return outcome.message;
                     }
 
                     engineBus.emitEvent('worker:done', {
@@ -446,9 +515,13 @@ export async function askLive(
                         timestamp: Date.now(),
                     });
 
-                    console.log(`  ✅ [Router]: Worker task ${taskId} completed in ${durationSec}s (${workerToolCalls} tools, ${workerCharsGenerated} chars)`);
+                    if (outcome.status === 'caution') {
+                        console.log(`  ⚠️ [Router]: Worker task ${taskId} completed with tool failure context in ${durationSec}s (${workerToolCalls} tools, ${workerCharsGenerated} chars)`);
+                    } else {
+                        console.log(`  ✅ [Router]: Worker task ${taskId} completed in ${durationSec}s (${workerToolCalls} tools, ${workerCharsGenerated} chars)`);
+                    }
 
-                    return `The Worker Engine executed the task successfully in ${durationSec}s using ${workerToolCalls} tool calls. The result was already communicated to the user. Just confirm the task is complete.`;
+                    return outcome.message;
                 } catch (err) {
                     const error = err instanceof Error ? err : new Error(String(err));
                     engineBus.emitEvent('worker:error', {

@@ -1,6 +1,8 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { Vault } from '@redbusagent/shared';
+import { Vault, type VaultConfig } from '@redbusagent/shared';
+
+type VaultMCPMap = NonNullable<VaultConfig['mcps']>;
 
 export interface MCPToolInfo {
     mcpId: string;
@@ -38,7 +40,9 @@ export class MCPEngine {
             const config = Vault.read();
             if (!config || !config.mcps) return;
 
-            for (const [mcpId, mcpConfig] of Object.entries(config.mcps)) {
+            const mcps: VaultMCPMap = config.mcps;
+
+            for (const [mcpId, mcpConfig] of Object.entries(mcps)) {
                 await this.spawnMCP(mcpId, mcpConfig.command, mcpConfig.args, mcpConfig.env);
             }
         } finally {

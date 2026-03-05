@@ -7,8 +7,75 @@
 
 import { tool } from 'ai';
 import { z } from 'zod';
-import { Forge } from '../forge.js';
+import { Forge, formatForgeFailureDetails } from '../forge.js';
 import { ToolRegistry } from '../tool-registry.js';
+
+export interface CreateAndRunParams {
+    filename: string;
+    description: string;
+    code: string;
+    dependencies: string[];
+}
+
+export async function executeCreateAndRun(params: CreateAndRunParams) {
+    const { filename, description, code, dependencies } = params;
+    const startTime = Date.now();
+    const lang = Forge.detectLanguage(filename);
+    const langLabel = lang === 'python' ? '🐍 Python' : '📦 Node.js';
+
+    try {
+        Forge.ensureWorkspace();
+
+        // ── Dependency installation ──────────────────────────
+        if (dependencies.length > 0) {
+            console.log(`  ${langLabel} Forge: Installing ${dependencies.length} dependencies: ${dependencies.join(', ')}`);
+
+            const installResult = lang === 'python'
+                ? await Forge.installPythonDependencies(dependencies)
+                : await Forge.installDependencies(dependencies);
+
+            if (!installResult.success) {
+                return { success: false, phase: 'dependency_install', error: `Failed: ${installResult.error}` };
+            }
+            console.log(`  ${langLabel} Forge: Dependencies installed`);
+        }
+
+        // ── Write & execute ──────────────────────────────────
+        const filepath = Forge.writeScript(filename, code);
+        console.log(`  📝 Forge: Script written to ${filepath}`);
+        console.log(`  ▶️  Forge: Executing ${filename} (${lang})...`);
+
+        const result = await Forge.executeScript(filename);
+
+        if (result.success) {
+            const toolName = filename.replace(/\.(js|py)$/, '').replace(/[^a-zA-Z0-9]/g, '_');
+            ToolRegistry.register({ name: toolName, description, filename, createdAt: new Date().toISOString() });
+            console.log(`  ✅ Forge: ${filename} executed in ${result.durationMs}ms`);
+            return { success: true, output: result.stdout, durationMs: result.durationMs, registeredAs: toolName };
+        }
+
+        const diagnostics = formatForgeFailureDetails(filename, result);
+        console.log(`  ❌ Forge: ${filename} failed${result.exitCode != null ? ` (exit ${result.exitCode})` : ''}`);
+        return {
+            success: false,
+            phase: 'execution',
+            exitCode: result.exitCode,
+            stdout: result.stdout,
+            stderr: result.stderr,
+            error: diagnostics,
+            diagnostics,
+            durationMs: result.durationMs,
+            errorMessage: result.errorMessage,
+            errorCode: result.errorCode,
+            signal: result.signal,
+            timedOut: result.timedOut,
+            failedCommand: result.failedCommand,
+        };
+    } catch (err) {
+        const error = err instanceof Error ? err : new Error(String(err));
+        return { success: false, phase: 'internal', error: error.message, durationMs: Date.now() - startTime };
+    }
+}
 
 export const createAndRunTool = tool({
     description: `Creates a script in the Forge workspace, installs any required dependencies, executes the script, and returns the output. Supports TWO languages:
@@ -31,53 +98,5 @@ The script's stdout will be returned as the result. Use this to generate code, r
         dependencies: z.array(z.string()).default([]).describe('Packages to install before execution. For .js: npm packages. For .py: pip packages (e.g. "requests", "pandas", "numpy").'),
     }),
 
-    execute: async (params: {
-        filename: string;
-        description: string;
-        code: string;
-        dependencies: string[];
-    }) => {
-        const { filename, description, code, dependencies } = params;
-        const startTime = Date.now();
-        const lang = Forge.detectLanguage(filename);
-        const langLabel = lang === 'python' ? '🐍 Python' : '📦 Node.js';
-
-        try {
-            Forge.ensureWorkspace();
-
-            // ── Dependency installation ──────────────────────────
-            if (dependencies.length > 0) {
-                console.log(`  ${langLabel} Forge: Installing ${dependencies.length} dependencies: ${dependencies.join(', ')}`);
-
-                const installResult = lang === 'python'
-                    ? await Forge.installPythonDependencies(dependencies)
-                    : await Forge.installDependencies(dependencies);
-
-                if (!installResult.success) {
-                    return { success: false, phase: 'dependency_install', error: `Failed: ${installResult.error}` };
-                }
-                console.log(`  ${langLabel} Forge: Dependencies installed`);
-            }
-
-            // ── Write & execute ──────────────────────────────────
-            const filepath = Forge.writeScript(filename, code);
-            console.log(`  📝 Forge: Script written to ${filepath}`);
-            console.log(`  ▶️  Forge: Executing ${filename} (${lang})...`);
-
-            const result = await Forge.executeScript(filename);
-
-            if (result.success) {
-                const toolName = filename.replace(/\.(js|py)$/, '').replace(/[^a-zA-Z0-9]/g, '_');
-                ToolRegistry.register({ name: toolName, description, filename, createdAt: new Date().toISOString() });
-                console.log(`  ✅ Forge: ${filename} executed in ${result.durationMs}ms`);
-                return { success: true, output: result.stdout, durationMs: result.durationMs, registeredAs: toolName };
-            } else {
-                console.log(`  ❌ Forge: ${filename} failed (exit ${result.exitCode})`);
-                return { success: false, phase: 'execution', exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr, error: result.stderr || 'Non-zero exit', durationMs: result.durationMs };
-            }
-        } catch (err) {
-            const error = err instanceof Error ? err : new Error(String(err));
-            return { success: false, phase: 'internal', error: error.message, durationMs: Date.now() - startTime };
-        }
-    },
+    execute: executeCreateAndRun,
 });

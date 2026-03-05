@@ -13,7 +13,7 @@
 
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { execFile } from 'node:child_process';
+import { execFile, type ExecFileException } from 'node:child_process';
 import { Vault } from '@redbusagent/shared';
 
 // ─── Types ────────────────────────────────────────────────────────
@@ -24,6 +24,12 @@ export interface ForgeExecutionResult {
     stdout: string;
     stderr: string;
     durationMs: number;
+    errorMessage?: string;
+    errorCode?: number | string;
+    signal?: NodeJS.Signals | null;
+    timedOut?: boolean;
+    failedCommand?: string;
+    combinedOutput?: string;
 }
 
 export type ForgeLanguage = 'node' | 'python';
@@ -51,6 +57,65 @@ function venvPython(): string {
 /** Returns the path to the pip executable inside the venv */
 function venvPip(): string {
     return join(FORGE_VENV_DIR, 'bin', 'pip');
+}
+
+function combineOutput(stdout: string, stderr: string): string {
+    const sections: string[] = [];
+    if (stdout.trim()) sections.push(`stdout:\n${stdout.trim()}`);
+    if (stderr.trim()) sections.push(`stderr:\n${stderr.trim()}`);
+    return sections.join('\n\n');
+}
+
+function truncateOutput(value: string, maxLength = 1200): string {
+    if (value.length <= maxLength) return value;
+    const remaining = value.length - maxLength;
+    return `${value.slice(0, maxLength)}\n…[truncated ${remaining} chars]`;
+}
+
+function normalizeExecFailure(
+    error: ExecFileException,
+    stdout: string,
+    stderr: string,
+    durationMs: number,
+): ForgeExecutionResult {
+    const exitCode = typeof error.code === 'number' ? error.code : null;
+    const errorMessage = error.message || 'Command failed';
+    const normalizedStderr = stderr.trim() ? stderr : errorMessage;
+
+    return {
+        success: false,
+        exitCode,
+        stdout,
+        stderr: normalizedStderr,
+        durationMs,
+        errorMessage,
+        errorCode: error.code ?? undefined,
+        signal: error.signal ?? null,
+        timedOut: error.killed === true && errorMessage.toLowerCase().includes('timed out'),
+        failedCommand: error.cmd,
+        combinedOutput: combineOutput(stdout, normalizedStderr),
+    };
+}
+
+export function formatForgeFailureDetails(filename: string, result: ForgeExecutionResult): string {
+    const lines = [`Forge execution failed for ${filename}.`];
+
+    if (result.exitCode != null) lines.push(`Exit code: ${result.exitCode}`);
+    if (result.errorCode != null && result.errorCode !== result.exitCode) lines.push(`Error code: ${String(result.errorCode)}`);
+    if (result.signal) lines.push(`Signal: ${result.signal}`);
+    if (result.timedOut) lines.push(`Timed out after ${EXECUTION_TIMEOUT_MS}ms`);
+    if (result.failedCommand) lines.push(`Command: ${result.failedCommand}`);
+    if (result.errorMessage && result.errorMessage !== result.stderr) lines.push(`Runtime error: ${result.errorMessage}`);
+
+    if (result.stderr.trim()) {
+        lines.push('', `stderr:\n${truncateOutput(result.stderr.trim())}`);
+    }
+
+    if (result.stdout.trim()) {
+        lines.push('', `stdout:\n${truncateOutput(result.stdout.trim())}`);
+    }
+
+    return lines.join('\n');
 }
 
 // ─── Forge Service ────────────────────────────────────────────────
@@ -255,13 +320,7 @@ export class Forge {
                     const durationMs = Date.now() - startTime;
 
                     if (error) {
-                        resolve({
-                            success: false,
-                            exitCode: error.code ? Number(error.code) : 1,
-                            stdout: stdout || '',
-                            stderr: stderr || error.message,
-                            durationMs,
-                        });
+                        resolve(normalizeExecFailure(error, stdout || '', stderr || '', durationMs));
                     } else {
                         resolve({
                             success: true,
@@ -269,6 +328,7 @@ export class Forge {
                             stdout: stdout || '',
                             stderr: stderr || '',
                             durationMs,
+                            combinedOutput: combineOutput(stdout || '', stderr || ''),
                         });
                     }
                 },
