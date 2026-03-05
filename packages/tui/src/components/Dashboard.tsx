@@ -27,9 +27,6 @@ import {
     DEFAULT_PORT,
     PersonaManager,
     Vault,
-    fetchTier2Models,
-    Tier2Provider,
-    getMCPSuggestion
 } from '@redbusagent/shared';
 import { TuiWsClient } from '../infra/ws-client.js';
 import { StatusBar } from './StatusBar.js';
@@ -38,7 +35,6 @@ import { SystemLog, MAX_LOG_ENTRIES } from './SystemLog.js';
 import type { LogEntry } from './SystemLog.js';
 import { ApprovalGate } from './ApprovalGate.js';
 import { InputBox } from './InputBox.js';
-import type { ActiveMenu } from './InputBox.js';
 
 // ─── Helpers ──────────────────────────────────────────────────────
 
@@ -162,21 +158,6 @@ export function Dashboard(): React.ReactElement {
     const [currentModel, setCurrentModel] = useState<string | null>(null);
     const [proactiveThought, setProactiveThought] = useState<{ text: string; status: 'thinking' | 'action' | 'done' } | null>(null);
 
-    // ── Slash menu state ──────────────────────────────────────
-    const [isSlashMenuOpen, setIsSlashMenuOpen] = useState(false);
-    const [activeMenu, setActiveMenu] = useState<ActiveMenu>('main');
-
-    // ── MCP Installation State ────────────────────────────────
-    const [mcpInputStr, setMcpInputStr] = useState('');
-    const [mcpTargetId, setMcpTargetId] = useState('');
-    const [mcpEnvQueue, setMcpEnvQueue] = useState<string[]>([]);
-    const [mcpCurrentEnvKey, setMcpCurrentEnvKey] = useState('');
-    const [mcpCollectedEnv, setMcpCollectedEnv] = useState<Record<string, string>>({});
-
-    // ── Cloud/Model state ─────────────────────────────────────
-    const [isFetchingModels, setIsFetchingModels] = useState(false);
-    const [cloudModels, setCloudModels] = useState<{ label: string, value: string, hint?: string, id: string }[]>([]);
-    const [selectedProvider, setSelectedProvider] = useState<Tier2Provider | null>(null);
     const [isOnboarding, setIsOnboarding] = useState(!PersonaManager.exists());
 
     // ── Approval Gate state ───────────────────────────────────
@@ -282,9 +263,11 @@ export function Dashboard(): React.ReactElement {
                         payload: { command: 'set-default-tier', args: { value: nextTier } }
                     });
                 } else if (actualCmd === '/model' || actualCmd === '/switch-cloud') {
-                    setIsSlashMenuOpen(true);
-                    setActiveMenu('cloud');
-                    return;
+                    clientRef.current?.send({
+                        type: 'system:command',
+                        timestamp: new Date().toISOString(),
+                        payload: { command: 'switch-cloud' as any }
+                    });
                 } else if (actualCmd === '/auto-route') {
                     clientRef.current?.send({
                         type: 'system:command',
@@ -355,19 +338,6 @@ export function Dashboard(): React.ReactElement {
     useInput((input, key) => {
         // When approval gate is active, ApprovalGate component handles Y/N via its own useInput
         if (isApprovalActive) return;
-
-        if (isSlashMenuOpen) {
-            if (key.escape) {
-                setIsSlashMenuOpen(false);
-            }
-            return;
-        }
-
-        if (input === '/' && inputValue === '' && !isStreaming) {
-            setIsSlashMenuOpen(true);
-            setActiveMenu('main');
-            return;
-        }
 
         if (key.return) {
             submitMessage(inputValue);
@@ -620,145 +590,6 @@ export function Dashboard(): React.ReactElement {
         }
     }, [addLog]);
 
-    // ── Slash Menu Callbacks ─────────────────────────────────
-
-    const handleMenuSelect = useCallback((value: string) => {
-        if (value === 'close') {
-            setIsSlashMenuOpen(false);
-        } else if (value === 'mcp-install') {
-            setActiveMenu('mcp-install-id');
-            setMcpInputStr('');
-        } else if (value === 'switch-cloud') {
-            setActiveMenu('cloud');
-        } else if (value === 'worker') {
-            // /worker from slash menu — close menu and show usage hint
-            setIsSlashMenuOpen(false);
-            setChatLines((prev) => [
-                ...prev.slice(-(MAX_CHAT_LINES - 1)),
-                `💡 Type: /worker <your prompt> to send a task to the Worker Engine.`
-            ]);
-        } else if (value === 'toggle-tier') {
-            const nextTier = defaultTier === 1 ? 2 : 1;
-            const config = Vault.read();
-            if (nextTier === 2 && config?.tier2_enabled === false) {
-                setChatLines((prev) => [
-                    ...prev.slice(-(MAX_CHAT_LINES - 1)),
-                    `❌ Cloud is disabled. Run redbus config to configure an API key.`
-                ]);
-                setIsSlashMenuOpen(false);
-                return;
-            }
-            setDefaultTier(nextTier);
-            const modeText = nextTier === 1 ? 'Live Engine (Local)' : 'Cloud';
-            const warning = nextTier === 2 ? ' Warning: API costs will now apply.' : '';
-            setChatLines((prev) => [
-                ...prev.slice(-(MAX_CHAT_LINES - 1)),
-                `🔄 Default routing switched to ${modeText}.${warning}`
-            ]);
-            clientRef.current?.send({
-                type: 'system:command',
-                timestamp: new Date().toISOString(),
-                payload: { command: 'set-default-tier', args: { value: nextTier } }
-            });
-            setIsSlashMenuOpen(false);
-        } else {
-            clientRef.current?.send({
-                type: 'system:command',
-                timestamp: new Date().toISOString(),
-                payload: { command: value as any }
-            });
-            setIsSlashMenuOpen(false);
-        }
-    }, [defaultTier]);
-
-    const handleCloudProviderSelect = useCallback(async (value: string) => {
-        if (value === 'back') {
-            setActiveMenu('main');
-        } else {
-            const provider = value as Tier2Provider;
-            setSelectedProvider(provider);
-            setActiveMenu('cloud-models');
-            setIsFetchingModels(true);
-            try {
-                const config = Vault.read();
-                const result = await fetchTier2Models(provider, {
-                    apiKey: config?.tier2?.apiKey,
-                    authToken: config?.tier2?.authToken
-                });
-                setCloudModels(result.models as any);
-            } catch {
-                setCloudModels([]);
-            } finally {
-                setIsFetchingModels(false);
-            }
-        }
-    }, []);
-
-    const handleCloudModelSelect = useCallback((value: string) => {
-        if (value === 'back') {
-            setActiveMenu('cloud');
-        } else {
-            clientRef.current?.send({
-                type: 'system:command',
-                timestamp: new Date().toISOString(),
-                payload: { command: 'switch-cloud', args: { provider: selectedProvider, model: value } }
-            });
-            setIsSlashMenuOpen(false);
-        }
-    }, [selectedProvider]);
-
-    const handleMcpInputSubmit = useCallback((val: string) => {
-        const trimmed = val.trim();
-        if (!trimmed) return;
-
-        const suggestion = getMCPSuggestion(trimmed);
-        setMcpTargetId(trimmed);
-        setMcpCollectedEnv({});
-
-        if (suggestion && suggestion.requiredEnvVars && suggestion.requiredEnvVars.length > 0) {
-            setMcpEnvQueue([...suggestion.requiredEnvVars]);
-            setMcpCurrentEnvKey(suggestion.requiredEnvVars[0]!);
-            setMcpInputStr('');
-            setActiveMenu('mcp-install-env');
-        } else {
-            let command = '';
-            let args: string[] = [];
-            let mcpId = trimmed;
-            if (suggestion) {
-                command = suggestion.command;
-                args = suggestion.args;
-                mcpId = suggestion.id;
-            } else {
-                const parts = trimmed.split(' ');
-                command = parts[0]!;
-                args = parts.slice(1);
-                mcpId = `custom-${Math.random().toString(36).substring(2, 8)}`;
-            }
-            const config = Vault.read();
-            Vault.write({ ...config!, mcps: { ...(config?.mcps || {}), [mcpId]: { command, args, env: {} } } });
-            setChatLines(prev => [...prev.slice(-(MAX_CHAT_LINES - 1)), `✅ MCP ${mcpId} installed to Vault. Restart daemon to apply.`]);
-            setIsSlashMenuOpen(false);
-        }
-    }, []);
-
-    const handleMcpEnvSubmit = useCallback((val: string) => {
-        const newCollected = { ...mcpCollectedEnv, [mcpCurrentEnvKey]: val.trim() };
-        setMcpCollectedEnv(newCollected);
-
-        const nextQueue = mcpEnvQueue.slice(1);
-        if (nextQueue.length > 0) {
-            setMcpEnvQueue(nextQueue);
-            setMcpCurrentEnvKey(nextQueue[0]!);
-            setMcpInputStr('');
-        } else {
-            const suggestion = getMCPSuggestion(mcpTargetId)!;
-            const config = Vault.read();
-            Vault.write({ ...config!, mcps: { ...(config?.mcps || {}), [suggestion.id]: { command: suggestion.command, args: suggestion.args, env: newCollected } } });
-            setChatLines(prev => [...prev.slice(-(MAX_CHAT_LINES - 1)), `✅ Suggested MCP ${suggestion.id} installed to Vault. Restart daemon to apply.`]);
-            setIsSlashMenuOpen(false);
-        }
-    }, [mcpCollectedEnv, mcpCurrentEnvKey, mcpEnvQueue, mcpTargetId]);
-
     // ── Render (Modular Composition) ──────────────────────────
 
     return (
@@ -793,24 +624,11 @@ export function Dashboard(): React.ReactElement {
                 active={isApprovalActive}
             />
 
-            {/* ── InputBox: Text Input + Slash Menu ───────────────── */}
+            {/* ── InputBox: Text Input ─────────────────────────────── */}
             <InputBox
                 inputValue={inputValue}
                 isStreaming={isStreaming}
-                isSlashMenuOpen={isSlashMenuOpen}
                 locked={isApprovalActive}
-                activeMenu={activeMenu}
-                defaultTier={defaultTier}
-                isFetchingModels={isFetchingModels}
-                cloudModels={cloudModels}
-                mcpInputStr={mcpInputStr}
-                mcpCurrentEnvKey={mcpCurrentEnvKey}
-                onMenuSelect={handleMenuSelect}
-                onCloudProviderSelect={handleCloudProviderSelect}
-                onCloudModelSelect={handleCloudModelSelect}
-                onMcpInputChange={setMcpInputStr}
-                onMcpInputSubmit={handleMcpInputSubmit}
-                onMcpEnvSubmit={handleMcpEnvSubmit}
             />
 
             {/* ── SystemLog: Compact Event Log ────────────────────── */}
@@ -834,7 +652,7 @@ export function Dashboard(): React.ReactElement {
             {/* ── Footer ──────────────────────────────────────────── */}
             <Box marginTop={1} gap={2}>
                 <Text color="gray" italic dimColor>
-                    {isApprovalActive ? 'Y: approve  •  N: deny  •  Esc: deny' : 'Enter: send  •  /: menu  •  Ctrl+C: exit'}
+                    {isApprovalActive ? 'Y: approve  •  N: deny  •  Esc: deny' : 'Enter: send  •  Ctrl+C: exit'}
                 </Text>
             </Box>
         </Box>
