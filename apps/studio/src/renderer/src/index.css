@@ -12,6 +12,12 @@ body {
     background: #050816;
 }
 
+html,
+body,
+#root {
+    min-height: 100%;
+}
+
 button {
     cursor: pointer;
 }

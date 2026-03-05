@@ -5,7 +5,6 @@ const KIND_STYLES: Record<ThoughtEntry['kind'], { icon: string; color: string }>
     thought: { icon: '💭', color: 'border-l-purple-500' },
     toolCall: { icon: '🔧', color: 'border-l-blue-500' },
     toolResult: { icon: '📋', color: 'border-l-emerald-500' },
-    tunnelLog: { icon: '🔗', color: 'border-l-yellow-500' },
 };
 
 function ThoughtItem({ entry }: { entry: ThoughtEntry }) {

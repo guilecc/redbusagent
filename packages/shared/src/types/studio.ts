@@ -6,6 +6,7 @@
  * they wrap and reuse it where the desktop app needs a preload-safe bridge.
  */
 
+import { DEFAULT_PORT } from '../constants.js';
 import type {
     ApprovalRequestMessage,
     ApprovalResolvedMessage,
@@ -21,6 +22,9 @@ import type {
 export const STUDIO_IPC_VERSION = '1.0.0' as const;
 export const STUDIO_IPC_COMMAND_CHANNEL = 'redbus-studio:command' as const;
 export const STUDIO_IPC_EVENT_CHANNEL = 'redbus-studio:event' as const;
+export const DEFAULT_STUDIO_SSH_PORT = 22 as const;
+export const DEFAULT_DAEMON_WS_PORT = DEFAULT_PORT;
+export const DEFAULT_DAEMON_API_PORT = 8765 as const;
 
 export type StudioConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
 export type StudioTunnelStatus = 'idle' | 'opening' | 'open' | 'closing' | 'error';
@@ -28,6 +32,7 @@ export type StudioDaemonStatus = 'disconnected' | 'connecting' | 'connected' | '
 export type StudioTunnelLogLevel = 'info' | 'warn' | 'error' | 'debug';
 export type StudioYieldKind = 'approval' | 'question' | 'credential' | 'confirmation';
 export type StudioYieldResolution = 'submitted' | 'cancelled' | 'timed-out' | 'approved' | 'denied';
+export type StudioRouteMode = 'auto' | 'live' | 'cloud';
 
 export interface StudioEnvelope {
     readonly version: typeof STUDIO_IPC_VERSION;
@@ -56,6 +61,24 @@ export interface StudioSettings {
     readonly profiles: readonly StudioConnectionProfile[];
     readonly theme: 'system' | 'dark' | 'light';
     readonly openDevtoolsOnLaunch: boolean;
+    readonly defaultRouteMode: StudioRouteMode;
+}
+
+export const DEFAULT_STUDIO_SETTINGS: StudioSettings = {
+    theme: 'system',
+    openDevtoolsOnLaunch: false,
+    profiles: [],
+    defaultRouteMode: 'auto',
+};
+
+export function normalizeStudioSettings(settings?: Partial<StudioSettings> | null): StudioSettings {
+    return {
+        theme: settings?.theme ?? DEFAULT_STUDIO_SETTINGS.theme,
+        openDevtoolsOnLaunch: settings?.openDevtoolsOnLaunch ?? DEFAULT_STUDIO_SETTINGS.openDevtoolsOnLaunch,
+        profiles: Array.isArray(settings?.profiles) ? settings.profiles : DEFAULT_STUDIO_SETTINGS.profiles,
+        lastProfileId: settings?.lastProfileId,
+        defaultRouteMode: settings?.defaultRouteMode ?? DEFAULT_STUDIO_SETTINGS.defaultRouteMode,
+    };
 }
 
 export interface StudioConversationMessage {
@@ -78,6 +101,10 @@ export interface StudioTelemetrySnapshot {
     readonly memoryPercent?: number;
     readonly latencyMs?: number;
     readonly throughputTokensPerMinute?: number;
+    readonly uptimeMs?: number;
+    readonly connectedClients?: number;
+    readonly tick?: number;
+    readonly daemonPort?: number;
     readonly workerStatus?: WorkerQueueStatus;
 }
 
@@ -148,13 +175,21 @@ export interface SettingsSaveCommand extends StudioEnvelope {
     };
 }
 
+export interface SystemCommandCommand extends StudioEnvelope {
+    readonly type: 'system/command';
+    readonly payload: {
+        readonly command: 'status';
+    };
+}
+
 export type StudioRendererCommand =
     | SessionConnectCommand
     | SessionDisconnectCommand
     | ChatSendCommand
     | YieldRespondCommand
     | SettingsLoadCommand
-    | SettingsSaveCommand;
+    | SettingsSaveCommand
+    | SystemCommandCommand;
 
 export interface SessionStateEvent extends StudioEnvelope {
     readonly type: 'session/state';
@@ -217,6 +252,16 @@ export interface TunnelLogEvent extends StudioEnvelope {
     };
 }
 
+export interface OperatorLogEvent extends StudioEnvelope {
+    readonly type: 'operator/log';
+    readonly payload: {
+        readonly kind: 'daemon' | 'status' | 'session';
+        readonly level: StudioTunnelLogLevel;
+        readonly source: string;
+        readonly message: string;
+    };
+}
+
 export type StudioMainEvent =
     | SessionStateEvent
     | DaemonStreamChunkEvent
@@ -228,7 +273,8 @@ export type StudioMainEvent =
     | ForgeUpdateEvent
     | YieldRequestedEvent
     | YieldResolvedEvent
-    | TunnelLogEvent;
+    | TunnelLogEvent
+    | OperatorLogEvent;
 
 export type StudioContractMessage = StudioRendererCommand | StudioMainEvent;
 export type StudioCommandType = StudioRendererCommand['type'];

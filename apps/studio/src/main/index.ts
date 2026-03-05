@@ -3,9 +3,12 @@
  * desktop application with Electron main/preload/renderer entrypoints.
  */
 
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { app, BrowserWindow, ipcMain } from 'electron';
 import { join } from 'node:path';
 import {
+    DEFAULT_STUDIO_SETTINGS,
+    normalizeStudioSettings,
     STUDIO_IPC_COMMAND_CHANNEL,
     STUDIO_IPC_EVENT_CHANNEL,
     STUDIO_IPC_VERSION,
@@ -14,14 +17,36 @@ import {
     type StudioRendererCommand,
     type StudioSettings,
 } from '@redbusagent/shared/studio';
+import { StudioDaemonBridge } from './daemonBridge.js';
 
 let mainWindow: BrowserWindow | null = null;
 
-let studioSettings: StudioSettings = {
-    theme: 'system',
-    openDevtoolsOnLaunch: false,
-    profiles: [],
-};
+let studioSettings: StudioSettings = DEFAULT_STUDIO_SETTINGS;
+
+const bridge = new StudioDaemonBridge(emit);
+
+function getSettingsPath(): string {
+    return join(app.getPath('userData'), 'studio-settings.json');
+}
+
+function loadStudioSettings(): StudioSettings {
+    try {
+        const settingsPath = getSettingsPath();
+        if (!existsSync(settingsPath)) {
+            return DEFAULT_STUDIO_SETTINGS;
+        }
+
+        const raw = readFileSync(settingsPath, 'utf-8');
+        return normalizeStudioSettings(JSON.parse(raw) as Partial<StudioSettings>);
+    } catch {
+        return DEFAULT_STUDIO_SETTINGS;
+    }
+}
+
+function persistStudioSettings(settings: StudioSettings): void {
+    mkdirSync(app.getPath('userData'), { recursive: true });
+    writeFileSync(getSettingsPath(), JSON.stringify(settings, null, 2), 'utf-8');
+}
 
 function emit(event: StudioMainEvent): void {
     mainWindow?.webContents.send(STUDIO_IPC_EVENT_CHANNEL, event);
@@ -46,14 +71,9 @@ function createWindow(): void {
     mainWindow.on('ready-to-show', () => {
         mainWindow?.show();
         emit({
-            version: STUDIO_IPC_VERSION,
             type: 'session/state',
-            payload: {
-                sessionId: 'studio-shell',
-                connection: 'disconnected',
-                tunnel: 'idle',
-                daemon: 'disconnected',
-            },
+            version: STUDIO_IPC_VERSION,
+            payload: bridge.currentSessionState,
         });
     });
 
@@ -68,106 +88,53 @@ function createWindow(): void {
 ipcMain.handle(
     STUDIO_IPC_COMMAND_CHANNEL,
     async (_event, command: StudioRendererCommand): Promise<StudioCommandResult> => {
-        switch (command.type) {
-            case 'session/connect':
-                emit({
-                    version: STUDIO_IPC_VERSION,
-                    type: 'session/state',
-                    payload: {
-                        sessionId: 'studio-shell',
-                        connection: 'connecting',
-                        tunnel: 'opening',
-                        daemon: 'connecting',
-                        activeProfileId: command.payload.profileId,
-                    },
-                });
-                emit({
-                    version: STUDIO_IPC_VERSION,
-                    type: 'tunnel/log',
-                    payload: {
-                        level: 'info',
-                        message: `Prepared SSH tunnel scaffold to ${command.payload.tunnel.host}:${command.payload.tunnel.port}`,
-                        step: 'ssh/connect',
-                        remotePort: command.payload.tunnel.port,
-                    },
-                });
-                emit({
-                    version: STUDIO_IPC_VERSION,
-                    type: 'session/state',
-                    payload: {
-                        sessionId: 'studio-shell',
-                        connection: 'connected',
-                        tunnel: 'open',
-                        daemon: 'connected',
-                        activeProfileId: command.payload.profileId,
-                    },
-                });
-                return { ok: true, type: command.type, data: { connected: true } };
+        try {
+            switch (command.type) {
+                case 'session/connect': {
+                    const data = await bridge.connect(command.payload.profileId, command.payload.tunnel);
+                    return { ok: true, type: command.type, data };
+                }
 
-            case 'session/disconnect':
-                emit({
-                    version: STUDIO_IPC_VERSION,
-                    type: 'session/state',
-                    payload: {
-                        sessionId: 'studio-shell',
-                        connection: 'disconnected',
-                        tunnel: 'idle',
-                        daemon: 'disconnected',
-                    },
-                });
-                return { ok: true, type: command.type, data: { disconnected: true } };
+                case 'session/disconnect': {
+                    const data = await bridge.disconnect(command.payload.reason);
+                    return { ok: true, type: command.type, data };
+                }
 
-            case 'chat/send':
-                emit({
-                    version: STUDIO_IPC_VERSION,
-                    type: 'daemon/thought',
-                    payload: {
-                        text: 'Studio shell accepted the chat request. Wave 2 will wire daemon streaming here.',
-                        status: 'thinking',
-                    },
-                });
-                emit({
-                    version: STUDIO_IPC_VERSION,
-                    type: 'daemon/streamChunk',
-                    payload: {
-                        requestId: command.payload.requestId,
-                        delta: 'Studio IPC contract is live. ',
-                    },
-                });
-                emit({
-                    version: STUDIO_IPC_VERSION,
-                    type: 'daemon/streamDone',
-                    payload: {
-                        requestId: command.payload.requestId,
-                        fullText: `Queued message: ${command.payload.content}`,
-                        tier: command.payload.tier ?? 'live',
-                        model: 'studio-shell-placeholder',
-                    },
-                });
-                return { ok: true, type: command.type, data: { requestId: command.payload.requestId } };
+                case 'chat/send': {
+                    const data = bridge.sendChat(command.payload);
+                    return { ok: true, type: command.type, data };
+                }
 
-            case 'yield/respond':
-                emit({
-                    version: STUDIO_IPC_VERSION,
-                    type: 'yield/resolved',
-                    payload: {
-                        yieldId: command.payload.yieldId,
-                        resolution: 'submitted',
-                    },
-                });
-                return { ok: true, type: command.type, data: { yieldId: command.payload.yieldId } };
+                case 'yield/respond': {
+                    const data = bridge.respondToYield(command.payload);
+                    return { ok: true, type: command.type, data };
+                }
 
-            case 'settings/load':
-                return { ok: true, type: command.type, data: { settings: studioSettings } };
+                case 'system/command': {
+                    const data = bridge.sendSystemCommand(command.payload);
+                    return { ok: true, type: command.type, data };
+                }
 
-            case 'settings/save':
-                studioSettings = command.payload.settings;
-                return { ok: true, type: command.type, data: { settings: studioSettings } };
+                case 'settings/load':
+                    return { ok: true, type: command.type, data: { settings: studioSettings } };
+
+                case 'settings/save':
+                    studioSettings = normalizeStudioSettings(command.payload.settings);
+                    persistStudioSettings(studioSettings);
+                    return { ok: true, type: command.type, data: { settings: studioSettings } };
+            }
+        } catch (error) {
+            return {
+                ok: false,
+                type: command.type,
+                error: error instanceof Error ? error.message : 'Studio main process command failed.',
+            };
         }
     },
 );
 
 app.whenReady().then(() => {
+    studioSettings = loadStudioSettings();
     createWindow();
 
     app.on('activate', () => {
@@ -175,6 +142,10 @@ app.whenReady().then(() => {
             createWindow();
         }
     });
+});
+
+app.on('before-quit', () => {
+    void bridge.shutdown();
 });
 
 app.on('window-all-closed', () => {

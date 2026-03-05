@@ -2,6 +2,7 @@
   "name": "@redbusagent/studio",
   "version": "0.1.0",
   "private": true,
+  "author": "GuileCC <guiccardoso@gmail.com>",
   "description": "Redbus Studio desktop workspace (Electron main + preload + React renderer)",
   "type": "module",
   "main": "./out/main/index.js",
@@ -13,8 +14,9 @@
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
     "build": "npm run typecheck && electron-vite build",
     "dist": "npm run build && electron-builder",
-    "install:app-deps": "electron-builder install-app-deps",
-    "rebuild": "electron-rebuild -f -w ssh2"
+    "prepare:native-rebuild": "node ./scripts/prepare-native-rebuild.mjs",
+    "install:app-deps": "npm run prepare:native-rebuild && electron-builder install-app-deps",
+    "rebuild": "npm run prepare:native-rebuild && electron-rebuild -f -w ssh2"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",

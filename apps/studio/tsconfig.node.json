@@ -6,7 +6,10 @@
     "lib": ["ES2022"],
     "rootDir": "../../",
     "types": ["node", "electron"],
-    "baseUrl": "."
+    "baseUrl": ".",
+    "paths": {
+      "@redbusagent/shared/studio": ["../../packages/shared/src/types/studio.ts"]
+    }
   },
   "include": ["electron.vite.config.ts", "src/main/**/*.ts", "src/preload/**/*.ts"]
 }

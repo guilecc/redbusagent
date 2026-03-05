@@ -1,5 +1,6 @@
 appId: dev.redbusagent.studio
 productName: Redbus Studio
+beforeBuild: ./scripts/prepare-native-rebuild.mjs
 directories:
   output: dist
 files:

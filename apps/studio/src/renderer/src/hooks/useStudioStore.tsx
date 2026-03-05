@@ -1,13 +1,13 @@
 import { createContext, useContext, useReducer, type Dispatch, type ReactNode } from 'react';
-import type {
-    StudioSessionState,
-    StudioSettings,
-    StudioTelemetrySnapshot,
-    StudioForgeSnapshot,
-    StudioYieldRequest,
+import {
+    DEFAULT_STUDIO_SETTINGS,
+    normalizeStudioSettings,
+    type StudioForgeSnapshot,
+    type StudioSessionState,
+    type StudioSettings,
+    type StudioTelemetrySnapshot,
+    type StudioYieldRequest,
 } from '@redbusagent/shared/studio';
-
-// ─── Local UI types ───────────────────────────────────────────────
 
 export interface ChatMessage {
     id: string;
@@ -21,13 +21,20 @@ export interface ChatMessage {
 
 export interface ThoughtEntry {
     id: string;
-    kind: 'thought' | 'toolCall' | 'toolResult' | 'tunnelLog';
+    kind: 'thought' | 'toolCall' | 'toolResult';
     text: string;
     status?: string;
     timestamp: number;
 }
 
-// ─── State shape ──────────────────────────────────────────────────
+export interface ActivityEntry {
+    id: string;
+    level: 'info' | 'warn' | 'error' | 'debug';
+    source: string;
+    message: string;
+    detail?: string;
+    timestamp: number;
+}
 
 export interface StudioState {
     session: StudioSessionState;
@@ -36,20 +43,20 @@ export interface StudioState {
     forge: StudioForgeSnapshot;
     chat: ChatMessage[];
     thoughts: ThoughtEntry[];
+    activity: ActivityEntry[];
     yieldRequest: StudioYieldRequest | null;
 }
 
 export const INITIAL_STATE: StudioState = {
     session: { connection: 'disconnected', tunnel: 'idle', daemon: 'disconnected' },
-    settings: { theme: 'system', openDevtoolsOnLaunch: false, profiles: [] },
+    settings: DEFAULT_STUDIO_SETTINGS,
     telemetry: {},
     forge: { status: 'idle' },
     chat: [],
     thoughts: [],
+    activity: [],
     yieldRequest: null,
 };
-
-// ─── Actions ──────────────────────────────────────────────────────
 
 export type StudioAction =
     | { type: 'SET_SESSION'; payload: StudioSessionState }
@@ -60,6 +67,7 @@ export type StudioAction =
     | { type: 'UPDATE_STREAMING'; payload: { id: string; delta: string } }
     | { type: 'FINISH_STREAMING'; payload: { id: string; fullText: string; tier?: string; model?: string } }
     | { type: 'ADD_THOUGHT'; payload: ThoughtEntry }
+    | { type: 'ADD_ACTIVITY'; payload: ActivityEntry }
     | { type: 'SET_YIELD'; payload: StudioYieldRequest | null };
 
 function studioReducer(state: StudioState, action: StudioAction): StudioState {
@@ -67,9 +75,9 @@ function studioReducer(state: StudioState, action: StudioAction): StudioState {
         case 'SET_SESSION':
             return { ...state, session: action.payload };
         case 'SET_SETTINGS':
-            return { ...state, settings: action.payload };
+            return { ...state, settings: normalizeStudioSettings(action.payload) };
         case 'SET_TELEMETRY':
-            return { ...state, telemetry: action.payload };
+            return { ...state, telemetry: { ...state.telemetry, ...action.payload } };
         case 'SET_FORGE':
             return { ...state, forge: action.payload };
         case 'ADD_CHAT':
@@ -77,31 +85,37 @@ function studioReducer(state: StudioState, action: StudioAction): StudioState {
         case 'UPDATE_STREAMING':
             return {
                 ...state,
-                chat: state.chat.map((m) =>
-                    m.id === action.payload.id
-                        ? { ...m, content: m.content + action.payload.delta }
-                        : m,
+                chat: state.chat.map((message) =>
+                    message.id === action.payload.id
+                        ? { ...message, content: message.content + action.payload.delta }
+                        : message,
                 ),
             };
         case 'FINISH_STREAMING':
             return {
                 ...state,
-                chat: state.chat.map((m) =>
-                    m.id === action.payload.id
-                        ? { ...m, content: action.payload.fullText, streaming: false, tier: action.payload.tier, model: action.payload.model }
-                        : m,
+                chat: state.chat.map((message) =>
+                    message.id === action.payload.id
+                        ? {
+                            ...message,
+                            content: action.payload.fullText,
+                            streaming: false,
+                            tier: action.payload.tier,
+                            model: action.payload.model,
+                        }
+                        : message,
                 ),
             };
         case 'ADD_THOUGHT':
             return { ...state, thoughts: [...state.thoughts, action.payload].slice(-200) };
+        case 'ADD_ACTIVITY':
+            return { ...state, activity: [...state.activity, action.payload].slice(-200) };
         case 'SET_YIELD':
             return { ...state, yieldRequest: action.payload };
         default:
             return state;
     }
 }
-
-// ─── Context ──────────────────────────────────────────────────────
 
 const StudioStateCtx = createContext<StudioState>(INITIAL_STATE);
 const StudioDispatchCtx = createContext<Dispatch<StudioAction>>(() => {});
