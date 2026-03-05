@@ -4,7 +4,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain, nativeImage } from 'electron';
 import { join } from 'node:path';
 import {
     DEFAULT_STUDIO_SETTINGS,
@@ -52,7 +52,24 @@ function emit(event: StudioMainEvent): void {
     mainWindow?.webContents.send(STUDIO_IPC_EVENT_CHANNEL, event);
 }
 
+function getAppIcon(): Electron.NativeImage | undefined {
+    try {
+        if (process.platform === 'darwin') {
+            return nativeImage.createFromPath(join(__dirname, '../../icons/macos/icon.icns'));
+        }
+        if (process.platform === 'win32') {
+            return nativeImage.createFromPath(join(__dirname, '../../icons/windows/icon.ico'));
+        }
+        // Linux
+        return nativeImage.createFromPath(join(__dirname, '../../icons/linux/icons/256x256.png'));
+    } catch {
+        return undefined;
+    }
+}
+
 function createWindow(): void {
+    const icon = getAppIcon();
+
     mainWindow = new BrowserWindow({
         width: 1440,
         height: 900,
@@ -61,8 +78,9 @@ function createWindow(): void {
         show: false,
         autoHideMenuBar: true,
         title: 'Redbus Studio',
+        ...(icon ? { icon } : {}),
         webPreferences: {
-            preload: join(__dirname, '../preload/index.mjs'),
+            preload: join(__dirname, '../preload/index.js'),
             contextIsolation: true,
             nodeIntegration: false,
         },
@@ -70,12 +88,27 @@ function createWindow(): void {
 
     mainWindow.on('ready-to-show', () => {
         mainWindow?.show();
+        // Useful for debugging blank screen
+        // mainWindow?.webContents.openDevTools();
+
         emit({
             type: 'session/state',
             version: STUDIO_IPC_VERSION,
             payload: bridge.currentSessionState,
         });
     });
+
+    // --- DEBUGGING RENDERER ---
+    mainWindow.webContents.on('console-message', (event, level, message, line, sourceId) => {
+        console.log(`[Renderer Console] [Level ${level}] ${message} (${sourceId}:${line})`);
+    });
+    mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
+        console.error(`[Renderer fail-load] [${errorCode}] ${errorDescription} - ${validatedURL}`);
+    });
+    mainWindow.webContents.on('render-process-gone', (event, details) => {
+        console.error(`[Renderer process gone] Reason: ${details.reason}, ExitCode: ${details.exitCode}`);
+    });
+    // ----------------------------
 
     if (process.env['ELECTRON_RENDERER_URL']) {
         void mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL']);

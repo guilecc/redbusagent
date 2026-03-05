@@ -6,10 +6,19 @@ directories:
 files:
   - out/**
   - package.json
+  - icons/**
+icon: icons/icon.png
 mac:
+  icon: icons/macos/icon.icns
   target:
     - dmg
     - zip
 win:
+  icon: icons/windows/icon.ico
   target:
     - nsis
+linux:
+  icon: icons/linux/icons
+  target:
+    - AppImage
+    - deb

@@ -44,6 +44,7 @@ playwright-report/
 blob-report/
 playwright/.cache/
 coverage/
+test-screenshots/
 
 # Local Testing / Agent Data (Vaults, Vector DBs, etc.)
 .redbusagent/

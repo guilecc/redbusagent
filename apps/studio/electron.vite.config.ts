@@ -14,7 +14,7 @@ export default defineConfig({
         },
     },
     preload: {
-        plugins: [externalizeDepsPlugin()],
+        plugins: [externalizeDepsPlugin({ exclude: ['@redbusagent/shared/studio', '@redbusagent/shared'] })],
         resolve: {
             alias: {
                 '@redbusagent/shared/studio': sharedStudioEntry,

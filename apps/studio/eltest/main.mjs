@@ -1,0 +1,1 @@
+import { app } from "electron"; console.log("esm app type:", typeof app); app.whenReady().then(() => { console.log("APP READY"); app.quit(); });
