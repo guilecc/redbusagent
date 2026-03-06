@@ -1,5 +1,10 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
-import { ApprovalGateManager, DEFAULT_APPROVAL_TIMEOUT_MS } from './approval-gate.js';
+import {
+    ApprovalGateManager,
+    clearAllToolExecutionContexts,
+    getRestrictedWorkerShellAutoApproval,
+    type ToolExecutionContext,
+} from './approval-gate.js';
 import { engineBus } from './engine-message-bus.js';
 
 let gate: ApprovalGateManager;
@@ -11,6 +16,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+    clearAllToolExecutionContexts();
     engineBus.reset();
     vi.useRealTimers();
 });
@@ -185,6 +191,60 @@ describe('orchestration lifecycle', () => {
             replyPreview: 'Approval granted once',
         });
         expect(engineBus.getSession('approval-other-task')?.lastEventType).toBe('task_created');
+    });
+});
+
+describe('restricted shell auto-approval policy', () => {
+    const collaborativeWorkerContext: ToolExecutionContext = {
+        toolCallId: 'tool-1',
+        toolName: 'execute_shell_command',
+        args: {},
+        actor: 'worker',
+        mode: 'collaborative',
+        sessionId: 'worker-safe-task',
+        taskId: 'worker-safe-task',
+    };
+
+    it('auto-approves simple worker vault runtime commands tied to the active collaborative execution context', () => {
+        expect(getRestrictedWorkerShellAutoApproval(
+            'node -e "Vault.storeCredential(\"outlook.com\", \"user\", \"secret\")"',
+            collaborativeWorkerContext,
+        )).toEqual({
+            approved: true,
+            rationale: 'worker collaborative vault runtime command',
+        });
+    });
+
+    it('auto-approves simple forge runtime commands tied to the active collaborative execution context', () => {
+        expect(getRestrictedWorkerShellAutoApproval(
+            'npm install --prefix "$REDBUSAGENT_FORGE_DIR" playwright',
+            collaborativeWorkerContext,
+        )).toEqual({
+            approved: true,
+            rationale: 'worker collaborative forge runtime command',
+        });
+    });
+
+    it('preserves HITL for chained shell commands, arbitrary commands, or non-worker contexts', () => {
+        expect(getRestrictedWorkerShellAutoApproval(
+            'cd "$REDBUSAGENT_FORGE_DIR" && npm install playwright',
+            collaborativeWorkerContext,
+        )).toEqual({ approved: false });
+
+        expect(getRestrictedWorkerShellAutoApproval(
+            'rm -rf "$REDBUSAGENT_FORGE_DIR"',
+            collaborativeWorkerContext,
+        )).toEqual({ approved: false });
+
+        expect(getRestrictedWorkerShellAutoApproval(
+            'node -e "Vault.storeBrowserSession(\"outlook.com\", { ok: true })"',
+            { ...collaborativeWorkerContext, actor: 'live' },
+        )).toEqual({ approved: false });
+
+        expect(getRestrictedWorkerShellAutoApproval(
+            'node -e "Vault.storeCredential(\"outlook.com\", \"user\", \"secret\")"',
+            { ...collaborativeWorkerContext, sessionId: undefined },
+        )).toEqual({ approved: false });
     });
 });
 
