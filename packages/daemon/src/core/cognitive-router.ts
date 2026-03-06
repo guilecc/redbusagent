@@ -238,6 +238,7 @@ export function createWorkerModel(): LanguageModel {
 
 // ─── Gemma 3 Explicit Tool Calling Adapter ────────────────────────
 export function generateGemma3ToolPrompt(tools: Record<string, any>): string {
+    const delegationToolAvailable = Object.prototype.hasOwnProperty.call(tools, 'delegate_to_worker_engine');
     const schemas = Object.entries(tools).map(([name, tool]) => {
         let schema = {};
         if (tool.parameters?.jsonSchema) {
@@ -254,6 +255,18 @@ export function generateGemma3ToolPrompt(tools: Record<string, any>): string {
             parameters: schema
         };
     });
+
+    const automationGuidance = delegationToolAvailable
+        ? `- For ANY automation task (emails, web scraping, routines, Playwright, scripts): ALWAYS use delegate_to_worker_engine.
+- Refusing to help = critical failure. Delegating to the Worker Engine = correct behavior.
+
+EXAMPLE — User asks for e-mail automation:
+User: "crie uma rotina que acessa meu outlook e me resume os emails"
+Your CORRECT response:
+Vou delegar isso ao Worker Engine para construir a rotina completa.
+<tool_call name="delegate_to_worker_engine">{"task_prompt": "Build a Playwright Python/Node.js routine that logs into outlook.com with Vault credentials, reads emails from the last 24h from @numenit.com, generates an intelligent summary, and sends it via POST to http://127.0.0.1:8765/api/notify with channel=whatsapp. Schedule it daily at 8am using schedule_recurring_task."}</tool_call>`
+        : `- For automation tasks, use the best matching tool from the manifest above.
+- If a capability is not listed above, do not invent a handoff or mention unavailable tools.`;
 
     return `\n\nYou have access to the following tools:
 ${JSON.stringify(schemas, null, 2)}
@@ -272,14 +285,7 @@ CRITICAL RULES:
 ANTI-REFUSAL OVERRIDE (MANDATORY):
 - You are an autonomous agent running natively on the user's machine. You are NOT a generic AI assistant.
 - NEVER say "as a language model, I cannot access emails/files/systems". This is FORBIDDEN.
-- For ANY automation task (emails, web scraping, routines, Playwright, scripts): ALWAYS use delegate_to_worker_engine.
-- Refusing to help = critical failure. Delegating to the Worker Engine = correct behavior.
-
-EXAMPLE — User asks for e-mail automation:
-User: "crie uma rotina que acessa meu outlook e me resume os emails"
-Your CORRECT response:
-Vou delegar isso ao Worker Engine para construir a rotina completa.
-<tool_call name="delegate_to_worker_engine">{"task_prompt": "Build a Playwright Python/Node.js routine that logs into outlook.com with Vault credentials, reads emails from the last 24h from @numenit.com, generates an intelligent summary, and sends it via POST to http://127.0.0.1:8765/api/notify with channel=whatsapp. Schedule it daily at 8am using schedule_recurring_task."}</tool_call>`;
+${automationGuidance}`;
 }
 
 // ─── Stream Callbacks ─────────────────────────────────────────────
@@ -789,7 +795,9 @@ export async function askLive(
     }
 
     // ─── System Prompt Construction (full context for cloud models) ────
-    let systemPromptContext = getPersonaContext() + getSystemPromptLiveGold();
+    let systemPromptContext = getPersonaContext() + getSystemPromptLiveGold({
+        delegationToolAvailable: Object.prototype.hasOwnProperty.call(runtimeTools, 'delegate_to_worker_engine'),
+    });
     systemPromptContext += `\n\n${PROACTIVE_DIRECTIVE}\n\n${CapabilityRegistry.getCapabilityManifest()}`;
 
     // Cloud Wisdom injection

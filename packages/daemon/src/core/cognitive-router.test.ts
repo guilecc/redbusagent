@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildDelegatedWorkerOutcome, resolveLiveExecutionPlan, selectExecutionMode } from './cognitive-router.js';
+import { buildDelegatedWorkerOutcome, generateGemma3ToolPrompt, resolveLiveExecutionPlan, selectExecutionMode } from './cognitive-router.js';
 
 describe('buildDelegatedWorkerOutcome', () => {
     it('marks delegated execution as bounded failure when a tool fails without repair', () => {
@@ -114,5 +114,31 @@ describe('resolveLiveExecutionPlan', () => {
             routeTier: 'live',
             enableDelegation: false,
         });
+    });
+});
+
+describe('generateGemma3ToolPrompt', () => {
+    it('does not instruct delegation when the worker handoff tool is unavailable', () => {
+        const prompt = generateGemma3ToolPrompt({
+            create_and_run_tool: {
+                description: 'Forge and run a script.',
+                parameters: { type: 'object', properties: {} },
+            },
+        });
+
+        expect(prompt).not.toContain('delegate_to_worker_engine');
+        expect(prompt).toContain('use the best matching tool from the manifest above');
+    });
+
+    it('keeps delegation instructions when the worker handoff tool is available', () => {
+        const prompt = generateGemma3ToolPrompt({
+            delegate_to_worker_engine: {
+                description: 'Delegate work to the worker engine.',
+                parameters: { type: 'object', properties: {} },
+            },
+        });
+
+        expect(prompt).toContain('delegate_to_worker_engine');
+        expect(prompt).toContain('ALWAYS use delegate_to_worker_engine');
     });
 });

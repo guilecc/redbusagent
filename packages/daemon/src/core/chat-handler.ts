@@ -8,7 +8,7 @@
 import type { DaemonWsServer } from '../infra/ws-server.js';
 import type { ChatRequestMessage } from '@redbusagent/shared';
 import { PersonaManager, Vault } from '@redbusagent/shared';
-import { askLive, askTier2 } from './cognitive-router.js';
+import { askLive, askTier2, type RouterExecutionMode } from './cognitive-router.js';
 import { getLiveEngineConfig } from '../infra/llm-config.js';
 import { resolveSenderRole } from './tool-policy.js';
 
@@ -105,10 +105,52 @@ export class ChatHandler {
     ): Promise<void> {
         const { requestId } = message.payload;
         let { content, tier, isOnboarding, messages } = message.payload;
-        let forcedExecutionMode: 'local-only' | undefined;
+        let forcedExecutionMode: RouterExecutionMode | undefined;
 
         const vaultConfig = Vault.read();
         let targetTier = this.forceLive ? 'live' : tier;
+
+        if (/^\/(worker|deep)\b/i.test(content.trim())) {
+            const explicitWorkerPrompt = content.replace(/^\/(worker|deep)\b\s*/i, '').trim();
+
+            if (!explicitWorkerPrompt) {
+                this.wsServer.broadcast({
+                    type: 'chat:error',
+                    timestamp: new Date().toISOString(),
+                    payload: {
+                        requestId,
+                        error: 'Usage: /worker <your prompt> — Sends the prompt to the Worker Engine for deep processing.',
+                    },
+                });
+                this.wsServer.broadcast({
+                    type: 'chat:stream:done',
+                    timestamp: new Date().toISOString(),
+                    payload: { requestId, fullText: '', tier: 'live', model: 'system' },
+                });
+                return;
+            }
+
+            if (!vaultConfig?.worker_engine?.enabled) {
+                this.wsServer.broadcast({
+                    type: 'chat:error',
+                    timestamp: new Date().toISOString(),
+                    payload: {
+                        requestId,
+                        error: 'Worker Engine is disabled. Run redbus config to enable it.',
+                    },
+                });
+                this.wsServer.broadcast({
+                    type: 'chat:stream:done',
+                    timestamp: new Date().toISOString(),
+                    payload: { requestId, fullText: '', tier: 'live', model: 'system' },
+                });
+                return;
+            }
+
+            targetTier = 'live';
+            forcedExecutionMode = 'collaborative';
+            content = explicitWorkerPrompt;
+        }
 
         // ─── User Input Gate Interception (ask_user_for_input) ──────
         if (userInputManager.hasPendingQuestions()) {
@@ -222,7 +264,7 @@ Return ONLY the JSON object. Do not explain.`;
         }
 
         // Trivial escape hatch force-routing to Live Engine (Slash Command menu equivalent)
-        if (content.trim().toLowerCase().startsWith('/local')) {
+        if (!forcedExecutionMode && content.trim().toLowerCase().startsWith('/local')) {
             targetTier = 'live';
             forcedExecutionMode = 'local-only';
             content = content.replace(/^\/local\s*/i, '');

@@ -192,6 +192,7 @@ export function Dashboard(): React.ReactElement {
 
     const submitMessage = useCallback((text: string) => {
         let finalMessage = text.trim();
+        let requestContent = finalMessage;
         if (!finalMessage || !clientRef.current || isStreaming) return;
 
         let currentTierForLog = defaultTier;
@@ -200,6 +201,7 @@ export function Dashboard(): React.ReactElement {
             let handled = false;
             let actualCmd = '';
             let rest = '';
+            let shouldForceWorker = false;
 
             const commands = ['/toggle-tier', '/model', '/switch-cloud', '/auto-route', '/status', '/worker', '/deep'];
             for (const c of commands) {
@@ -233,12 +235,8 @@ export function Dashboard(): React.ReactElement {
                         ...prev.slice(-(MAX_CHAT_LINES - 1)),
                         `🏗️ Delegating to Worker Engine: "${rest.slice(0, 80)}${rest.length > 80 ? '...' : ''}"`
                     ]);
-                    clientRef.current?.send({
-                        type: 'system:command',
-                        timestamp: new Date().toISOString(),
-                        payload: { command: 'force-worker' as any, args: { content: rest } }
-                    });
-                    return;
+                    shouldForceWorker = true;
+                    currentTierForLog = 1;
                 } else if (actualCmd === '/toggle-tier') {
                     const nextTier = defaultTier === 1 ? 2 : 1;
                     const config = Vault.read();
@@ -284,6 +282,7 @@ export function Dashboard(): React.ReactElement {
 
                 if (!rest) return;
                 finalMessage = rest;
+                requestContent = shouldForceWorker ? `${actualCmd} ${rest}` : rest;
             }
         }
 
@@ -310,7 +309,7 @@ export function Dashboard(): React.ReactElement {
             timestamp: new Date().toISOString(),
             payload: {
                 requestId,
-                content: finalMessage,
+                content: requestContent,
                 isOnboarding,
             },
         };

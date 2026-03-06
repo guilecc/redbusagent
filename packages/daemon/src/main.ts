@@ -133,6 +133,15 @@ const wsServer = new DaemonWsServer({
                         timestamp: new Date().toISOString(),
                         payload: { level: 'info', source: 'System', message: 'Automatic routing restored' }
                     });
+                } else if (command === 'force-worker') {
+                    wsServer.sendTo(clientId, {
+                        type: 'chat:error',
+                        timestamp: new Date().toISOString(),
+                        payload: {
+                            requestId: 'sys',
+                            error: 'Explicit /worker requests must be sent as a chat prompt (for example: /worker <your prompt>). This client is using a deprecated command path.'
+                        }
+                    });
                 } else if (command === 'status') {
                     const status = getRouterStatus();
                     const mem = process.memoryUsage();
