@@ -1,19 +1,18 @@
 import React, { useState } from 'react';
-import { Terminal, Copy, CheckCircle2, Globe, Shield, MessageSquare, Database, Skull, Play, Brain, Camera, UserCircle, Cpu, Zap } from 'lucide-react';
-import { Changelog } from './components/Changelog';
+import { Terminal, Copy, CheckCircle2, Shield, MessageSquare, Database, Brain, Eye, Server, Zap, MonitorSmartphone } from 'lucide-react';
 
 function App() {
     const [copiedMac, setCopiedMac] = useState(false);
     const [copiedWin, setCopiedWin] = useState(false);
 
     const baseUrl = import.meta.env.VITE_INSTALL_BASE_URL || 'https://redbus.pages.dev';
-    const macCommand = `curl -fsSL ${baseUrl}/install.sh | bash`;
-    const winCommand = `irm ${baseUrl}/install.ps1 | iex`;
+    const linuxCommand = `curl -fsSL ${baseUrl}/install.sh | bash`;
+    const docCommand = `npm run start:daemon`;
 
-    const copyToClipboard = async (text: string, isMac: boolean) => {
+    const copyToClipboard = async (text: string, isLinux: boolean) => {
         try {
             await navigator.clipboard.writeText(text);
-            if (isMac) {
+            if (isLinux) {
                 setCopiedMac(true);
                 setTimeout(() => setCopiedMac(false), 2000);
             } else {
@@ -26,179 +25,165 @@ function App() {
     };
 
     return (
-        <div className="min-h-screen bg-black text-white font-sans selection:bg-red-600/40">
-            {/* Brutalist Navbar */}
-            <nav className="fixed top-0 w-full z-50 border-b-2 border-white/10 bg-black">
-                <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 bg-red-600 flex items-center justify-center font-bold text-xl text-black rotate-[-5deg]">
-                            R
-                        </div>
-                        <span className="font-bold text-2xl tracking-tighter uppercase">Redbus</span>
+        <div className="min-h-screen bg-[#050000] text-gray-100 font-sans selection:bg-brand-500/40">
+            {/* Header / Navbar */}
+            <nav className="fixed top-0 w-full z-50 bg-[#0a0000]/90 backdrop-blur-md border-b border-brand-500/20 shadow-[0_4px_30px_rgba(220,38,38,0.1)]">
+                <div className="max-w-6xl mx-auto px-6 h-20 flex items-center justify-between">
+                    <div className="flex items-center gap-4">
+                        <img src="/icon.png" alt="Redbus Logo" className="w-12 h-12 rounded-xl shadow-lg shadow-brand-500/40 object-cover border border-brand-500/30" />
+                        <span className="font-bold text-2xl tracking-tight text-white uppercase">Redbus</span>
                     </div>
-                    <div className="flex items-center space-x-6 text-sm font-bold uppercase text-white/50">
-                        <a href="https://github.com/guilecc/redbusagent" target="_blank" rel="noreferrer" className="hover:text-red-500 transition-colors">GitHub</a>
-                        <a href="#features" className="hover:text-red-500 transition-colors">Features</a>
-                        <a href="#changelog" className="hover:text-red-500 transition-colors">Logs</a>
+                    <div className="flex items-center space-x-6 text-sm font-semibold text-gray-300 uppercase tracking-wider">
+                        <a href="#how-it-works" className="hover:text-brand-400 transition-colors">How it Works</a>
+                        <a href="#features" className="hover:text-brand-400 transition-colors">Features</a>
+                        <a href="https://github.com/guilecc/redbusagent" target="_blank" rel="noreferrer" className="hover:text-brand-400 transition-colors">GitHub</a>
                     </div>
                 </div>
             </nav>
 
-            <main className="relative pt-40 pb-20 overflow-hidden">
-                {/* Aggressive Red Splatter Background */}
-                <div className="absolute top-0 right-0 w-[600px] h-[600px] bg-red-600/10 rounded-full blur-[150px] pointer-events-none"></div>
+            <main className="relative pt-36 pb-20 overflow-hidden">
+                {/* Intense Red Background Glow */}
+                <div className="absolute top-[-20%] left-1/2 -translate-x-1/2 w-[900px] h-[700px] bg-brand-600/20 rounded-full blur-[150px] pointer-events-none"></div>
 
-                <div className="max-w-5xl mx-auto px-6 text-center space-y-10 relative z-10">
-                    <h1 className="text-6xl md:text-8xl font-black tracking-tighter uppercase leading-[0.9]">
-                        Yeah, another<br />
-                        <span className="text-red-600 line-through decoration-white/30 mr-4">moltbot</span>
-                        <span className="text-red-600 line-through decoration-white/30 mr-4">openclaw</span><br />
-                        <span className="text-white">claw.</span>
+                <div className="max-w-5xl mx-auto px-6 text-center space-y-8 relative z-10">
+                    <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-brand-950/60 border border-brand-500/30 text-brand-400 text-sm font-bold uppercase tracking-widest shadow-[0_0_15px_rgba(220,38,38,0.2)] mb-4">
+                        <Server size={16} />
+                        <span>Built for GPU Cloud Instances</span>
+                    </div>
+
+                    <h1 className="text-5xl md:text-7xl font-black tracking-tight text-white leading-[1.1] uppercase">
+                        An AI agent engineered for <br className="hidden md:block" />
+                        <span className="text-transparent bg-clip-text bg-gradient-to-r from-brand-400 via-red-500 to-rose-600 drop-shadow-[0_0_20px_rgba(220,38,38,0.3)]">powerful cloud infra</span>.
                     </h1>
+
                     <div className="space-y-4">
-                        <p className="text-2xl md:text-3xl font-medium tracking-tight text-white/80 max-w-3xl mx-auto">
-                            Just playing with names up there — this is actually <span className="text-red-500 font-bold">truly inspired</span>, even though it's not a fork.
-                        </p>
-                        <p className="text-base md:text-lg text-white/40 max-w-2xl mx-auto">
-                            All inspirations are credited in the code. ;)
+                        <p className="text-xl md:text-2xl text-gray-300 max-w-3xl mx-auto font-medium">
+                            Deploy Redbus on your GPU VPS. Powered by <strong className="text-blue-500 font-black drop-shadow-[0_0_12px_rgba(59,130,246,0.8)]">Gemma 3</strong>, it manages long-running automation tasks, navigates the web autonomously, and can be fully controlled over WhatsApp or SSH while your heavy models crush data in the background.
                         </p>
                     </div>
 
+                    {/* Installation / Call to Action */}
                     <div className="flex flex-col sm:flex-row items-center justify-center gap-6 pt-12">
                         {/* Command Box 1 */}
-                        <div className="bg-black border-2 border-white/10 hover:border-red-600 p-6 w-full max-w-lg text-left transition-all duration-300 relative group group-hover:-translate-y-1">
-                            <div className="absolute -top-3 -left-3 bg-red-600 text-black text-xs font-bold uppercase px-2 py-1 rotate-[-5deg]">
-                                macOS / Linux
+                        <div className="bg-[#0f0202] backdrop-blur-sm border border-brand-500/20 hover:border-brand-500/60 rounded-2xl p-6 w-full max-w-lg text-left shadow-[0_10px_30px_rgba(220,38,38,0.05)] hover:shadow-[0_10px_40px_rgba(220,38,38,0.15)] transition-all duration-300">
+                            <div className="flex items-center gap-2 mb-3">
+                                <Terminal size={18} className="text-brand-400" />
+                                <span className="text-sm font-bold text-gray-200 uppercase tracking-wide">Install on Debian / Ubuntu</span>
                             </div>
-                            <div className="flex mt-2 bg-white/5 border border-white/10 p-4 items-center justify-between font-mono text-sm cursor-pointer hover:bg-white/10 transition-colors" onClick={() => copyToClipboard(macCommand, true)}>
-                                <code className="text-white mr-2 break-all">$ {macCommand}</code>
-                                <button className="text-red-500 hover:text-white flex-shrink-0 transition-colors">
+                            <div className="flex bg-black border border-white/5 rounded-xl p-3 items-center justify-between font-mono text-sm cursor-pointer hover:bg-[#1a0505] transition-colors" onClick={() => copyToClipboard(linuxCommand, true)}>
+                                <code className="text-brand-100 mr-2 break-all">{linuxCommand}</code>
+                                <button className="text-brand-500 hover:text-white flex-shrink-0 transition-colors" title="Copy command">
                                     {copiedMac ? <CheckCircle2 size={18} /> : <Copy size={18} />}
                                 </button>
                             </div>
                         </div>
 
                         {/* Command Box 2 */}
-                        <div className="bg-black border-2 border-white/10 hover:border-red-600 p-6 w-full max-w-lg text-left transition-all duration-300 relative group group-hover:-translate-y-1">
-                            <div className="absolute -top-3 -left-3 bg-white text-black text-xs font-bold uppercase px-2 py-1 rotate-[-5deg]">
-                                Windows
+                        <div className="bg-[#0f0202] backdrop-blur-sm border border-brand-500/20 hover:border-brand-500/60 rounded-2xl p-6 w-full max-w-lg text-left shadow-[0_10px_30px_rgba(220,38,38,0.05)] hover:shadow-[0_10px_40px_rgba(220,38,38,0.15)] transition-all duration-300">
+                            <div className="flex items-center gap-2 mb-3">
+                                <Zap size={18} className="text-brand-400" />
+                                <span className="text-sm font-bold text-gray-200 uppercase tracking-wide">Start the Headless Engine</span>
                             </div>
-                            <div className="flex mt-2 bg-white/5 border border-white/10 p-4 items-center justify-between font-mono text-sm cursor-pointer hover:bg-white/10 transition-colors" onClick={() => copyToClipboard(winCommand, false)}>
-                                <code className="text-gray-400 mr-2 break-all">PS&gt; {winCommand}</code>
-                                <button className="text-red-500 hover:text-white flex-shrink-0 transition-colors">
+                            <div className="flex bg-black border border-white/5 rounded-xl p-3 items-center justify-between font-mono text-sm cursor-pointer hover:bg-[#1a0505] transition-colors" onClick={() => copyToClipboard(docCommand, false)}>
+                                <code className="text-brand-100 mr-2 break-all">{docCommand}</code>
+                                <button className="text-brand-500 hover:text-white flex-shrink-0 transition-colors" title="Copy command">
                                     {copiedWin ? <CheckCircle2 size={18} /> : <Copy size={18} />}
                                 </button>
                             </div>
                         </div>
                     </div>
+                    <p className="text-sm text-gray-400 pt-6 font-medium">SSH into your instance, paste the deployment script, and watch it boot up.</p>
                 </div>
             </main>
 
-            <section id="features" className="py-32 border-t-2 border-white/10 bg-black relative z-10">
+            <section id="how-it-works" className="py-24 border-t border-brand-500/10 bg-black relative z-10">
                 <div className="max-w-6xl mx-auto px-6">
-                    <div className="mb-20">
-                        <h2 className="text-5xl md:text-6xl font-black tracking-tighter uppercase border-l-8 border-red-600 pl-6">
-                            What's<br />Under the Hood.
+                    <div className="text-center mb-16">
+                        <h2 className="text-4xl md:text-5xl font-black tracking-tight text-white mb-4 uppercase">
+                            Intelligence that scales with hardware
                         </h2>
+                        <p className="text-lg text-gray-400 max-w-2xl mx-auto font-medium">
+                            Unlike rigid CLI tools, Redbus acts as an autonomous background daemon that takes full advantage of your cloud instance's resources to execute complex reasoning workflows, fueled by Google's Gemma 3.
+                        </p>
                     </div>
 
-                    {/* ── Dual-Cloud Architecture Hero Card ── */}
-                    <div className="mb-12 p-8 border-2 border-red-600 bg-gradient-to-br from-[#0a0000] to-[#1a0505] relative group">
-                        <div className="absolute -top-4 -left-4 bg-red-600 text-black text-xs font-black uppercase px-3 py-1.5 rotate-[-3deg] tracking-widest">
-                            NEW — Dual-Cloud Architecture
-                        </div>
-                        <div className="flex flex-col md:flex-row gap-8 items-start mt-4">
-                            <div className="flex-1 space-y-4">
-                                <h3 className="text-3xl font-black uppercase tracking-tight text-white">
-                                    Two Brains. All Cloud. Maximum Power.
+                    {/* Dual-Cloud Architecture Hero Card */}
+                    <div className="mb-16 p-8 md:p-12 rounded-3xl border border-brand-500/30 bg-gradient-to-br from-[#1a0505] to-[#0a0000] shadow-[0_20px_50px_rgba(220,38,38,0.1)] relative overflow-hidden group">
+                        <div className="absolute top-0 right-0 w-80 h-80 bg-brand-500/10 rounded-full blur-[100px]"></div>
+                        <div className="flex flex-col md:flex-row gap-10 items-center relative z-10">
+                            <div className="flex-1 space-y-6">
+                                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-brand-500/20 text-brand-300 border border-brand-500/30 text-xs font-black uppercase tracking-widest shadow-[0_0_10px_rgba(220,38,38,0.2)]">
+                                    Redbus Core Architecture
+                                </div>
+                                <h3 className="text-3xl font-black text-white leading-snug uppercase">
+                                    Dual-Engine Routing for maximum efficiency.
                                 </h3>
-                                <p className="text-white/60 text-lg leading-relaxed">
-                                    A fast, low-latency cloud model (<span className="text-red-400 font-bold">Live Engine</span>) handles your instant chat responses.
-                                    Meanwhile, a powerful reasoning model (<span className="text-blue-400 font-bold">Worker Engine</span>) runs in the background — handling deep analysis, memory distillation, and insight generation without ever blocking your conversation.
-                                </p>
-                                <p className="text-white/40">
-                                    Pick your providers: Gemini Flash for speed, Claude Sonnet for intelligence, or run local models via Ollama for free and private inference. Mix and match.
+                                <p className="text-gray-300 text-lg leading-relaxed font-medium">
+                                    Redbus operates using a concurrent multi-model system. The <strong className="text-brand-400">Live Engine</strong> ensures lightning-fast responses on your chat interfaces via lightweight APIs. Meanwhile, the <strong className="text-brand-400">Worker Engine</strong> heavily leverages your VPS's memory and GPUs running <strong className="text-blue-500 font-black drop-shadow-[0_0_12px_rgba(59,130,246,0.8)]">Gemma 3</strong> in the background for continuous data crunching, visual parsing, and memory distillation.
                                 </p>
                             </div>
-                            <div className="flex flex-col gap-3 min-w-[220px]">
-                                <div className="flex items-center gap-3 p-3 border border-red-600/40 bg-red-600/5">
-                                    <Zap size={20} className="text-red-500" />
+                            <div className="flex flex-col gap-4 min-w-[280px] w-full md:w-auto">
+                                <div className="flex items-center gap-4 p-4 rounded-xl border border-brand-500/40 bg-[#1a0505]/80 backdrop-blur-sm shadow-[0_4px_20px_rgba(220,38,38,0.1)]">
+                                    <div className="p-3 bg-brand-500/20 rounded-lg text-brand-400"><Zap size={24} /></div>
                                     <div>
-                                        <div className="text-sm font-bold text-red-400 uppercase">Live Engine</div>
-                                        <div className="text-xs text-white/40">Cloud API — Low latency</div>
+                                        <div className="text-sm font-bold text-white uppercase tracking-wider">Live Engine</div>
+                                        <div className="text-xs text-gray-400 font-medium">Low-latency daily interactions</div>
                                     </div>
                                 </div>
-                                <div className="flex items-center gap-3 p-3 border border-blue-600/40 bg-blue-600/5">
-                                    <Cpu size={20} className="text-blue-500" />
+                                <div className="flex items-center gap-4 p-4 rounded-xl border border-rose-500/40 bg-[#1a0505]/80 backdrop-blur-sm shadow-[0_4px_20px_rgba(225,29,72,0.1)]">
+                                    <div className="p-3 bg-rose-500/20 rounded-lg text-rose-400"><Brain size={24} /></div>
                                     <div>
-                                        <div className="text-sm font-bold text-blue-400 uppercase">Worker Engine</div>
-                                        <div className="text-xs text-white/40">Cloud API — Deep reasoning</div>
+                                        <div className="text-sm font-bold text-white uppercase tracking-wider">Worker Engine</div>
+                                        <div className="text-xs text-gray-400 font-medium">Deep, async GPU reasoning</div>
                                     </div>
                                 </div>
                             </div>
                         </div>
                     </div>
 
-                    <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-8">
+                    <div id="features" className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
                         <FeatureCard
-                            icon={<Terminal size={28} strokeWidth={2.5} />}
-                            title="Full System Shell"
-                            desc="Reads, writes, and executes — Bash or PowerShell. A built-in security gate catches sensitive commands and asks for your OK before running them."
+                            icon={<MonitorSmartphone size={32} strokeWidth={2.5} />}
+                            title="Redbus Studio Desktop"
+                            desc="Don't want to live in the terminal? Run Redbus Studio on your mac/PC to connect securely to your VPS over SSH and monitor the daemon visually."
                         />
                         <FeatureCard
-                            icon={<MessageSquare size={28} strokeWidth={2.5} />}
-                            title="WhatsApp Bridge"
-                            desc="Talk to your dev machine from your phone, wherever you are. A background daemon keeps the session alive so it's always ready."
+                            icon={<MessageSquare size={32} strokeWidth={2.5} />}
+                            title="WhatsApp Command Center"
+                            desc="Bridge your agent to your phone. Deploy scripts, ask questions, or approve critical shell executions directly from your WhatsApp."
                         />
                         <FeatureCard
-                            icon={<Globe size={28} strokeWidth={2.5} />}
-                            title="Browser & MCP"
-                            desc="Headless Playwright interaction out of the box, plus native support for Model Context Protocol (MCP) servers like Scrapling."
+                            icon={<Eye size={32} strokeWidth={2.5} />}
+                            title="Headless Web Vision"
+                            desc="Uses automated Playwright instances combined with vision models to literally 'read' external web pages and bypass strict bot protections."
                         />
                         <FeatureCard
-                            icon={<Database size={28} strokeWidth={2.5} />}
-                            title="MemGPT-Style Engine"
-                            desc="On-disk vector DB with LanceDB and dynamic core memory. It actually remembers what you did yesterday — and why."
+                            icon={<Database size={32} strokeWidth={2.5} />}
+                            title="Continuous Vector Storage"
+                            desc="Backed by lanceDB natively. The memory runs locally on your VPS, meaning your context window is effectively infinite over time."
                         />
                         <FeatureCard
-                            icon={<Shield size={28} strokeWidth={2.5} />}
-                            title="AES-256 Vault"
-                            desc="API keys encrypted on disk with AES-256. Your credentials stay safe."
+                            icon={<Shield size={32} strokeWidth={2.5} />}
+                            title="Secure Credential Vault"
+                            desc="Never paste API keys in a config file again. Keys are encrypted with AES-256 on the VPS disk layer. Only the agent can decrypt them."
                         />
                         <FeatureCard
-                            icon={<Play size={28} strokeWidth={2.5} />}
-                            title="Cognitive Router"
-                            desc="Heuristic complexity scoring routes tasks in real-time. Simple questions stay on the Live Engine. Heavy analysis gets delegated to the Worker Engine in the background."
-                        />
-                        <FeatureCard
-                            icon={<Brain size={28} strokeWidth={2.5} />}
-                            title="Knowledge Distillation"
-                            desc="The Worker Engine compresses your memory bank in the background — distilling critical facts, discarding noise. Your Live Engine stays lean and fast."
-                        />
-                        <FeatureCard
-                            icon={<Camera size={28} strokeWidth={2.5} />}
-                            title="Multimodal Vision"
-                            desc="Playwright takes full-page screenshots and sends them to the Worker Engine for visual debugging. It doesn't just read the DOM — it sees the page."
-                        />
-                        <FeatureCard
-                            icon={<UserCircle size={28} strokeWidth={2.5} />}
-                            title="Dynamic Personas"
-                            desc="No hardcoded prompts. Define name, context, and behavior during onboarding. The persona lives in the vault and shapes everything the agent does."
+                            icon={<Server size={32} strokeWidth={2.5} />}
+                            title="Unattended Automation"
+                            desc="Instruct the Worker Engine to monitor a website, scrape data over several hours, and report back to your Studio or WhatsApp when it's done."
                         />
                     </div>
                 </div>
             </section>
 
-            {/* Changelog Section */}
-            <Changelog />
-
             {/* Footer */}
-            <footer className="border-t-2 border-white/10 py-16 text-center bg-black">
-                <div className="w-16 h-16 mx-auto mb-6 bg-white text-black flex items-center justify-center font-bold rotate-12">
-                    <Skull size={32} />
+            <footer className="border-t border-brand-500/20 py-16 text-center bg-[#050000]">
+                <div className="flex items-center justify-center gap-3 mb-6">
+                    <img src="/icon.png" alt="Redbus Logo" className="w-8 h-8 rounded-lg border border-brand-500/30" />
+                    <span className="font-bold text-xl text-white uppercase tracking-wider">Redbus</span>
                 </div>
-                <p className="text-white/40 font-bold uppercase tracking-widest text-sm mb-2">Deal with it.</p>
-                <p className="text-white/20 text-xs">© {new Date().getFullYear()} redbus.</p>
+                <p className="text-brand-500/60 font-bold tracking-widest uppercase text-xs mb-2 shadow-brand-500 text-shadow">Unstoppable Infrastructure</p>
+                <p className="text-gray-500 text-sm font-medium">© {new Date().getFullYear()} Redbus. Agentic workflows powered by Gemma 3.</p>
             </footer>
         </div>
     );
@@ -206,12 +191,13 @@ function App() {
 
 function FeatureCard({ icon, title, desc }: { icon: React.ReactNode, title: string, desc: string }) {
     return (
-        <div className="p-8 border-2 border-white/10 bg-[#050505] hover:bg-[#0a0a0a] hover:border-red-600 transition-all duration-300 group">
-            <div className="w-14 h-14 bg-white/5 border border-white/10 flex items-center justify-center text-white mb-6 group-hover:bg-red-600 group-hover:border-red-600 group-hover:text-black transition-all">
-                {icon}
+        <div className="p-8 rounded-2xl border border-white/5 hover:border-brand-500/40 bg-[#0a0000] hover:bg-[#1a0505] transition-all duration-300 group shadow-[0_4px_20px_rgba(0,0,0,0.5)] hover:shadow-[0_10px_30px_rgba(220,38,38,0.15)]">
+            <div className="w-16 h-16 rounded-xl bg-gradient-to-br from-brand-950 to-[#0a0000] border border-brand-500/20 flex items-center justify-center text-brand-500 mb-6 group-hover:bg-brand-600 group-hover:text-white group-hover:border-brand-400 transition-all shadow-md overflow-hidden relative">
+                <div className="absolute inset-0 bg-brand-500/20 blur group-hover:blur-md transition-all"></div>
+                <div className="relative z-10">{icon}</div>
             </div>
-            <h3 className="text-2xl font-black uppercase mb-3 text-white tracking-tight">{title}</h3>
-            <p className="text-white/50 font-medium leading-relaxed">
+            <h3 className="text-xl font-bold mb-3 text-white tracking-tight uppercase">{title}</h3>
+            <p className="text-gray-400 font-medium leading-relaxed">
                 {desc}
             </p>
         </div>
