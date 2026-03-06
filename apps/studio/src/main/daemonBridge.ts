@@ -147,7 +147,7 @@ export class StudioDaemonBridge {
     private readonly pendingYields = new Map<string, StudioYieldRequest>();
     private intentionalDisconnect = false;
 
-    constructor(private readonly emit: (event: StudioMainEvent) => void) {}
+    constructor(private readonly emit: (event: StudioMainEvent) => void) { }
 
     get currentSessionState(): StudioSessionState {
         return this.sessionState;
@@ -171,9 +171,15 @@ export class StudioDaemonBridge {
         this.emitTunnelLog('info', `Opening SSH tunnel to ${tunnel.host}:${tunnel.port}`, 'ssh/connect', undefined, tunnel.port);
 
         try {
-            const privateKey = tunnel.privateKeyPath ? await readFile(tunnel.privateKeyPath, 'utf8') : undefined;
-            if (!privateKey && !process.env['SSH_AUTH_SOCK']) {
-                throw new Error('Studio requires privateKeyPath or SSH_AUTH_SOCK for SSH authentication.');
+            let actualKeyPath = tunnel.privateKeyPath;
+            if (actualKeyPath?.startsWith('~/')) {
+                // Node does not expand tilde paths natively; manually resolve it against $HOME
+                actualKeyPath = actualKeyPath.replace(/^~/, process.env['HOME'] || '');
+            }
+
+            const privateKey = actualKeyPath ? await readFile(actualKeyPath, 'utf8') : undefined;
+            if (!privateKey && !process.env['SSH_AUTH_SOCK'] && !tunnel.passphrase) {
+                throw new Error('Studio requires a Private Key Path, an active SSH_AUTH_SOCK, or a Passphrase for SSH authentication.');
             }
 
             const ssh = new Ssh2Client();
@@ -303,9 +309,25 @@ export class StudioDaemonBridge {
     }
 
     private async connectSshClient(ssh: SshClientLike, tunnel: StudioTunnelConfig, privateKey?: string): Promise<void> {
+        this.emitTunnelLog(
+            'debug',
+            `[SSH Auth] Attempting connect to ${tunnel.username}@${tunnel.host}:${tunnel.port} (hasKey: ${!!privateKey}, hasPass: ${!!tunnel.passphrase}, hasAgent: ${!!process.env['SSH_AUTH_SOCK']})`,
+            'ssh/connect',
+        );
+
         await new Promise<void>((resolve, reject) => {
-            const onReady = () => resolve();
-            const onError = (error: unknown) => reject(error);
+            const onReady = () => {
+                this.emitTunnelLog('debug', `[SSH] Connected successfully to ${tunnel.host}`, 'ssh/connect');
+                resolve();
+            };
+            const onError = (error: unknown) => {
+                this.emitTunnelLog(
+                    'error',
+                    `[SSH Error] ${error instanceof Error ? error.message : String(error)}`,
+                    'ssh/connect',
+                );
+                reject(error);
+            };
             ssh.once('ready', onReady);
             ssh.once('error', onError);
             ssh.connect({
@@ -313,7 +335,10 @@ export class StudioDaemonBridge {
                 port: tunnel.port,
                 username: tunnel.username,
                 privateKey,
-                passphrase: tunnel.passphrase,
+                // If there is no private key, the passphrase input is meant to be the server SSH password.
+                password: !privateKey ? tunnel.passphrase : undefined,
+                // If there IS a private key, the passphrase input unlocks the private key.
+                passphrase: privateKey ? tunnel.passphrase : undefined,
                 agent: privateKey ? undefined : process.env['SSH_AUTH_SOCK'],
                 readyTimeout: 10_000,
             });

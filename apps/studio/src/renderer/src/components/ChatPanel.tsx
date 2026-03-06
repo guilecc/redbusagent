@@ -1,4 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { useStudioState, type ChatMessage } from '../hooks/useStudioStore';
 
 interface ChatPanelProps {
@@ -8,16 +10,46 @@ interface ChatPanelProps {
 
 function MessageBubble({ msg }: { msg: ChatMessage }) {
     const isUser = msg.role === 'user';
+    const textContent = msg.content || (msg.streaming ? '…' : '');
+
     return (
         <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
             <div
-                className={`max-w-[85%] rounded-xl px-4 py-2.5 text-sm leading-relaxed ${
-                    isUser
-                        ? 'bg-studio-accent/20 text-slate-100'
-                        : 'bg-white/5 text-slate-200'
-                }`}
+                className={`max-w-[85%] rounded-xl px-4 py-2.5 text-sm leading-relaxed ${isUser
+                    ? 'bg-studio-accent/20 text-slate-100'
+                    : 'bg-white/5 text-slate-200'
+                    }`}
             >
-                {msg.content || (msg.streaming ? '…' : '')}
+                {isUser ? (
+                    <div className="whitespace-pre-wrap">{textContent}</div>
+                ) : (
+                    <ReactMarkdown
+                        remarkPlugins={[remarkGfm]}
+                        components={{
+                            p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
+                            ul: ({ children }) => <ul className="mb-2 list-inside list-disc last:mb-0">{children}</ul>,
+                            ol: ({ children }) => <ol className="mb-2 list-inside list-decimal last:mb-0">{children}</ol>,
+                            li: ({ children }) => <li className="mb-1">{children}</li>,
+                            strong: ({ children }) => <strong className="font-semibold text-white">{children}</strong>,
+                            code: ({ node, inline, children, ...props }: any) => {
+                                if (inline) {
+                                    return (
+                                        <code className="rounded bg-black/30 px-1 py-0.5 text-xs text-studio-accent" {...props}>
+                                            {children}
+                                        </code>
+                                    );
+                                }
+                                return (
+                                    <div className="my-2 overflow-x-auto rounded border border-white/10 bg-black/40 p-2 text-xs">
+                                        <code {...props}>{children}</code>
+                                    </div>
+                                );
+                            },
+                        }}
+                    >
+                        {textContent}
+                    </ReactMarkdown>
+                )}
                 {msg.streaming && (
                     <span className="ml-1 inline-block h-3 w-1.5 animate-pulse rounded-sm bg-studio-accent" />
                 )}
