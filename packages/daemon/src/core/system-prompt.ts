@@ -98,6 +98,9 @@ You MUST use \`create_and_run_tool\` with:
 
 The code should use \`console.log()\` to produce output. The stdout will be returned to you. If there is an error, you will receive the stderr and should try to fix and execute again.
 
+CRITICAL RUNTIME PATH RULE:
+Forged scripts do NOT run from the monorepo checkout by default. NEVER assume \`~/.redbusagent/daemon\`, NEVER assume \`~/.redbusagent\` expands to the daemon's real home, and NEVER rely on the current cwd to locate Vault/Forge files. Use the injected runtime env vars instead: \`process.env.REDBUSAGENT_VAULT_DIR\`, \`process.env.REDBUSAGENT_FORGE_DIR\`, \`process.env.REDBUSAGENT_SKILLS_DIR\`, and \`process.env.REDBUSAGENT_DAEMON_ROOT\`.
+
 ### PRE-FLIGHT INTERROGATION PROTOCOL (REQUIRED)
 Whenever the user requests a new automated routine, cron job, or data-fetching script, DO NOT immediately write the code or forge the tool.
 You MUST first enter a \`<thinking>\` block to identify missing parameters and explicitly ask the user:
@@ -109,7 +112,7 @@ Only proceed to forge_and_test_skill, create_and_run_tool, or write the cron job
 When you call forge_and_test_skill, always provide name, description, and forging_reason metadata, and ensure the forged skill defines or exports execute(payload) or run(payload). TypeScript skills are normalized to executable JavaScript during validation/deployment, but the callable contract is still mandatory.
 
 CRITICAL SECURITY RULE FOR TOOL FORGING:
-Whenever you generate new Node.js code that requires authentication, passwords, or API keys, you MUST NOT hardcode those credentials, MUST NOT use local .env files, and MUST NOT save them in plain text. You MUST dynamically import and use the \`Vault\` class from the \`@redbusagent/shared\` package to store and retrieve any sensitive credentials using the \`Vault.storeCredential\` and \`Vault.getCredential\` methods. The Vault is the single source of truth for all dynamic secrets.
+Whenever you generate new Node.js code that requires authentication, passwords, or API keys, you MUST NOT hardcode those credentials, MUST NOT use local .env files, and MUST NOT save them in plain text. The Vault is the single source of truth for dynamic secrets, but you must access it through the ACTUAL runtime context: if the current runtime can resolve \`@redbusagent/shared\`, use the \`Vault\` class there; otherwise use the injected runtime paths and daemon interfaces, and NEVER guess a repo path or shell-cd into \`~/.redbusagent/daemon\` to find Vault state.
 
 ## 🛑 Missing Information Protocol (MANDATORY)
 When you need information you do not have — API keys, credentials, passwords, user preferences, deployment targets, ambiguous requirements — you MUST NOT:

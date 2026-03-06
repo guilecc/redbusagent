@@ -20,7 +20,7 @@ import { existsSync, mkdirSync, writeFileSync, unlinkSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { Vault } from '@redbusagent/shared';
-import { Forge, buildExecutableArtifact, buildForgeCritiqueSignal } from '../forge.js';
+import { Forge, buildExecutableArtifact, buildForgeCritiqueSignal, buildForgeRuntimeEnv } from '../forge.js';
 import { ToolRegistry } from '../tool-registry.js';
 
 // ─── Types ────────────────────────────────────────────────────────
@@ -77,12 +77,12 @@ async function executeSandbox(
                 cwd: SANDBOX_DIR,
                 timeout: SANDBOX_TIMEOUT_MS,
                 maxBuffer: 1024 * 1024, // 1MB
-                env: {
+                    env: buildForgeRuntimeEnv({
                     ...process.env,
                     NODE_ENV: 'sandbox',
                     // Restrict network access hint (not enforced at OS level)
                     SANDBOX_MODE: 'true',
-                },
+                    }),
             },
             (error, stdout, stderr) => {
                 const durationMs = Date.now() - startTime;

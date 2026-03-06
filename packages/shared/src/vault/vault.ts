@@ -142,22 +142,42 @@ export interface VaultConfig {
 
 // ─── Constants ────────────────────────────────────────────────────
 
-const VAULT_DIR = join(homedir(), '.redbusagent');
-const CONFIG_FILE = join(VAULT_DIR, 'config.json');
-const MASTER_KEY_FILE = join(VAULT_DIR, '.masterkey');
 const CURRENT_VERSION = 1;
+const REDBUSAGENT_HOME_ENV = 'REDBUSAGENT_HOME';
+const REDBUSAGENT_VAULT_DIR_ENV = 'REDBUSAGENT_VAULT_DIR';
 
 // ─── Helpers ──────────────────────────────────────────────────────
 
+function resolveVaultDir(): string {
+    const explicitVaultDir = process.env[REDBUSAGENT_VAULT_DIR_ENV]?.trim();
+    if (explicitVaultDir) return explicitVaultDir;
+
+    const explicitHomeDir = process.env[REDBUSAGENT_HOME_ENV]?.trim();
+    if (explicitHomeDir) return join(explicitHomeDir, '.redbusagent');
+
+    return join(homedir(), '.redbusagent');
+}
+
+function resolveConfigFile(): string {
+    return join(resolveVaultDir(), 'config.json');
+}
+
+function resolveMasterKeyFile(): string {
+    return join(resolveVaultDir(), '.masterkey');
+}
+
 function getMasterKey(): Buffer {
-    if (existsSync(MASTER_KEY_FILE)) {
-        return readFileSync(MASTER_KEY_FILE);
+    const masterKeyFile = resolveMasterKeyFile();
+    const vaultDir = resolveVaultDir();
+
+    if (existsSync(masterKeyFile)) {
+        return readFileSync(masterKeyFile);
     }
     const key = crypto.randomBytes(32);
-    if (!existsSync(VAULT_DIR)) {
-        mkdirSync(VAULT_DIR, { recursive: true, mode: 0o700 });
+    if (!existsSync(vaultDir)) {
+        mkdirSync(vaultDir, { recursive: true, mode: 0o700 });
     }
-    writeFileSync(MASTER_KEY_FILE, key, { mode: 0o600 });
+    writeFileSync(masterKeyFile, key, { mode: 0o600 });
     return key;
 }
 
@@ -168,37 +188,53 @@ export class Vault {
     private static cache: VaultConfig | null | undefined = undefined;
     /** mtime of config file when cache was last populated */
     private static cacheMtimeMs: number | undefined = undefined;
+    /** Config path associated with the current cache */
+    private static cachePath: string | undefined = undefined;
+
+    private static syncCacheScope(): string {
+        const configPath = this.configPath;
+        if (this.cachePath !== undefined && this.cachePath !== configPath) {
+            this.cache = undefined;
+            this.cacheMtimeMs = undefined;
+            this.cachePath = undefined;
+        }
+        return configPath;
+    }
 
     /** Path to the vault directory */
     static get dir(): string {
-        return VAULT_DIR;
+        return resolveVaultDir();
     }
 
     /** Path to the config file */
     static get configPath(): string {
-        return CONFIG_FILE;
+        return resolveConfigFile();
     }
 
     /** Check if the config file exists on disk */
     static exists(): boolean {
-        return existsSync(CONFIG_FILE);
+        return existsSync(this.configPath);
     }
 
     /** Read config from disk (with mtime-aware cache) */
     static read(): VaultConfig | null {
+        const configPath = this.syncCacheScope();
+
         // Check if file has been modified externally (e.g., by CLI while daemon is running)
         if (this.cache !== undefined && this.cacheMtimeMs !== undefined) {
             try {
-                const currentMtime = statSync(CONFIG_FILE).mtimeMs;
+                const currentMtime = statSync(configPath).mtimeMs;
                 if (currentMtime !== this.cacheMtimeMs) {
                     // File changed on disk — invalidate cache
                     this.cache = undefined;
                     this.cacheMtimeMs = undefined;
+                    this.cachePath = undefined;
                 }
             } catch {
                 // File may have been deleted — invalidate cache
                 this.cache = undefined;
                 this.cacheMtimeMs = undefined;
+                this.cachePath = undefined;
             }
         }
 
@@ -206,34 +242,41 @@ export class Vault {
 
         if (!this.exists()) {
             this.cache = null;
+            this.cachePath = configPath;
             return null;
         }
 
         try {
-            const raw = readFileSync(CONFIG_FILE, 'utf-8');
+            const raw = readFileSync(configPath, 'utf-8');
             const parsed = JSON.parse(raw) as VaultConfig;
             this.cache = parsed;
-            this.cacheMtimeMs = statSync(CONFIG_FILE).mtimeMs;
+            this.cacheMtimeMs = statSync(configPath).mtimeMs;
+            this.cachePath = configPath;
             return parsed;
         } catch {
             this.cache = null;
+            this.cachePath = configPath;
             return null;
         }
     }
 
     /** Write config to disk and update cache */
     static write(config: VaultConfig): void {
-        if (!existsSync(VAULT_DIR)) {
-            mkdirSync(VAULT_DIR, { recursive: true, mode: 0o700 });
+        const vaultDir = this.dir;
+        const configPath = this.configPath;
+
+        if (!existsSync(vaultDir)) {
+            mkdirSync(vaultDir, { recursive: true, mode: 0o700 });
         }
 
-        writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2), {
+        writeFileSync(configPath, JSON.stringify(config, null, 2), {
             encoding: 'utf-8',
             mode: 0o600,
         });
 
         this.cache = config;
-        try { this.cacheMtimeMs = statSync(CONFIG_FILE).mtimeMs; } catch { /* ignore */ }
+        this.cachePath = configPath;
+        try { this.cacheMtimeMs = statSync(configPath).mtimeMs; } catch { /* ignore */ }
     }
 
     /** Check if vault has valid credentials */
@@ -259,6 +302,8 @@ export class Vault {
     /** Clear the in-memory cache (forces next read from disk) */
     static clearCache(): void {
         this.cache = undefined;
+        this.cacheMtimeMs = undefined;
+        this.cachePath = undefined;
     }
 
     /** Get the current schema version */

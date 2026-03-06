@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { existsSync, readFileSync, rmSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
+import { Vault } from '@redbusagent/shared';
 import { Forge, buildForgeCritiqueSignal, formatForgeFailureDetails } from './forge.js';
 import { executeCreateAndRun } from './tools/create-and-run.js';
 
@@ -25,6 +26,29 @@ afterEach(() => {
 });
 
 describe('Forge execution diagnostics', () => {
+    it('resolves Vault.dir from runtime env overrides', () => {
+        const previousVaultDir = process.env['REDBUSAGENT_VAULT_DIR'];
+        const previousHomeDir = process.env['REDBUSAGENT_HOME'];
+        const overriddenVaultDir = join(process.cwd(), `.vault-override-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+
+        try {
+            delete process.env['REDBUSAGENT_HOME'];
+            process.env['REDBUSAGENT_VAULT_DIR'] = overriddenVaultDir;
+            Vault.clearCache();
+
+            expect(Vault.dir).toBe(overriddenVaultDir);
+            expect(Vault.configPath).toBe(join(overriddenVaultDir, 'config.json'));
+        } finally {
+            if (previousVaultDir == null) delete process.env['REDBUSAGENT_VAULT_DIR'];
+            else process.env['REDBUSAGENT_VAULT_DIR'] = previousVaultDir;
+
+            if (previousHomeDir == null) delete process.env['REDBUSAGENT_HOME'];
+            else process.env['REDBUSAGENT_HOME'] = previousHomeDir;
+
+            Vault.clearCache();
+        }
+    });
+
     it('captures stderr and exec metadata when a forged node script throws', async () => {
         Forge.ensureWorkspace();
         const filename = trackForgeFile(`forge-error-${Date.now()}-${Math.random().toString(36).slice(2)}.js`);
@@ -42,6 +66,33 @@ fs.writeFileSync('bad-output.txt', { broken: true });
         expect(result.failedCommand).toContain(filename);
         expect(result.combinedOutput).toContain('stderr:');
         expect(result.combinedOutput).toMatch(/ERR_INVALID_ARG_TYPE|The "data" argument/);
+    });
+
+    it('injects resolved runtime paths into forged executions', async () => {
+        Forge.ensureWorkspace();
+        const filename = trackForgeFile(`forge-runtime-paths-${Date.now()}-${Math.random().toString(36).slice(2)}.js`);
+
+        Forge.writeScript(filename, `
+console.log(JSON.stringify({
+  vaultDir: process.env.REDBUSAGENT_VAULT_DIR,
+  forgeDir: process.env.REDBUSAGENT_FORGE_DIR,
+  skillsDir: process.env.REDBUSAGENT_SKILLS_DIR,
+  daemonRoot: process.env.REDBUSAGENT_DAEMON_ROOT,
+  cwd: process.cwd(),
+}));
+`);
+
+        const result = await Forge.executeScript(filename);
+
+        expect(result.success).toBe(true);
+        if (!result.success) return;
+
+        const runtime = JSON.parse(result.stdout.trim()) as Record<string, string>;
+        expect(runtime.vaultDir).toBe(Vault.dir);
+        expect(runtime.forgeDir).toBe(Forge.dir);
+        expect(runtime.skillsDir).toBe(Forge.skillsDir);
+        expect(runtime.daemonRoot).toBe(Forge.daemonRoot);
+        expect(runtime.cwd).toBe(Forge.dir);
     });
 
     it('formats forge failures into actionable diagnostics', () => {

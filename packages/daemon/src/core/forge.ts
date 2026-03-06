@@ -12,8 +12,9 @@
  */
 
 import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { execFile, type ExecFileException } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { Vault } from '@redbusagent/shared';
 import { ModuleKind, ScriptTarget, transpileModule } from 'typescript';
 
@@ -125,18 +126,45 @@ export interface ForgedSkillSummary {
 
 // ─── Constants ────────────────────────────────────────────────────
 
-const FORGE_DIR = join(Vault.dir, 'forge');
-const FORGE_PACKAGE_JSON = join(FORGE_DIR, 'package.json');
-const FORGE_VENV_DIR = join(FORGE_DIR, '.venv');
-const SKILLS_DIR = join(Vault.dir, 'skills');
 const SKILL_PACKAGE_FILENAME = 'skill-package.json';
 const EXECUTION_TIMEOUT_MS = 30_000; // 30 seconds max per script
+const REDBUSAGENT_VAULT_DIR_ENV = 'REDBUSAGENT_VAULT_DIR';
+const REDBUSAGENT_FORGE_DIR_ENV = 'REDBUSAGENT_FORGE_DIR';
+const REDBUSAGENT_SKILLS_DIR_ENV = 'REDBUSAGENT_SKILLS_DIR';
+const REDBUSAGENT_DAEMON_ROOT_ENV = 'REDBUSAGENT_DAEMON_ROOT';
+const DAEMON_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 
 // ─── Helpers ─────────────────────────────────────────────────────
 
 function detectLanguage(filename: string): ForgeLanguage {
     if (filename.endsWith('.py')) return 'python';
     return 'node';
+}
+
+function getForgeDir(): string {
+    return join(Vault.dir, 'forge');
+}
+
+function getForgePackageJson(): string {
+    return join(getForgeDir(), 'package.json');
+}
+
+function getForgeVenvDir(): string {
+    return join(getForgeDir(), '.venv');
+}
+
+function getSkillsDir(): string {
+    return join(Vault.dir, 'skills');
+}
+
+export function buildForgeRuntimeEnv(baseEnv: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+    return {
+        ...baseEnv,
+        [REDBUSAGENT_VAULT_DIR_ENV]: Vault.dir,
+        [REDBUSAGENT_FORGE_DIR_ENV]: getForgeDir(),
+        [REDBUSAGENT_SKILLS_DIR_ENV]: getSkillsDir(),
+        [REDBUSAGENT_DAEMON_ROOT_ENV]: DAEMON_ROOT,
+    };
 }
 
 function ensureDir(dir: string): void {
@@ -218,12 +246,12 @@ function normalizeSkillPackage(skillPackage: SkillPackage): SkillPackage | null 
 /** Returns the path to the Python interpreter inside the venv */
 function venvPython(): string {
     // Works on macOS/Linux; Windows would use Scripts/python.exe
-    return join(FORGE_VENV_DIR, 'bin', 'python3');
+    return join(getForgeVenvDir(), 'bin', 'python3');
 }
 
 /** Returns the path to the pip executable inside the venv */
 function venvPip(): string {
-    return join(FORGE_VENV_DIR, 'bin', 'pip');
+    return join(getForgeVenvDir(), 'bin', 'pip');
 }
 
 function combineOutput(stdout: string, stderr: string): string {
@@ -309,20 +337,24 @@ export function buildForgeCritiqueSignal(input: {
 export class Forge {
     /** Path to the forge workspace */
     static get dir(): string {
-        return FORGE_DIR;
+        return getForgeDir();
     }
 
     /** Path to the Python venv directory */
     static get venvDir(): string {
-        return FORGE_VENV_DIR;
+        return getForgeVenvDir();
     }
 
     static get skillsDir(): string {
-        return SKILLS_DIR;
+        return getSkillsDir();
+    }
+
+    static get daemonRoot(): string {
+        return DAEMON_ROOT;
     }
 
     static getSkillPackageDir(skillName: string): string {
-        return join(SKILLS_DIR, skillName);
+        return join(this.skillsDir, skillName);
     }
 
     static getSkillPackagePath(skillName: string): string {
@@ -334,16 +366,17 @@ export class Forge {
      * Called once at daemon startup.
      */
     static ensureWorkspace(): void {
-        ensureDir(FORGE_DIR);
+        ensureDir(this.dir);
 
-        if (!existsSync(FORGE_PACKAGE_JSON)) {
+        const forgePackageJson = getForgePackageJson();
+        if (!existsSync(forgePackageJson)) {
             const packageJson = {
                 name: 'redbusagent-forge',
                 version: '1.0.0',
                 private: true,
                 description: 'Auto-generated workspace for redbusagent forged tools',
             };
-            writeFileSync(FORGE_PACKAGE_JSON, JSON.stringify(packageJson, null, 2), {
+            writeFileSync(forgePackageJson, JSON.stringify(packageJson, null, 2), {
                 encoding: 'utf-8',
             });
         }
@@ -360,11 +393,11 @@ export class Forge {
         return new Promise((resolve) => {
             execFile(
                 'python3',
-                ['-m', 'venv', FORGE_VENV_DIR],
+                ['-m', 'venv', this.venvDir],
                 {
-                    cwd: FORGE_DIR,
+                    cwd: this.dir,
                     timeout: 60_000,
-                    env: { ...process.env },
+                    env: buildForgeRuntimeEnv(process.env),
                 },
                 (error, _stdout, stderr) => {
                     if (error) {
@@ -397,9 +430,9 @@ export class Forge {
                 'npm',
                 ['install', '--save', ...deps],
                 {
-                    cwd: FORGE_DIR,
+                    cwd: this.dir,
                     timeout: 60_000, // 60s for installs
-                    env: { ...process.env, NODE_ENV: 'production' },
+                    env: buildForgeRuntimeEnv({ ...process.env, NODE_ENV: 'production' }),
                 },
                 (error, _stdout, stderr) => {
                     if (error) {
@@ -429,14 +462,14 @@ export class Forge {
                 venvPip(),
                 ['install', ...deps],
                 {
-                    cwd: FORGE_DIR,
+                    cwd: this.dir,
                     timeout: 120_000, // 120s for pip installs
                     maxBuffer: 2 * 1024 * 1024,
-                    env: {
+                    env: buildForgeRuntimeEnv({
                         ...process.env,
-                        VIRTUAL_ENV: FORGE_VENV_DIR,
-                        PATH: `${join(FORGE_VENV_DIR, 'bin')}:${process.env['PATH'] || ''}`,
-                    },
+                        VIRTUAL_ENV: this.venvDir,
+                        PATH: `${join(this.venvDir, 'bin')}:${process.env['PATH'] || ''}`,
+                    }),
                 },
                 (error, _stdout, stderr) => {
                     if (error) {
@@ -453,7 +486,7 @@ export class Forge {
      * Write a script file to the forge workspace.
      */
     static writeScript(filename: string, code: string): string {
-        const filepath = join(FORGE_DIR, filename);
+        const filepath = join(this.dir, filename);
         writeFileSync(filepath, code, { encoding: 'utf-8', mode: 0o644 });
         return filepath;
     }
@@ -493,7 +526,7 @@ export class Forge {
             student_instructions: params.studentInstructions,
         };
 
-        ensureDir(SKILLS_DIR);
+        ensureDir(this.skillsDir);
         ensureDir(packageDir);
 
         writeFileSync(entrypointPath, buildExecutableArtifact(params.language, params.code), {
@@ -523,14 +556,15 @@ export class Forge {
     }
 
     static listSkillPackages(): ForgedSkillSummary[] {
-        if (!existsSync(SKILLS_DIR)) return [];
+        const skillsDir = this.skillsDir;
+        if (!existsSync(skillsDir)) return [];
 
         const skills: ForgedSkillSummary[] = [];
 
-        for (const entry of readdirSync(SKILLS_DIR, { withFileTypes: true })) {
+        for (const entry of readdirSync(skillsDir, { withFileTypes: true })) {
             if (!entry.isDirectory()) continue;
 
-                const packagePath = join(SKILLS_DIR, entry.name, SKILL_PACKAGE_FILENAME);
+                const packagePath = join(skillsDir, entry.name, SKILL_PACKAGE_FILENAME);
                 const skillPackage = this.readSkillPackage(packagePath);
                 if (!skillPackage) continue;
 
@@ -555,7 +589,7 @@ export class Forge {
      * Read a script file from the forge workspace.
      */
     static readScript(filename: string): string | null {
-        const filepath = join(FORGE_DIR, filename);
+        const filepath = join(this.dir, filename);
         if (!existsSync(filepath)) return null;
         return readFileSync(filepath, 'utf-8');
     }
@@ -589,10 +623,10 @@ export class Forge {
             const args = [filepath];
             if (input) args.push(input);
 
-            const envVars = { ...process.env };
+            const envVars = buildForgeRuntimeEnv(process.env);
             if (lang === 'python') {
-                envVars['VIRTUAL_ENV'] = FORGE_VENV_DIR;
-                envVars['PATH'] = `${join(FORGE_VENV_DIR, 'bin')}:${process.env['PATH'] || ''}`;
+                envVars['VIRTUAL_ENV'] = this.venvDir;
+                envVars['PATH'] = `${join(this.venvDir, 'bin')}:${process.env['PATH'] || ''}`;
             }
 
             const child = execFile(
@@ -627,6 +661,6 @@ export class Forge {
     }
 
     static async executeScript(filename: string, input?: string): Promise<ForgeExecutionResult> {
-        return this.executeScriptAtPath(join(FORGE_DIR, filename), input);
+        return this.executeScriptAtPath(join(this.dir, filename), input);
     }
 }

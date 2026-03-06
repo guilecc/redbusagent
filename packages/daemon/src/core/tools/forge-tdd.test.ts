@@ -117,6 +117,54 @@ describe('forgeAndTestSkillTool', () => {
         expect(dynamicResult.output).toContain('app.log');
     });
 
+    it('passes resolved daemon and vault runtime paths into the forge sandbox and deployed skill runtime', async () => {
+        const skillName = `runtime-paths-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const toolName = skillName.replace(/[^a-zA-Z0-9]/g, '_');
+        const executeTool = (forgeAndTestSkillTool as any).execute;
+
+        const result = await executeTool({
+            skill_name: skillName,
+            description: 'Echo the resolved daemon runtime paths',
+            forging_reason: 'Regression coverage for Forge/Vault runtime path propagation.',
+            code: `export async function execute() { return { vaultDir: process.env.REDBUSAGENT_VAULT_DIR, forgeDir: process.env.REDBUSAGENT_FORGE_DIR, daemonRoot: process.env.REDBUSAGENT_DAEMON_ROOT }; }`,
+            test_payload: {},
+            language: 'typescript',
+            usage_examples: [
+                {
+                    user_input: 'Show me the current forge runtime paths',
+                    expected_tool_call: { name: toolName, args: {} },
+                },
+                {
+                    user_input: 'Print the daemon runtime path information again',
+                    expected_tool_call: { name: toolName, args: {} },
+                },
+            ],
+        }, { toolCallId: 'forge-runtime-paths', messages: [] });
+
+        expect(result.success).toBe(true);
+        if (!result.success) return;
+
+        createdDirs.add(dirname(result.skillPackagePath));
+
+        const sandboxOutput = JSON.parse(result.output.trim()) as Record<string, string>;
+        expect(sandboxOutput.vaultDir).toBeTruthy();
+        expect(sandboxOutput.forgeDir).toBe(Forge.dir);
+        expect(sandboxOutput.daemonRoot).toBe(Forge.daemonRoot);
+
+        const dynamicResult = await ToolRegistry.getDynamicTools()[toolName].execute(
+            {},
+            { toolCallId: 'runtime-paths-dynamic', messages: [] },
+        );
+
+        expect(dynamicResult.success).toBe(true);
+        if (!dynamicResult.success) return;
+
+        const runtimeOutput = JSON.parse(dynamicResult.output.trim()) as Record<string, string>;
+        expect(runtimeOutput.vaultDir).toBeTruthy();
+        expect(runtimeOutput.forgeDir).toBe(Forge.dir);
+        expect(runtimeOutput.daemonRoot).toBe(Forge.daemonRoot);
+    });
+
     it('rejects forged skills that do not expose an execute or run callable', async () => {
         const skillName = `invalid-pkg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
         const executeTool = (forgeAndTestSkillTool as any).execute;
