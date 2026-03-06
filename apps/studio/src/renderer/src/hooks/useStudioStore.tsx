@@ -3,6 +3,7 @@ import {
     DEFAULT_STUDIO_SETTINGS,
     normalizeStudioSettings,
     type StudioForgeSnapshot,
+    type StudioForgedSkill,
     type StudioSessionState,
     type StudioSettings,
     type StudioTelemetrySnapshot,
@@ -41,6 +42,12 @@ export interface StudioState {
     settings: StudioSettings;
     telemetry: StudioTelemetrySnapshot;
     forge: StudioForgeSnapshot;
+    library: {
+        status: 'idle' | 'loading' | 'ready' | 'error';
+        skills: readonly StudioForgedSkill[];
+        error?: string;
+        lastLoadedAt?: number;
+    };
     chat: ChatMessage[];
     thoughts: ThoughtEntry[];
     activity: ActivityEntry[];
@@ -52,6 +59,7 @@ export const INITIAL_STATE: StudioState = {
     settings: DEFAULT_STUDIO_SETTINGS,
     telemetry: {},
     forge: { status: 'idle' },
+    library: { status: 'idle', skills: [] },
     chat: [],
     thoughts: [],
     activity: [],
@@ -63,6 +71,9 @@ export type StudioAction =
     | { type: 'SET_SETTINGS'; payload: StudioSettings }
     | { type: 'SET_TELEMETRY'; payload: StudioTelemetrySnapshot }
     | { type: 'SET_FORGE'; payload: StudioForgeSnapshot }
+    | { type: 'SET_LIBRARY_LOADING' }
+    | { type: 'SET_LIBRARY'; payload: { skills: readonly StudioForgedSkill[]; loadedAt: number } }
+    | { type: 'SET_LIBRARY_ERROR'; payload: string }
     | { type: 'ADD_CHAT'; payload: ChatMessage }
     | { type: 'UPDATE_STREAMING'; payload: { id: string; delta: string } }
     | { type: 'FINISH_STREAMING'; payload: { id: string; fullText: string; tier?: string; model?: string } }
@@ -70,7 +81,7 @@ export type StudioAction =
     | { type: 'ADD_ACTIVITY'; payload: ActivityEntry }
     | { type: 'SET_YIELD'; payload: StudioYieldRequest | null };
 
-function studioReducer(state: StudioState, action: StudioAction): StudioState {
+export function studioReducer(state: StudioState, action: StudioAction): StudioState {
     switch (action.type) {
         case 'SET_SESSION':
             return { ...state, session: action.payload };
@@ -80,6 +91,34 @@ function studioReducer(state: StudioState, action: StudioAction): StudioState {
             return { ...state, telemetry: { ...state.telemetry, ...action.payload } };
         case 'SET_FORGE':
             return { ...state, forge: action.payload };
+        case 'SET_LIBRARY_LOADING':
+            return {
+                ...state,
+                library: {
+                    ...state.library,
+                    status: 'loading',
+                    error: undefined,
+                },
+            };
+        case 'SET_LIBRARY':
+            return {
+                ...state,
+                library: {
+                    status: 'ready',
+                    skills: action.payload.skills,
+                    error: undefined,
+                    lastLoadedAt: action.payload.loadedAt,
+                },
+            };
+        case 'SET_LIBRARY_ERROR':
+            return {
+                ...state,
+                library: {
+                    ...state.library,
+                    status: 'error',
+                    error: action.payload,
+                },
+            };
         case 'ADD_CHAT':
             return { ...state, chat: [...state.chat, action.payload] };
         case 'UPDATE_STREAMING':

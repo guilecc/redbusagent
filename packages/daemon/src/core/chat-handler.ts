@@ -22,6 +22,49 @@ import { createThinkingFilter } from './thinking-filter.js';
 import { userInputManager } from './tools/ask-user.js';
 import { engineBus } from './engine-message-bus.js';
 
+interface ActiveForgeContext {
+    requestId: string;
+    toolName: string;
+    skillName?: string;
+    description?: string;
+    forgingReason?: string;
+    language?: 'javascript' | 'typescript' | 'python';
+}
+
+function buildForgeContext(requestId: string, toolName: string, args?: Record<string, unknown>): ActiveForgeContext {
+    return {
+        requestId,
+        toolName,
+        skillName: typeof args?.['skill_name'] === 'string' ? args['skill_name'] : undefined,
+        description: typeof args?.['description'] === 'string' ? args['description'] : undefined,
+        forgingReason: typeof args?.['forging_reason'] === 'string' ? args['forging_reason'] : undefined,
+        language: args?.['language'] === 'javascript' || args?.['language'] === 'typescript' || args?.['language'] === 'python'
+            ? args['language']
+            : undefined,
+    };
+}
+
+function buildForgeLifecycleMessage(
+    context: ActiveForgeContext,
+    event: 'FORGE_START' | 'FORGE_STREAM' | 'FORGE_SUCCESS' | 'FORGE_ERROR',
+    extra: { delta?: string; result?: string; error?: string } = {},
+) {
+    return {
+        type: 'forge:lifecycle' as const,
+        timestamp: new Date().toISOString(),
+        payload: {
+            requestId: context.requestId,
+            event,
+            toolName: context.toolName,
+            skillName: context.skillName,
+            description: context.description,
+            forgingReason: context.forgingReason,
+            language: context.language,
+            ...extra,
+        },
+    };
+}
+
 export class ChatHandler {
     private forceLive = false;
     private heartbeat: HeartbeatManager | null = null;
@@ -296,6 +339,7 @@ Return ONLY the JSON object. Do not explain.`;
             : `session:${clientId}`;
         await enqueueCommandInLane(lane, async () => {
             let result;
+            let activeForgeContext: ActiveForgeContext | null = null;
             // Thinking tag filter: strips <thinking>...</thinking> from stream,
             // emits a 💭 indicator instead of raw XML
             const thinkingFilter = createThinkingFilter((cleanDelta: string) => {
@@ -305,6 +349,9 @@ Return ONLY the JSON object. Do not explain.`;
                     timestamp: new Date().toISOString(),
                     payload: { requestId, delta: cleanDelta },
                 });
+                if (activeForgeContext) {
+                    this.wsServer.broadcast(buildForgeLifecycleMessage(activeForgeContext, 'FORGE_STREAM', { delta: cleanDelta }));
+                }
             });
 
             const callbacks = {
@@ -320,6 +367,10 @@ Return ONLY the JSON object. Do not explain.`;
                         timestamp: new Date().toISOString(),
                         payload: { requestId, error: error.message },
                     });
+                    if (activeForgeContext) {
+                        this.wsServer.broadcast(buildForgeLifecycleMessage(activeForgeContext, 'FORGE_ERROR', { error: error.message }));
+                        activeForgeContext = null;
+                    }
                 },
                 onToolCall: (toolName: string, args: Record<string, unknown>) => {
                     console.log(`  🔧 [${targetTier}] Tool call: ${toolName}`);
@@ -328,6 +379,10 @@ Return ONLY the JSON object. Do not explain.`;
                         timestamp: new Date().toISOString(),
                         payload: { requestId, toolName, args },
                     });
+                    if (toolName === 'forge_and_test_skill') {
+                        activeForgeContext = buildForgeContext(requestId, toolName, args);
+                        this.wsServer.broadcast(buildForgeLifecycleMessage(activeForgeContext, 'FORGE_START'));
+                    }
                 },
                 onToolResult: (toolName: string, success: boolean, toolResult: string) => {
                     console.log(`  ${success ? '✅' : '❌'} [${targetTier}] Tool result: ${toolName} — ${success ? 'success' : 'failed'}`);
@@ -336,6 +391,15 @@ Return ONLY the JSON object. Do not explain.`;
                         timestamp: new Date().toISOString(),
                         payload: { requestId, toolName, success, result: toolResult },
                     });
+                    if (toolName === 'forge_and_test_skill') {
+                        const forgeContext = activeForgeContext ?? buildForgeContext(requestId, toolName);
+                        this.wsServer.broadcast(buildForgeLifecycleMessage(
+                            forgeContext,
+                            success ? 'FORGE_SUCCESS' : 'FORGE_ERROR',
+                            success ? { result: toolResult } : { error: toolResult },
+                        ));
+                        activeForgeContext = null;
+                    }
                 },
             };
 

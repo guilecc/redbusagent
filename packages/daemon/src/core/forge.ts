@@ -11,10 +11,11 @@
  *  - Each execution is a child_process with stdout/stderr capture
  */
 
-import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { execFile, type ExecFileException } from 'node:child_process';
 import { Vault } from '@redbusagent/shared';
+import { ModuleKind, ScriptTarget, transpileModule } from 'typescript';
 
 // ─── Types ────────────────────────────────────────────────────────
 
@@ -67,9 +68,11 @@ export interface SkillPackageArtifact {
 }
 
 export interface SkillPackageManifest {
+    name: string;
     skillName: string;
     toolName: string;
     description: string;
+    forging_reason?: string;
     source: 'forge' | 'forge-tdd';
     createdAt: string;
     language: SkillPackageLanguage;
@@ -90,6 +93,7 @@ export interface PersistSkillPackageParams {
     skillName: string;
     toolName: string;
     description: string;
+    forgingReason: string;
     code: string;
     language: SkillPackageLanguage;
     source: 'forge' | 'forge-tdd';
@@ -104,6 +108,19 @@ export interface PersistedSkillPackage {
     packagePath: string;
     entrypointPath: string;
     skillPackage: SkillPackage;
+}
+
+export interface ForgedSkillSummary {
+    skillName: string;
+    name: string;
+    toolName: string;
+    description: string;
+    forgingReason?: string;
+    source: 'forge' | 'forge-tdd';
+    createdAt: string;
+    language: SkillPackageLanguage;
+    entrypoint: string;
+    skillPackagePath: string;
 }
 
 // ─── Constants ────────────────────────────────────────────────────
@@ -130,20 +147,72 @@ function ensureDir(dir: string): void {
 
 function artifactFilenameForLanguage(language: SkillPackageLanguage): string {
     if (language === 'python') return 'index.py';
-    if (language === 'typescript') return 'index.ts';
-    return 'index.js';
+    return 'index.cjs';
 }
 
 function runtimeForSkillLanguage(language: SkillPackageLanguage): ForgeLanguage {
     return language === 'python' ? 'python' : 'node';
 }
 
-function buildExecutableArtifact(language: SkillPackageLanguage, code: string): string {
+export function normalizeNodeSkillSource(language: Extract<SkillPackageLanguage, 'javascript' | 'typescript'>, code: string): string {
+    return transpileModule(code, {
+        compilerOptions: {
+            allowJs: true,
+            esModuleInterop: true,
+            module: ModuleKind.CommonJS,
+            sourceMap: false,
+            target: ScriptTarget.ES2022,
+        },
+        fileName: language === 'typescript' ? 'skill.ts' : 'skill.js',
+        reportDiagnostics: false,
+    }).outputText.trim();
+}
+
+function buildNodeExecuteResolver(): string {
+    return `function __redbusResolveExecuteFn() {
+    if (typeof execute === 'function') return execute;
+    if (typeof run === 'function') return run;
+
+    if (typeof module !== 'undefined' && module && typeof module.exports !== 'undefined') {
+        if (typeof module.exports === 'function') return module.exports;
+        if (typeof module.exports?.execute === 'function') return module.exports.execute;
+        if (typeof module.exports?.run === 'function') return module.exports.run;
+        if (typeof module.exports?.default === 'function') return module.exports.default;
+    }
+
+    if (typeof exports !== 'undefined' && exports) {
+        if (typeof exports.execute === 'function') return exports.execute;
+        if (typeof exports.run === 'function') return exports.run;
+        if (typeof exports.default === 'function') return exports.default;
+    }
+
+    return undefined;
+}`;
+}
+
+export function buildExecutableArtifact(language: SkillPackageLanguage, code: string): string {
     if (language === 'python') {
         return `import asyncio\nimport inspect\nimport json\nimport sys\n\n${code}\n\ndef __redbus_parse_payload():\n    raw = sys.argv[1] if len(sys.argv) > 1 else ''\n    if not raw:\n        return {}\n    try:\n        return json.loads(raw)\n    except Exception:\n        return {\"input\": raw}\n\nasync def __redbus_main():\n    payload = __redbus_parse_payload()\n    execute_fn = globals().get('execute') or globals().get('run')\n    if execute_fn is None:\n        return\n    if inspect.iscoroutinefunction(execute_fn):\n        result = await execute_fn(payload)\n    else:\n        result = execute_fn(payload)\n    if result is None:\n        return\n    if isinstance(result, str):\n        print(result)\n    else:\n        print(json.dumps(result, indent=2))\n\nif __name__ == '__main__':\n    asyncio.run(__redbus_main())\n`;
     }
 
-    return `function __redbusParsePayload() {\n    const raw = process.argv[2];\n    if (!raw) return {};\n    try {\n        return JSON.parse(raw);\n    } catch {\n        return { input: raw };\n    }\n}\n\n${code}\n\nasync function __redbusMain() {\n    const payload = __redbusParsePayload();\n    let executeFn;\n    if (typeof execute === 'function') {\n        executeFn = execute;\n    } else if (typeof run === 'function') {\n        executeFn = run;\n    } else if (typeof module !== 'undefined' && typeof module.exports === 'function') {\n        executeFn = module.exports;\n    }\n\n    if (!executeFn) return;\n\n    const result = await executeFn(payload);\n    if (typeof result === 'undefined') return;\n    if (typeof result === 'string') {\n        console.log(result);\n        return;\n    }\n\n    console.log(JSON.stringify(result, null, 2));\n}\n\nvoid __redbusMain();\n`;
+    const normalizedCode = normalizeNodeSkillSource(language, code);
+
+    return `function __redbusParsePayload() {\n    const raw = process.argv[2];\n    if (!raw) return {};\n    try {\n        return JSON.parse(raw);\n    } catch {\n        return { input: raw };\n    }\n}\n\n${normalizedCode}\n\n${buildNodeExecuteResolver()}\n\nasync function __redbusMain() {\n    const payload = __redbusParsePayload();\n    const executeFn = __redbusResolveExecuteFn();\n\n    if (!executeFn) {\n        throw new Error('Skill must define or export an execute(payload) or run(payload) function.');\n    }\n\n    const result = await executeFn(payload);\n    if (typeof result === 'undefined') return;\n    if (typeof result === 'string') {\n        console.log(result);\n        return;\n    }\n\n    console.log(JSON.stringify(result, null, 2));\n}\n\nvoid __redbusMain();\n`;
+}
+
+function normalizeSkillPackage(skillPackage: SkillPackage): SkillPackage | null {
+    const manifestName = skillPackage.manifest.name || skillPackage.manifest.skillName || skillPackage.student_instructions.tool_name;
+    if (!manifestName) return null;
+
+    return {
+        ...skillPackage,
+        manifest: {
+            ...skillPackage.manifest,
+            name: manifestName,
+            skillName: skillPackage.manifest.skillName || manifestName,
+            description: skillPackage.manifest.description || skillPackage.student_instructions.summary,
+        },
+    };
 }
 
 /** Returns the path to the Python interpreter inside the venv */
@@ -399,9 +468,11 @@ export class Forge {
         const skillPackage: SkillPackage = {
             schemaVersion: 1,
             manifest: {
+                name: params.skillName,
                 skillName: params.skillName,
                 toolName: params.toolName,
                 description: params.description,
+                forging_reason: params.forgingReason,
                 source: params.source,
                 createdAt,
                 language: params.language,
@@ -445,10 +516,39 @@ export class Forge {
     static readSkillPackage(packagePath: string): SkillPackage | null {
         try {
             const raw = readFileSync(packagePath, 'utf-8');
-            return JSON.parse(raw) as SkillPackage;
+            return normalizeSkillPackage(JSON.parse(raw) as SkillPackage);
         } catch {
             return null;
         }
+    }
+
+    static listSkillPackages(): ForgedSkillSummary[] {
+        if (!existsSync(SKILLS_DIR)) return [];
+
+        const skills: ForgedSkillSummary[] = [];
+
+        for (const entry of readdirSync(SKILLS_DIR, { withFileTypes: true })) {
+            if (!entry.isDirectory()) continue;
+
+                const packagePath = join(SKILLS_DIR, entry.name, SKILL_PACKAGE_FILENAME);
+                const skillPackage = this.readSkillPackage(packagePath);
+                if (!skillPackage) continue;
+
+                skills.push({
+                    skillName: skillPackage.manifest.skillName,
+                    name: skillPackage.manifest.name,
+                    toolName: skillPackage.manifest.toolName,
+                    description: skillPackage.manifest.description,
+                    forgingReason: skillPackage.manifest.forging_reason,
+                    source: skillPackage.manifest.source,
+                    createdAt: skillPackage.manifest.createdAt,
+                    language: skillPackage.manifest.language,
+                    entrypoint: skillPackage.manifest.entrypoint,
+                    skillPackagePath: packagePath,
+                });
+        }
+
+        return skills.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
     }
 
     /**

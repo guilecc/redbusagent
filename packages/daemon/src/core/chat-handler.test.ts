@@ -62,7 +62,7 @@ vi.mock('./engine-message-bus.js', () => ({
 }));
 
 vi.mock('./thinking-filter.js', () => ({
-    createThinkingFilter: () => ({ push: vi.fn(), flush: vi.fn() }),
+    createThinkingFilter: (emit: (delta: string) => void) => ({ push: emit, flush: vi.fn() }),
 }));
 
 const { ChatHandler } = await import('./chat-handler.js');
@@ -139,5 +139,69 @@ describe('ChatHandler explicit /worker routing', () => {
                 error: expect.stringContaining('Worker Engine is disabled'),
             }),
         }));
+    });
+
+    it('emits dedicated forge lifecycle events for successful forge runs', async () => {
+        const wsServer = createWsServer();
+        const handler = new ChatHandler(wsServer);
+        mocks.askLive.mockImplementation(async (_content: string, callbacks: any) => {
+            callbacks.onToolCall('forge_and_test_skill', {
+                skill_name: 'csv-helper',
+                description: 'Parse CSV rows',
+                forging_reason: 'User asked for a CSV parsing helper.',
+                language: 'typescript',
+            });
+            callbacks.onChunk('Sandboxing the generated skill...');
+            callbacks.onToolResult('forge_and_test_skill', true, 'Skill deployed successfully');
+            return { tier: 'live', model: 'live-test' };
+        });
+
+        await handler.handleChatRequest('client-1', createRequest('Forge a CSV helper'));
+
+        const forgeMessages = wsServer.broadcast.mock.calls
+            .map(([message]) => message)
+            .filter((message) => message.type === 'forge:lifecycle');
+
+        expect(forgeMessages.map((message) => message.payload.event)).toEqual([
+            'FORGE_START',
+            'FORGE_STREAM',
+            'FORGE_SUCCESS',
+        ]);
+        expect(forgeMessages[0]?.payload).toMatchObject({
+            requestId: 'req-1',
+            skillName: 'csv-helper',
+            description: 'Parse CSV rows',
+            forgingReason: 'User asked for a CSV parsing helper.',
+            language: 'typescript',
+        });
+        expect(forgeMessages[1]?.payload.delta).toContain('Sandboxing the generated skill');
+        expect(forgeMessages[2]?.payload.result).toContain('Skill deployed successfully');
+    });
+
+    it('emits FORGE_ERROR when forge execution fails', async () => {
+        const wsServer = createWsServer();
+        const handler = new ChatHandler(wsServer);
+        mocks.askLive.mockImplementation(async (_content: string, callbacks: any) => {
+            callbacks.onToolCall('forge_and_test_skill', {
+                skill_name: 'broken-helper',
+                description: 'Broken helper',
+                forging_reason: 'Regression coverage for forge errors.',
+                language: 'typescript',
+            });
+            callbacks.onToolResult('forge_and_test_skill', false, 'Sandbox failed: missing execute export');
+            return { tier: 'live', model: 'live-test' };
+        });
+
+        await handler.handleChatRequest('client-1', createRequest('Forge a broken helper'));
+
+        const forgeError = wsServer.broadcast.mock.calls
+            .map(([message]) => message)
+            .find((message) => message.type === 'forge:lifecycle' && message.payload.event === 'FORGE_ERROR');
+
+        expect(forgeError?.payload).toMatchObject({
+            requestId: 'req-1',
+            skillName: 'broken-helper',
+            error: 'Sandbox failed: missing execute export',
+        });
     });
 });

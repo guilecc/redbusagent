@@ -3,6 +3,7 @@ import { askLive, askTier2 } from '../cognitive-router.js';
 import { WhatsAppChannel } from '../../channels/whatsapp.js';
 import type { DaemonWsServer } from '../../infra/ws-server.js';
 import { classifyTaskIntent } from '../heuristic-router.js';
+import { Forge } from '../forge.js';
 
 export class LocalApiServer {
     private server: Server;
@@ -22,14 +23,25 @@ export class LocalApiServer {
     }
 
     private async handleRequest(req: IncomingMessage, res: ServerResponse) {
-        if (req.method === 'POST' && req.url === '/api/infer') {
+        if (req.method === 'GET' && req.url === '/api/skills') {
+            this.handleSkills(res);
+        } else if (req.method === 'POST' && req.url === '/api/infer') {
             await this.handleInfer(req, res);
         } else if (req.method === 'POST' && req.url === '/api/notify') {
             await this.handleNotify(req, res);
         } else {
-            res.writeHead(404, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Not found' }));
+            this.writeJson(res, 404, { error: 'Not found' });
         }
+    }
+
+    private handleSkills(res: ServerResponse) {
+        const skills = Forge.listSkillPackages();
+        const payload = {
+            count: skills.length,
+            skills,
+        };
+
+        this.writeJson(res, 200, payload);
     }
 
     private async handleInfer(req: IncomingMessage, res: ServerResponse) {
@@ -40,8 +52,7 @@ export class LocalApiServer {
             let engine = data.engine;
 
             if (!prompt) {
-                res.writeHead(400, { 'Content-Type': 'application/json' });
-                return res.end(JSON.stringify({ error: 'Missing prompt' }));
+                return this.writeJson(res, 400, { error: 'Missing prompt' });
             }
 
             // If no engine specified, classify intent
@@ -63,12 +74,10 @@ export class LocalApiServer {
                 await askLive(prompt, callbacks, [], 'owner');
             }
 
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ response: fullOutput }));
+            this.writeJson(res, 200, { response: fullOutput });
 
         } catch (error: any) {
-            res.writeHead(500, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: error.message || String(error) }));
+            this.writeJson(res, 500, { error: error.message || String(error) });
         }
     }
 
@@ -80,8 +89,7 @@ export class LocalApiServer {
             const channel = data.channel || 'tui';
 
             if (!message) {
-                res.writeHead(400, { 'Content-Type': 'application/json' });
-                return res.end(JSON.stringify({ error: 'Missing message' }));
+                return this.writeJson(res, 400, { error: 'Missing message' });
             }
 
             if (channel === 'whatsapp') {
@@ -96,12 +104,15 @@ export class LocalApiServer {
                 });
             }
 
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ success: true }));
+            this.writeJson(res, 200, { success: true });
         } catch (error: any) {
-            res.writeHead(500, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: error.message || String(error) }));
+            this.writeJson(res, 500, { error: error.message || String(error) });
         }
+    }
+
+    private writeJson(res: ServerResponse, statusCode: number, payload: unknown) {
+        res.writeHead(statusCode, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(payload));
     }
 
     private readBody(req: IncomingMessage): Promise<string> {

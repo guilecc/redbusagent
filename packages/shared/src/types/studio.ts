@@ -15,6 +15,8 @@ import type {
     ChatToolCallMessage,
     ChatToolResultMessage,
     DaemonState,
+    ForgeLifecycleEventName,
+    ForgeLifecycleMessage,
     ProactiveThoughtMessage,
     WorkerQueueStatus,
 } from './protocol.js';
@@ -109,10 +111,36 @@ export interface StudioTelemetrySnapshot {
 }
 
 export interface StudioForgeSnapshot {
-    readonly status: 'idle' | 'streaming' | 'executing' | 'error';
+    readonly status: 'idle' | 'streaming' | 'executing' | 'success' | 'error';
+    readonly requestId?: string;
+    readonly event?: ForgeLifecycleEventName;
+    readonly skillName?: string;
     readonly activeFile?: string;
     readonly summary?: string;
     readonly selectedTool?: string;
+    readonly forgingReason?: string;
+    readonly language?: StudioForgedSkill['language'];
+    readonly content?: string;
+    readonly result?: string;
+    readonly error?: string;
+}
+
+export interface StudioForgedSkill {
+    readonly skillName: string;
+    readonly name: string;
+    readonly toolName: string;
+    readonly description: string;
+    readonly forgingReason?: string;
+    readonly source: 'forge' | 'forge-tdd';
+    readonly createdAt: string;
+    readonly language: 'javascript' | 'typescript' | 'python';
+    readonly entrypoint: string;
+    readonly skillPackagePath: string;
+}
+
+export interface DaemonSkillsResponse {
+    readonly count: number;
+    readonly skills: readonly StudioForgedSkill[];
 }
 
 export interface StudioYieldRequest {
@@ -175,6 +203,11 @@ export interface SettingsSaveCommand extends StudioEnvelope {
     };
 }
 
+export interface SkillsListCommand extends StudioEnvelope {
+    readonly type: 'skills/list';
+    readonly payload: Record<string, never>;
+}
+
 export interface SystemCommandCommand extends StudioEnvelope {
     readonly type: 'system/command';
     readonly payload: {
@@ -189,6 +222,7 @@ export type StudioRendererCommand =
     | YieldRespondCommand
     | SettingsLoadCommand
     | SettingsSaveCommand
+    | SkillsListCommand
     | SystemCommandCommand;
 
 export interface SessionStateEvent extends StudioEnvelope {
@@ -219,6 +253,11 @@ export interface DaemonToolResultEvent extends StudioEnvelope {
 export interface DaemonThoughtEvent extends StudioEnvelope {
     readonly type: 'daemon/thought';
     readonly payload: ProactiveThoughtMessage['payload'];
+}
+
+export interface DaemonForgeLifecycleEvent extends StudioEnvelope {
+    readonly type: 'daemon/forge';
+    readonly payload: ForgeLifecycleMessage['payload'];
 }
 
 export interface TelemetryUpdateEvent extends StudioEnvelope {
@@ -269,6 +308,7 @@ export type StudioMainEvent =
     | DaemonToolCallEvent
     | DaemonToolResultEvent
     | DaemonThoughtEvent
+    | DaemonForgeLifecycleEvent
     | TelemetryUpdateEvent
     | ForgeUpdateEvent
     | YieldRequestedEvent

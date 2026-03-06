@@ -9,6 +9,23 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import type { DaemonMessage, ClientMessage } from '@redbusagent/shared';
 
+type DaemonWsMessage = DaemonMessage | {
+    readonly type: 'forge:lifecycle';
+    readonly timestamp: string;
+    readonly payload: {
+        readonly requestId: string;
+        readonly event: 'FORGE_START' | 'FORGE_STREAM' | 'FORGE_SUCCESS' | 'FORGE_ERROR';
+        readonly skillName?: string;
+        readonly toolName?: string;
+        readonly description?: string;
+        readonly forgingReason?: string;
+        readonly language?: 'javascript' | 'typescript' | 'python';
+        readonly delta?: string;
+        readonly result?: string;
+        readonly error?: string;
+    };
+};
+
 export interface WsServerOptions {
     readonly port: number;
     readonly host: string;
@@ -34,7 +51,7 @@ export class DaemonWsServer {
     }
 
     /** Broadcast a typed message to all connected clients */
-    broadcast(message: DaemonMessage): void {
+    broadcast(message: DaemonWsMessage): void {
         const payload = JSON.stringify(message);
 
         for (const [, socket] of this.clients) {
@@ -45,7 +62,7 @@ export class DaemonWsServer {
     }
 
     /** Send a typed message to a specific client */
-    sendTo(clientId: string, message: DaemonMessage): void {
+    sendTo(clientId: string, message: DaemonWsMessage): void {
         const socket = this.clients.get(clientId);
         if (socket && socket.readyState === WebSocket.OPEN) {
             socket.send(JSON.stringify(message));

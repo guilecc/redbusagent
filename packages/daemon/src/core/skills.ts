@@ -150,11 +150,11 @@ export async function discoverSkills(skillsDir: string): Promise<SkillMeta[]> {
 
             const packagePath = join(dirPath, 'skill-package.json');
             try {
-                const rawPackage = await readFile(packagePath, 'utf-8');
-                const skillPackage = JSON.parse(rawPackage) as SkillPackage;
+                const skillPackage = Forge.readSkillPackage(packagePath);
+                if (!skillPackage) continue;
 
                 skills.push({
-                    name: skillPackage.manifest.skillName || basename(dirPath),
+                    name: skillPackage.manifest.name || basename(dirPath),
                     description: skillPackage.manifest.description || skillPackage.student_instructions.summary,
                     keywords: extractPackageKeywords(skillPackage),
                     dirPath,

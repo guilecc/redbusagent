@@ -1,5 +1,6 @@
 import { useEffect, useCallback } from 'react';
 import {
+    type DaemonSkillsResponse,
     normalizeStudioSettings,
     STUDIO_IPC_VERSION,
     type StudioMainEvent,
@@ -38,9 +39,36 @@ export function useStudioBridge() {
         [dispatch],
     );
 
+    const loadSkills = useCallback(async () => {
+        dispatch({ type: 'SET_LIBRARY_LOADING' });
+
+        try {
+            const result = await invokeCommand({ version: STUDIO_IPC_VERSION, type: 'skills/list', payload: {} });
+            if (result.ok && result.type === 'skills/list') {
+                const data = result.data as DaemonSkillsResponse | undefined;
+                dispatch({
+                    type: 'SET_LIBRARY',
+                    payload: {
+                        skills: data?.skills ?? [],
+                        loadedAt: Date.now(),
+                    },
+                });
+            }
+        } catch (error) {
+            dispatch({
+                type: 'SET_LIBRARY_ERROR',
+                payload: error instanceof Error ? error.message : 'Failed to load forged skills.',
+            });
+        }
+    }, [dispatch, invokeCommand]);
+
     // ─── Subscribe to main→renderer events ────────────────────────
     useEffect(() => {
         const handleEvent = (event: StudioMainEvent) => {
+            if (event.type === 'daemon/forge' && event.payload.event === 'FORGE_SUCCESS') {
+                void loadSkills();
+            }
+
             for (const action of eventToActions(event)) {
                 dispatch(action);
             }
@@ -58,7 +86,7 @@ export function useStudioBridge() {
             });
 
         return window.redbusStudio.subscribe(handleEvent);
-    }, [dispatch, invokeCommand]);
+    }, [dispatch, invokeCommand, loadSkills]);
 
     // ─── Command helpers ──────────────────────────────────────────
     const connect = useCallback(async (profileId: string | undefined, tunnel: StudioTunnelConfig) => {
@@ -67,7 +95,8 @@ export function useStudioBridge() {
             type: 'session/connect',
             payload: { profileId, tunnel },
         });
-    }, [invokeCommand]);
+        await loadSkills();
+    }, [invokeCommand, loadSkills]);
 
     const disconnect = useCallback(async () => {
         await invokeCommand({
@@ -125,12 +154,12 @@ export function useStudioBridge() {
         });
     }, [invokeCommand]);
 
-    return { connect, disconnect, sendChat, respondToYield, requestStatus, saveSettings };
+    return { connect, disconnect, sendChat, respondToYield, requestStatus, saveSettings, refreshSkills: loadSkills };
 }
 
 // ─── Map IPC events → store actions ──────────────────────────────
 
-function eventToActions(event: StudioMainEvent): StudioAction[] {
+export function eventToActions(event: StudioMainEvent): StudioAction[] {
     switch (event.type) {
         case 'session/state':
             return [
@@ -152,6 +181,25 @@ function eventToActions(event: StudioMainEvent): StudioAction[] {
             return [{ type: 'SET_TELEMETRY', payload: event.payload }];
         case 'forge/update':
             return [{ type: 'SET_FORGE', payload: event.payload }];
+        case 'daemon/forge': {
+            const detail = event.payload.event === 'FORGE_ERROR'
+                ? event.payload.error
+                : event.payload.event === 'FORGE_SUCCESS'
+                  ? event.payload.result
+                  : event.payload.forgingReason ?? event.payload.description;
+
+            return [{
+                type: 'ADD_ACTIVITY',
+                payload: {
+                    id: crypto.randomUUID(),
+                    level: event.payload.event === 'FORGE_ERROR' ? 'error' : 'info',
+                    source: 'Forge',
+                    message: `${event.payload.event}${event.payload.skillName ? ` · ${event.payload.skillName}` : ''}`,
+                    detail,
+                    timestamp: Date.now(),
+                },
+            }];
+        }
         case 'daemon/streamChunk':
             return [{ type: 'UPDATE_STREAMING', payload: { id: `${event.payload.requestId}-reply`, delta: event.payload.delta } }];
         case 'daemon/streamDone':

@@ -20,7 +20,7 @@ import { existsSync, mkdirSync, writeFileSync, unlinkSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { Vault } from '@redbusagent/shared';
-import { Forge, buildForgeCritiqueSignal } from '../forge.js';
+import { Forge, buildExecutableArtifact, buildForgeCritiqueSignal } from '../forge.js';
 import { ToolRegistry } from '../tool-registry.js';
 
 // ─── Types ────────────────────────────────────────────────────────
@@ -59,68 +59,20 @@ async function executeSandbox(
     skillName: string,
     code: string,
     testPayload: Record<string, unknown>,
+    language: 'javascript' | 'typescript',
 ): Promise<SandboxResult> {
     ensureDir(SANDBOX_DIR);
 
-    const sandboxFilename = `_sandbox_${skillName}_${Date.now()}.mjs`;
+    const sandboxFilename = `_sandbox_${skillName}_${Date.now()}.cjs`;
     const sandboxPath = join(SANDBOX_DIR, sandboxFilename);
 
-    // Build the sandbox harness:
-    // 1. Define the skill code as a module
-    // 2. Import and execute with test_payload
-    // 3. Validate the output
-    const harness = `
-// ═══════════════════════════════════════════════════════════════
-// SANDBOX HARNESS — Isolated Test Environment
-// Skill: ${skillName}
-// Generated: ${new Date().toISOString()}
-// ═══════════════════════════════════════════════════════════════
-
-const TEST_PAYLOAD = ${JSON.stringify(testPayload, null, 2)};
-
-// ─── User Skill Code (Sandboxed) ─────────────────────────────
-${code}
-
-// ─── Harness Execution ───────────────────────────────────────
-async function __sandboxMain() {
-    try {
-        // The skill must export a default function or an 'execute' function
-        let executeFn;
-        if (typeof execute === 'function') {
-            executeFn = execute;
-        } else if (typeof module !== 'undefined' && typeof module.exports === 'function') {
-            executeFn = module.exports;
-        } else if (typeof run === 'function') {
-            executeFn = run;
-        } else {
-            // If no explicit function, wrap the whole code as a script
-            // that already produced output via console.log
-            console.log(JSON.stringify({ __sandbox_result: 'script_executed', payload_received: !!TEST_PAYLOAD }));
-            return;
-        }
-
-        const result = await executeFn(TEST_PAYLOAD);
-        console.log(JSON.stringify({ __sandbox_result: result }));
-    } catch (err) {
-        console.error(JSON.stringify({
-            __sandbox_error: true,
-            message: err.message || String(err),
-            stack: err.stack || '',
-        }));
-        process.exit(1);
-    }
-}
-
-__sandboxMain();
-`;
-
-    writeFileSync(sandboxPath, harness, { encoding: 'utf-8', mode: 0o600 });
+    writeFileSync(sandboxPath, buildExecutableArtifact(language, code), { encoding: 'utf-8', mode: 0o600 });
     const startTime = Date.now();
 
     return new Promise<SandboxResult>((resolve) => {
         execFile(
             'node',
-            ['--experimental-vm-modules', sandboxPath],
+            [sandboxPath, JSON.stringify(testPayload)],
             {
                 cwd: SANDBOX_DIR,
                 timeout: SANDBOX_TIMEOUT_MS,
@@ -143,20 +95,10 @@ __sandboxMain();
                 }
 
                 if (error) {
-                    // Parse structured error from stderr
-                    let errorMessage = stderr || error.message;
-                    let stackTrace = '';
-
-                    try {
-                        const parsed = JSON.parse(stderr);
-                        if (parsed.__sandbox_error) {
-                            errorMessage = parsed.message;
-                            stackTrace = parsed.stack;
-                        }
-                    } catch {
-                        // Raw error string
-                        stackTrace = stderr;
-                    }
+                    const normalizedStderr = stderr.trim();
+                    const normalizedStdout = stdout.trim();
+                    const errorMessage = normalizedStderr || normalizedStdout || error.message;
+                    const stackTrace = normalizedStderr || normalizedStdout;
 
                     resolve({
                         success: false,
@@ -165,15 +107,12 @@ __sandboxMain();
                         durationMs,
                     });
                 } else {
-                    // Parse structured output
                     let output = stdout.trim();
                     try {
-                        const parsed = JSON.parse(output);
-                        if (parsed.__sandbox_result !== undefined) {
-                            output = typeof parsed.__sandbox_result === 'string'
-                                ? parsed.__sandbox_result
-                                : JSON.stringify(parsed.__sandbox_result, null, 2);
-                        }
+                        const parsed = JSON.parse(output) as unknown;
+                        output = typeof parsed === 'string'
+                            ? parsed
+                            : JSON.stringify(parsed, null, 2);
                     } catch {
                         // Raw output is fine
                     }
@@ -206,6 +145,8 @@ export const forgeAndTestSkillTool = tool({
 
 IMPORTANT: Your code must export an \`execute(payload)\` function or a \`run(payload)\` function that accepts the test_payload object and returns a result. Use console.log() for debug output.
 
+TypeScript and ESM-style exports are accepted, but they are normalized to executable JavaScript before sandboxing and persistence. The callable contract still must resolve to \`execute(payload)\`, \`run(payload)\`, or a default-exported function.
+
 CRITICAL — FEW-SHOT EXAMPLES ARE MANDATORY:
 You are an elite Cloud Engineer forging a tool for a smaller, highly-aligned local model (Gemma 3). Small models fail to use tools without concrete Few-Shot examples. When generating the tool schema, you MUST include a \`usage_examples\` array containing at least two pairs of [Simulated User Input] and [Expected JSON Tool Call]. Do not skip this, or the executing model will fail.
 
@@ -218,8 +159,10 @@ You MUST output a <thinking> block before calling this tool.`,
             .describe('Name of the skill (e.g. "csv-parser", "api-health-checker"). Must be lowercase alphanumeric.'),
         description: z.string()
             .describe('Brief description of what this skill does'),
+        forging_reason: z.string()
+            .describe('Why this skill is being forged right now. Persisted as manifest metadata for the Studio skill library.'),
         code: z.string()
-            .describe('The complete JavaScript/TypeScript source code. Must export an execute(payload) or run(payload) function.'),
+            .describe('The complete JavaScript/TypeScript source code. Must define or export an execute(payload) or run(payload) function.'),
         test_payload: z.record(z.string(), z.unknown())
             .describe('A test payload object to pass to the skill during sandbox testing. Must exercise the skill\'s primary functionality.'),
         language: z.enum(['javascript', 'typescript']).default('javascript')
@@ -236,19 +179,20 @@ You MUST output a <thinking> block before calling this tool.`,
     execute: async (params: {
         skill_name: string;
         description: string;
+        forging_reason: string;
         code: string;
         test_payload: Record<string, unknown>;
         language: 'javascript' | 'typescript';
         usage_examples: Array<{ user_input: string; expected_tool_call: { name: string; args: Record<string, unknown> } }>;
     }) => {
-        const { skill_name, description, code, test_payload, language, usage_examples } = params;
+        const { skill_name, description, forging_reason, code, test_payload, language, usage_examples } = params;
         const startTime = Date.now();
 
         console.log(`  🔨 [tdd-forge] Testing skill "${skill_name}" in sandbox...`);
         console.log(`  🔨 [tdd-forge] Language: ${language}, Payload keys: ${Object.keys(test_payload).join(', ')}`);
 
         // ── Phase 1: Sandbox Execution ────────────────────────
-        const sandboxResult = await executeSandbox(skill_name, code, test_payload);
+        const sandboxResult = await executeSandbox(skill_name, code, test_payload, language);
 
         if (!sandboxResult.success) {
             console.log(`  ❌ [tdd-forge] Sandbox FAILED for "${skill_name}" (${sandboxResult.durationMs}ms)`);
@@ -280,6 +224,7 @@ You MUST output a <thinking> block before calling this tool.`,
                 skillName: skill_name,
                 toolName,
                 description,
+                forgingReason: forging_reason,
                 code,
                 language,
                 source: 'forge-tdd',
@@ -316,6 +261,7 @@ You MUST output a <thinking> block before calling this tool.`,
                 skillPath: persisted.entrypointPath,
                 skillPackagePath: persisted.packagePath,
                 registeredAs: toolName,
+                forgingReason: forging_reason,
                 message: `[Success: Skill "${skill_name}" deployed and loaded into memory]`,
             };
         } catch (err) {

@@ -147,6 +147,24 @@ export interface ChatToolResultMessage extends BaseMessage {
     };
 }
 
+export type ForgeLifecycleEventName = 'FORGE_START' | 'FORGE_STREAM' | 'FORGE_SUCCESS' | 'FORGE_ERROR';
+
+export interface ForgeLifecycleMessage extends BaseMessage {
+    readonly type: 'forge:lifecycle';
+    readonly payload: {
+        readonly requestId: string;
+        readonly event: ForgeLifecycleEventName;
+        readonly skillName?: string;
+        readonly toolName?: string;
+        readonly description?: string;
+        readonly forgingReason?: string;
+        readonly language?: 'javascript' | 'typescript' | 'python';
+        readonly delta?: string;
+        readonly result?: string;
+        readonly error?: string;
+    };
+}
+
 // ─── Proactive Messages (Heartbeat extensions) ──────────────────────
 
 export interface ProactiveThoughtMessage extends BaseMessage {
@@ -271,6 +289,7 @@ export type DaemonMessage =
     | ChatErrorMessage
     | ChatToolCallMessage
     | ChatToolResultMessage
+    | ForgeLifecycleMessage
     | ProactiveThoughtMessage
     | SystemAlertMessage
     | ApprovalRequestMessage

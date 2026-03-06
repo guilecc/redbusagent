@@ -155,6 +155,11 @@ ipcMain.handle(
                     studioSettings = normalizeStudioSettings(command.payload.settings);
                     persistStudioSettings(studioSettings);
                     return { ok: true, type: command.type, data: { settings: studioSettings } };
+
+                case 'skills/list': {
+                    const data = await bridge.fetchSkills();
+                    return { ok: true, type: command.type, data };
+                }
             }
         } catch (error) {
             return {

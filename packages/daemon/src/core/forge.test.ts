@@ -124,8 +124,9 @@ describe('Forge skill packages', () => {
             skillName,
             toolName: 'package_echo',
             description: 'Echo back a structured payload',
-            code: `async function execute(payload) { return { echoed: payload.message ?? null }; }`,
-            language: 'javascript',
+            forgingReason: 'The worker needs a reusable structured echo helper.',
+            code: `export async function execute(payload: { message?: string }) { return { echoed: payload.message ?? null }; }`,
+            language: 'typescript',
             source: 'forge-tdd',
             studentInstructions: {
                 tool_name: 'package_echo',
@@ -150,8 +151,11 @@ describe('Forge skill packages', () => {
 
         const onDisk = JSON.parse(readFileSync(persisted.packagePath, 'utf-8'));
         expect(onDisk.schemaVersion).toBe(1);
+        expect(onDisk.manifest.name).toBe(skillName);
         expect(onDisk.manifest.skillName).toBe(skillName);
-        expect(onDisk.manifest.entrypoint).toBe('index.js');
+        expect(onDisk.manifest.forging_reason).toBe('The worker needs a reusable structured echo helper.');
+        expect(onDisk.manifest.entrypoint).toBe('index.cjs');
+        expect(onDisk.manifest.language).toBe('typescript');
         expect(onDisk.student_instructions.tool_name).toBe('package_echo');
         expect(onDisk.student_instructions.usage_examples).toHaveLength(2);
 

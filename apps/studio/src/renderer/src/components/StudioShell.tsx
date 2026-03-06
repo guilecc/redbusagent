@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import StatusBar from './StatusBar';
 import ForgePanel from './ForgePanel';
+import SkillLibrary from './SkillLibrary';
 import ChatPanel from './ChatPanel';
 import ThoughtStreamPanel from './ThoughtStreamPanel';
 import ActivityPanel from './ActivityPanel';
@@ -25,11 +26,18 @@ const ROUTE_MODE_LABELS: Record<StudioRouteMode, string> = {
 };
 
 export default function StudioShell(): JSX.Element {
-    const { sendChat, respondToYield, connect, disconnect, requestStatus, saveSettings } = useStudioBridge();
-    const { session, settings, yieldRequest } = useStudioState();
+    const { sendChat, respondToYield, connect, disconnect, requestStatus, saveSettings, refreshSkills } = useStudioBridge();
+    const { session, settings, yieldRequest, forge } = useStudioState();
     const isConnected = session.connection === 'connected';
     const isConnecting = session.connection === 'connecting';
     const [yieldPending, setYieldPending] = useState(false);
+    const [leftView, setLeftView] = useState<'forge' | 'library'>('forge');
+
+    useEffect(() => {
+        if (forge.status === 'executing' || forge.status === 'streaming') {
+            setLeftView('forge');
+        }
+    }, [forge.status]);
 
     const handleConnect = async (profileId: string | undefined, tunnel: StudioTunnelConfig) => {
         await connect(profileId, tunnel);
@@ -106,8 +114,31 @@ export default function StudioShell(): JSX.Element {
             </div>
 
             <div className="flex flex-1 min-h-0 gap-1 p-1">
-                <div className="w-[28%] min-w-[280px]">
-                    <ForgePanel />
+                <div className="flex w-[28%] min-w-[280px] flex-col gap-1">
+                    <div className="flex items-center gap-1 rounded-lg border border-white/10 bg-studio-panel p-1 text-xs">
+                        <button
+                            className={`flex-1 rounded px-3 py-1.5 ${leftView === 'forge' ? 'bg-white/10 text-white' : 'text-studio-muted hover:bg-white/5'}`}
+                            onClick={() => setLeftView('forge')}
+                            type="button"
+                        >
+                            Forge
+                        </button>
+                        <button
+                            className={`flex-1 rounded px-3 py-1.5 ${leftView === 'library' ? 'bg-white/10 text-white' : 'text-studio-muted hover:bg-white/5'}`}
+                            onClick={() => setLeftView('library')}
+                            type="button"
+                        >
+                            Skill Library
+                        </button>
+                    </div>
+
+                    <div className="min-h-0 flex-1">
+                        {leftView === 'forge' ? (
+                            <ForgePanel />
+                        ) : (
+                            <SkillLibrary onRefresh={() => void refreshSkills()} refreshDisabled={!isConnected} />
+                        )}
+                    </div>
                 </div>
 
                 <div className="flex-1 min-w-[320px]">

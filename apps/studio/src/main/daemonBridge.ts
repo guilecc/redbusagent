@@ -6,6 +6,8 @@ import type { ClientMessage, DaemonMessage } from '@redbusagent/shared';
 import {
     STUDIO_IPC_VERSION,
     type ChatSendCommand,
+    type DaemonForgeLifecycleEvent,
+    type DaemonSkillsResponse,
     type StudioForgeSnapshot,
     type StudioMainEvent,
     type StudioSessionState,
@@ -98,6 +100,108 @@ export function extractActiveFile(args: Record<string, unknown>): string | undef
     return undefined;
 }
 
+function languageToExtension(language?: StudioForgeSnapshot['language']): 'js' | 'ts' | 'py' {
+    if (language === 'typescript') {
+        return 'ts';
+    }
+    if (language === 'python') {
+        return 'py';
+    }
+    return 'js';
+}
+
+function buildForgeSummary(payload: DaemonForgeLifecycleEvent['payload']): string | undefined {
+    switch (payload.event) {
+        case 'FORGE_START':
+            return payload.description ?? (payload.skillName ? `Forging ${payload.skillName}` : 'Forge started');
+        case 'FORGE_STREAM':
+            return payload.description ?? (payload.skillName ? `Streaming ${payload.skillName}` : 'Forge streaming');
+        case 'FORGE_SUCCESS':
+            return payload.result ?? (payload.skillName ? `Forged ${payload.skillName}` : 'Forge completed');
+        case 'FORGE_ERROR':
+            return payload.error ?? payload.description ?? 'Forge failed';
+    }
+}
+
+export function applyForgeLifecycleSnapshot(
+    current: StudioForgeSnapshot,
+    payload: DaemonForgeLifecycleEvent['payload'],
+): StudioForgeSnapshot {
+    const isSameRequest = current.requestId === payload.requestId;
+    const skillName = payload.skillName ?? current.skillName;
+    const language = payload.language ?? current.language;
+    const activeFile = skillName ? `${skillName}.${languageToExtension(language)}` : current.activeFile;
+
+    if (payload.event === 'FORGE_START') {
+        return {
+            status: 'executing',
+            requestId: payload.requestId,
+            event: payload.event,
+            skillName,
+            activeFile,
+            summary: buildForgeSummary(payload),
+            selectedTool: payload.toolName,
+            forgingReason: payload.forgingReason,
+            language,
+            content: '',
+        };
+    }
+
+    if (payload.event === 'FORGE_STREAM') {
+        return {
+            ...current,
+            status: 'streaming',
+            requestId: payload.requestId,
+            event: payload.event,
+            skillName,
+            activeFile,
+            summary: buildForgeSummary(payload) ?? current.summary,
+            selectedTool: payload.toolName ?? current.selectedTool,
+            forgingReason: payload.forgingReason ?? current.forgingReason,
+            language,
+            content: `${isSameRequest ? current.content ?? '' : ''}${payload.delta ?? ''}`,
+            result: undefined,
+            error: undefined,
+        };
+    }
+
+    if (payload.event === 'FORGE_SUCCESS') {
+        return {
+            ...current,
+            status: 'success',
+            requestId: payload.requestId,
+            event: payload.event,
+            skillName,
+            activeFile,
+            summary: buildForgeSummary(payload) ?? current.summary,
+            selectedTool: payload.toolName ?? current.selectedTool,
+            forgingReason: payload.forgingReason ?? current.forgingReason,
+            language,
+            result: payload.result,
+            error: undefined,
+        };
+    }
+
+    return {
+        ...current,
+        status: 'error',
+        requestId: payload.requestId,
+        event: payload.event,
+        skillName,
+        activeFile,
+        summary: buildForgeSummary(payload) ?? current.summary,
+        selectedTool: payload.toolName ?? current.selectedTool,
+        forgingReason: payload.forgingReason ?? current.forgingReason,
+        language,
+        result: undefined,
+        error: payload.error ?? 'Forge failed.',
+    };
+}
+
+export function buildSkillsApiUrl(localPort: number): string {
+    return `http://127.0.0.1:${localPort}/api/skills`;
+}
+
 function approvalDecisionToResolution(decision: YieldRespondCommand['payload']['decision']): 'approved' | 'denied' | 'submitted' {
     if (decision === 'deny') {
         return 'denied';
@@ -158,6 +262,7 @@ export class StudioDaemonBridge {
         this.intentionalDisconnect = false;
         this.streamBuffers.clear();
         this.pendingYields.clear();
+        this.updateForge({ status: 'idle' });
 
         this.updateSessionState({
             sessionId: `studio-${profileId ?? tunnel.host}`,
@@ -308,6 +413,20 @@ export class StudioDaemonBridge {
         await this.cleanup(true);
     }
 
+    async fetchSkills(): Promise<DaemonSkillsResponse> {
+        const apiPort = this.forwardedPorts.find((port) => port.label === 'api')?.localPort;
+        if (!apiPort) {
+            throw new Error('Studio is not connected to a remote daemon API tunnel.');
+        }
+
+        const response = await fetch(buildSkillsApiUrl(apiPort));
+        if (!response.ok) {
+            throw new Error(`Failed to fetch forged skills (${response.status} ${response.statusText}).`);
+        }
+
+        return await response.json() as DaemonSkillsResponse;
+    }
+
     private async connectSshClient(ssh: SshClientLike, tunnel: StudioTunnelConfig, privateKey?: string): Promise<void> {
         this.emitTunnelLog(
             'debug',
@@ -446,6 +565,21 @@ export class StudioDaemonBridge {
                 });
                 return;
 
+            case 'forge:lifecycle': {
+                this.forgeState = applyForgeLifecycleSnapshot(this.forgeState, message.payload);
+                this.emit({
+                    version: STUDIO_IPC_VERSION,
+                    type: 'daemon/forge',
+                    payload: message.payload,
+                });
+                this.emit({
+                    version: STUDIO_IPC_VERSION,
+                    type: 'forge/update',
+                    payload: this.forgeState,
+                });
+                return;
+            }
+
             case 'chat:stream:chunk': {
                 const compatibilityYield = buildCompatibilityYieldRequest(message.payload.requestId, message.payload.delta);
                 if (compatibilityYield) {
@@ -467,10 +601,6 @@ export class StudioDaemonBridge {
                     type: 'daemon/streamChunk',
                     payload: message.payload,
                 });
-                this.updateForge({
-                    ...this.forgeState,
-                    status: this.forgeState.status === 'executing' ? 'executing' : 'streaming',
-                });
                 return;
             }
 
@@ -489,12 +619,6 @@ export class StudioDaemonBridge {
                         fullText: message.payload.fullText || buffered,
                     },
                 });
-                this.updateForge({
-                    status: 'idle',
-                    activeFile: this.forgeState.activeFile,
-                    summary: buffered ? buffered.slice(0, 180) : this.forgeState.summary,
-                    selectedTool: this.forgeState.selectedTool,
-                });
                 return;
             }
 
@@ -511,7 +635,6 @@ export class StudioDaemonBridge {
                         model: 'daemon-error',
                     },
                 });
-                this.updateForge({ ...this.forgeState, status: 'error', summary: message.payload.error });
                 return;
 
             case 'chat:tool:call':
@@ -520,12 +643,6 @@ export class StudioDaemonBridge {
                     type: 'daemon/toolCall',
                     payload: message.payload,
                 });
-                this.updateForge({
-                    status: 'executing',
-                    selectedTool: message.payload.toolName,
-                    activeFile: extractActiveFile(message.payload.args),
-                    summary: `Running ${message.payload.toolName}`,
-                });
                 return;
 
             case 'chat:tool:result':
@@ -533,12 +650,6 @@ export class StudioDaemonBridge {
                     version: STUDIO_IPC_VERSION,
                     type: 'daemon/toolResult',
                     payload: message.payload,
-                });
-                this.updateForge({
-                    status: message.payload.success ? 'streaming' : 'error',
-                    selectedTool: message.payload.toolName,
-                    activeFile: this.forgeState.activeFile,
-                    summary: message.payload.result.slice(0, 180),
                 });
                 return;
 
@@ -622,7 +733,6 @@ export class StudioDaemonBridge {
                         status: 'done',
                     },
                 });
-                this.updateForge({ ...this.forgeState, status: 'idle', summary: message.payload.description });
                 return;
 
             case 'worker_task_failed':
@@ -634,7 +744,6 @@ export class StudioDaemonBridge {
                         status: 'action',
                     },
                 });
-                this.updateForge({ ...this.forgeState, status: 'error', summary: message.payload.error });
                 return;
         }
     }
