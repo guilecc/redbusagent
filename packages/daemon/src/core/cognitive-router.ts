@@ -492,8 +492,8 @@ function looksLikeCapabilityRefusal(text?: string | null): boolean {
     const normalized = text?.trim().toLowerCase();
     if (!normalized) return false;
 
-    const refusalPattern = /\b(i can(?:not|'t)|i am unable to|i'm unable to|i do not have the ability to|i don't have the ability to)\b/;
-    const capabilityPattern = /\b(access|log in|log into|browse|visit|open|interact with|control|use|outlook|email|account|credentials|website|websites)\b/;
+    const refusalPattern = /\b(i can(?:not|'t)|i am unable to|i'm unable to|i do not have the ability to|i don't have the ability to|não posso|não consigo|não sou capaz|como um modelo de linguagem)\b/;
+    const capabilityPattern = /\b(access|log in|log into|browse|visit|open|interact with|control|use|outlook|email|account|credentials|website|websites|acessar|acesso|entrar|abrir|interagir|controlar|usar|visitar|credenciais|site|sites)\b/;
 
     return refusalPattern.test(normalized) && capabilityPattern.test(normalized);
 }
@@ -556,8 +556,9 @@ export async function askLive(
     // ─── Dynamic Handoff Tool Injection ───
     const runtimeTools: Record<string, any> = { ...filteredTools };
 
-    // Only inject if Worker Engine is explicitly enabled and properly configured
-    if (executionPlan.enableDelegation && workerConfig.enabled && workerConfig.model) {
+    // Give Live Engine the unconstrained ability to delegate whenever the Worker is configured
+    // This allows it to make an intelligent routing choice instead of depending heavily on regex.
+    if (workerConfig.enabled && workerConfig.model) {
         runtimeTools['delegate_to_worker_engine'] = {
             description: 'Delegate complex engineering, coding, forging, automation scripts, or deep analysis tasks to the powerful Worker Engine. Use this whenever the user asks to build a script, create a routine, automate a workflow, or do something you cannot do natively. The Worker Engine is an advanced agent with full access to Node.js/Python sandbox, Playwright for web automation/scraping, full terminal shell, and a secure Vault for managing credentials or passwords. It can read emails, interact with internal systems, and do advanced ops.',
             parameters: z.object({
