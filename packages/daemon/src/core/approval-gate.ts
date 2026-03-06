@@ -35,6 +35,23 @@ export interface ApprovalRequestPayload {
     args: Record<string, unknown>;
 }
 
+export interface ApprovalOrchestrationContext {
+    sessionId: string;
+    taskId: string;
+    mode: OrchestrationExecutionMode;
+    actor: OrchestrationActor;
+}
+
+export interface ToolExecutionContext {
+    toolCallId: string;
+    toolName: string;
+    args: Record<string, unknown>;
+    mode: OrchestrationExecutionMode;
+    actor: OrchestrationActor;
+    sessionId?: string;
+    taskId?: string;
+}
+
 export interface ExecApprovalRecord {
     id: string;
     request: ApprovalRequestPayload;
@@ -51,6 +68,8 @@ export interface ExecApprovalRecord {
 /** Backward-compatible alias for existing callsites. */
 export interface ApprovalRequest extends ApprovalRequestPayload {
     id: string;
+    orchestrationContext?: ApprovalOrchestrationContext | null;
+    toolCallId?: string;
 }
 
 // ─── Internal Entry ──────────────────────────────────────────────────
@@ -61,12 +80,189 @@ interface PendingEntry {
     reject: (err: Error) => void;
     timer: ReturnType<typeof setTimeout>;
     promise: Promise<ApprovalDecision | null>;
-    orchestration: {
-        sessionId: string;
-        taskId: string;
-        mode: OrchestrationExecutionMode;
-        actor: OrchestrationActor;
-    } | null;
+    orchestration: ApprovalOrchestrationContext | null;
+}
+
+const toolExecutionContexts = new Map<string, ToolExecutionContext>();
+
+const SIMPLE_SHELL_CONTROL_PATTERN = /(?:\r|\n|&&|\|\||;|\||`|\$\()/;
+const SAFE_WORKER_SHELL_EXECUTABLES = new Set([
+    'node',
+    'nodejs',
+    'npm',
+    'npx',
+    'pnpm',
+    'yarn',
+    'python',
+    'python3',
+    'tsx',
+    'uv',
+    'uvx',
+]);
+const SAFE_PACKAGE_MANAGER_EXECUTABLES = new Set(['npm', 'pnpm', 'yarn']);
+const SAFE_FORGE_PACKAGE_SUBCOMMANDS = new Set(['install', 'add']);
+const SAFE_FORGE_PATH_PATTERN = /^\$REDBUSAGENT_(?:FORGE|SKILLS)_DIR(?:\/[A-Za-z0-9._/-]+)?$/;
+const SAFE_FORGE_PACKAGE_SPEC_PATTERN = /^@?[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)?(?:@[A-Za-z0-9._+-]+)?$/;
+const SAFE_FORGE_ARG_PATTERN = /^[A-Za-z0-9._:@%+=,/-]+$/;
+const EXACT_VAULT_STORE_CREDENTIAL_PAYLOAD_PATTERN = /^Vault\.storeCredential\(\s*(['"])(?:\\.|(?!\1).)+\1\s*,\s*(['"])(?:\\.|(?!\2).)+\2\s*,\s*(['"])(?:\\.|(?!\3).)+\3\s*\)$/;
+
+function extractShellExecutable(command: string): string | null {
+    for (const token of command.trim().split(/\s+/)) {
+        if (!token || token === 'env') continue;
+        if (/^[A-Za-z_][A-Za-z0-9_]*=.*/.test(token)) continue;
+        return token.replace(/^['"]|['"]$/g, '').toLowerCase();
+    }
+    return null;
+}
+
+function stripShellQuotes(token: string): string {
+    return token.replace(/^['"]|['"]$/g, '');
+}
+
+function tokenizeShellCommand(command: string): string[] {
+    return command.trim().split(/\s+/).map(stripShellQuotes).filter(Boolean);
+}
+
+function extractNodeEvalPayload(command: string, executable: string): string | null {
+    if (executable !== 'node' && executable !== 'nodejs') return null;
+    const match = command.match(/^(?:node|nodejs)\s+-e\s+(['"])(.*)\1$/);
+    return match?.[2] ?? null;
+}
+
+function isSafeForgePathToken(token?: string): boolean {
+    return !!token && SAFE_FORGE_PATH_PATTERN.test(stripShellQuotes(token));
+}
+
+function areSafeForgePackageSpecs(tokens: string[]): boolean {
+    return tokens.length > 0 && tokens.every((token) => SAFE_FORGE_PACKAGE_SPEC_PATTERN.test(stripShellQuotes(token)));
+}
+
+function areSafeForgeArgs(tokens: string[]): boolean {
+    return tokens.every((token) => SAFE_FORGE_ARG_PATTERN.test(stripShellQuotes(token)));
+}
+
+function isAllowedVaultRuntimeCommand(command: string, executable: string): boolean {
+    const payload = extractNodeEvalPayload(command, executable);
+    return !!payload && EXACT_VAULT_STORE_CREDENTIAL_PAYLOAD_PATTERN.test(payload);
+}
+
+function isAllowedForgePackageCommand(command: string, executable: string): boolean {
+    if (!SAFE_PACKAGE_MANAGER_EXECUTABLES.has(executable)) return false;
+
+    const tokens = tokenizeShellCommand(command);
+    if (tokens.length < 4 || tokens[0] !== executable) return false;
+
+    if (executable === 'npm') {
+        if (tokens[1] === '--prefix' && SAFE_FORGE_PACKAGE_SUBCOMMANDS.has(tokens[3] || '')) {
+            return isSafeForgePathToken(tokens[2]) && areSafeForgePackageSpecs(tokens.slice(4));
+        }
+        if (SAFE_FORGE_PACKAGE_SUBCOMMANDS.has(tokens[1] || '') && tokens[2] === '--prefix') {
+            return isSafeForgePathToken(tokens[3]) && areSafeForgePackageSpecs(tokens.slice(4));
+        }
+        return false;
+    }
+
+    if (executable === 'pnpm') {
+        if (!SAFE_FORGE_PACKAGE_SUBCOMMANDS.has(tokens[1] || '')) return false;
+        const dirFlagIndex = tokens.findIndex((token) => token === '--dir');
+        if (dirFlagIndex < 0 || !isSafeForgePathToken(tokens[dirFlagIndex + 1])) return false;
+        const packageSpecs = tokens.filter((_, index) => index !== 0 && index !== 1 && index !== dirFlagIndex && index !== dirFlagIndex + 1);
+        return areSafeForgePackageSpecs(packageSpecs);
+    }
+
+    if (executable === 'yarn') {
+        if (!SAFE_FORGE_PACKAGE_SUBCOMMANDS.has(tokens[1] || '')) return false;
+        const cwdFlagIndex = tokens.findIndex((token) => token === '--cwd');
+        if (cwdFlagIndex < 0 || !isSafeForgePathToken(tokens[cwdFlagIndex + 1])) return false;
+        const packageSpecs = tokens.filter((_, index) => index !== 0 && index !== 1 && index !== cwdFlagIndex && index !== cwdFlagIndex + 1);
+        return areSafeForgePackageSpecs(packageSpecs);
+    }
+
+    return false;
+}
+
+function isAllowedForgeRuntimeCommand(command: string, executable: string): boolean {
+    const tokens = tokenizeShellCommand(command);
+    if (tokens.length < 2 || tokens[0] !== executable) return false;
+
+    if (executable === 'uv') {
+        return tokens[1] === 'run' && isSafeForgePathToken(tokens[2]) && areSafeForgeArgs(tokens.slice(3));
+    }
+
+    if (!['node', 'nodejs', 'python', 'python3', 'tsx'].includes(executable)) return false;
+    return isSafeForgePathToken(tokens[1]) && areSafeForgeArgs(tokens.slice(2));
+}
+
+function toApprovalOrchestrationContext(context?: ToolExecutionContext | null): ApprovalOrchestrationContext | null {
+    if (!context?.sessionId || !context.taskId) return null;
+    return {
+        sessionId: context.sessionId,
+        taskId: context.taskId,
+        mode: context.mode,
+        actor: context.actor,
+    };
+}
+
+function classifyRestrictedWorkerShellCommand(command: string, executable: string): string | null {
+    if (isAllowedVaultRuntimeCommand(command, executable)) return 'vault runtime command';
+    if (isAllowedForgePackageCommand(command, executable) || isAllowedForgeRuntimeCommand(command, executable)) {
+        return 'forge runtime command';
+    }
+    return null;
+}
+
+export function registerToolExecutionContext(context: ToolExecutionContext): void {
+    const toolCallId = context.toolCallId.trim();
+    if (!toolCallId) return;
+
+    toolExecutionContexts.set(toolCallId, {
+        ...context,
+        toolCallId,
+        args: { ...context.args },
+    });
+}
+
+export function getToolExecutionContext(toolCallId?: string | null): ToolExecutionContext | null {
+    if (!toolCallId) return null;
+    const context = toolExecutionContexts.get(toolCallId);
+    if (!context) return null;
+    return {
+        ...context,
+        args: { ...context.args },
+    };
+}
+
+export function clearToolExecutionContext(toolCallId?: string | null): void {
+    if (!toolCallId) return;
+    toolExecutionContexts.delete(toolCallId);
+}
+
+export function clearAllToolExecutionContexts(): void {
+    toolExecutionContexts.clear();
+}
+
+export function getRestrictedWorkerShellAutoApproval(
+    command: string,
+    executionContext?: ToolExecutionContext | null,
+): { approved: boolean; rationale?: string } {
+    if (!executionContext) return { approved: false };
+    if (executionContext.toolName !== 'execute_shell_command') return { approved: false };
+    if (executionContext.actor !== 'worker' || executionContext.mode !== 'collaborative') return { approved: false };
+    if (!executionContext.sessionId || !executionContext.taskId) return { approved: false };
+
+    const normalized = command.trim();
+    if (!normalized || SIMPLE_SHELL_CONTROL_PATTERN.test(normalized)) return { approved: false };
+
+    const executable = extractShellExecutable(normalized);
+    if (!executable || !SAFE_WORKER_SHELL_EXECUTABLES.has(executable)) return { approved: false };
+
+    const classification = classifyRestrictedWorkerShellCommand(normalized, executable);
+    if (!classification) return { approved: false };
+
+    return {
+        approved: true,
+        rationale: `worker collaborative ${classification}`,
+    };
 }
 
 function getPendingApprovalContext() {
@@ -144,6 +340,7 @@ export class ApprovalGateManager extends EventEmitter {
     register(
         record: ExecApprovalRecord,
         timeoutMs: number = DEFAULT_APPROVAL_TIMEOUT_MS,
+        orchestrationContext?: ApprovalOrchestrationContext | null,
     ): Promise<ApprovalDecision | null> {
         const existing = this.pending.get(record.id);
         if (existing) {
@@ -164,7 +361,7 @@ export class ApprovalGateManager extends EventEmitter {
             reject: rejectPromise,
             timer: null as unknown as ReturnType<typeof setTimeout>,
             promise,
-            orchestration: getPendingApprovalContext(),
+            orchestration: orchestrationContext ?? getPendingApprovalContext(),
         };
         entry.timer = setTimeout(() => this.expire(record.id), timeoutMs);
         this.pending.set(record.id, entry);
@@ -179,7 +376,10 @@ export class ApprovalGateManager extends EventEmitter {
      */
     requestApproval(request: ApprovalRequest): Promise<boolean> {
         const record = this.create(request, DEFAULT_APPROVAL_TIMEOUT_MS, request.id);
-        const promise = this.register(record, DEFAULT_APPROVAL_TIMEOUT_MS);
+        const orchestrationContext = request.orchestrationContext
+            ?? toApprovalOrchestrationContext(getToolExecutionContext(request.toolCallId))
+            ?? getPendingApprovalContext();
+        const promise = this.register(record, DEFAULT_APPROVAL_TIMEOUT_MS, orchestrationContext);
         const entry = this.pending.get(record.id);
         if (entry?.orchestration) {
             engineBus.emitOrchestrationEvent({

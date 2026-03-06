@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
 import { Vault } from '@redbusagent/shared';
-import { approvalGate } from './approval-gate.js';
+import { approvalGate, getRestrictedWorkerShellAutoApproval, getToolExecutionContext } from './approval-gate.js';
 
 const execAsync = promisify(exec);
 
@@ -18,12 +18,14 @@ export const executeShellCommandTool = tool({
     inputSchema: z.object({
         command: z.string().describe('The strict command string to execute in the shell.'),
     }),
-    execute: async (args: { command: string }) => {
+    execute: async (args: { command: string }, context?: { toolCallId?: string }) => {
         const command = args.command;
         const vaultConfig = Vault.read();
         const godMode = vaultConfig?.shell_god_mode === true;
+        const toolExecutionContext = getToolExecutionContext(context?.toolCallId);
+        const autoApproval = getRestrictedWorkerShellAutoApproval(command, toolExecutionContext);
 
-        if (!godMode) {
+        if (!godMode && !autoApproval.approved) {
             const reqId = Math.random().toString(36).substring(7);
             console.log(`  ⚠️ [shell-executor] Execution paused. Requesting HITL approval for: ${command}`);
 
@@ -33,6 +35,7 @@ export const executeShellCommandTool = tool({
                 description: command,
                 reason: 'destructive',
                 args: { command },
+                toolCallId: context?.toolCallId,
             });
 
             if (!approved) {
@@ -42,6 +45,8 @@ export const executeShellCommandTool = tool({
                     stderr: 'User denied permission to run this command. Find an alternative or explain why it is necessary.'
                 };
             }
+        } else if (autoApproval.approved) {
+            console.log(`  ✅ [shell-executor] Restricted worker auto-approval applied (${autoApproval.rationale}): ${command}`);
         } else {
             console.log(`  ⚡ [shell-executor] GOD MODE enabled. Executing directly: ${command}`);
         }

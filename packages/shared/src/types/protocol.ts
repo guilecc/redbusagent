@@ -206,6 +206,58 @@ export interface WorkerTaskFailedMessage extends BaseMessage {
     };
 }
 
+export type WorkerOrchestrationEventType =
+    | 'task_created'
+    | 'delegated'
+    | 'tool_called'
+    | 'tool_result'
+    | 'progress_updated'
+    | 'critic_feedback'
+    | 'repair_requested'
+    | 'yield_requested'
+    | 'user_reply_received'
+    | 'resumed'
+    | 'completed'
+    | 'failed';
+
+/** Structured worker orchestration lifecycle event for observability clients like Studio. */
+export interface WorkerOrchestrationMessage extends BaseMessage {
+    readonly type: 'worker:orchestration';
+    readonly payload: {
+        readonly event: WorkerOrchestrationEventType;
+        readonly sessionId: string;
+        readonly taskId: string;
+        readonly mode: WorkerOrchestrationSessionRef['mode'];
+        readonly actor: WorkerOrchestrationSessionRef['actor'];
+        readonly prompt?: string;
+        readonly from?: WorkerOrchestrationSessionRef['actor'];
+        readonly to?: WorkerOrchestrationSessionRef['actor'];
+        readonly summary?: string;
+        readonly toolName?: string;
+        readonly args?: Record<string, unknown>;
+        readonly success?: boolean;
+        readonly durationMs?: number;
+        readonly resultPreview?: string;
+        readonly charsGenerated?: number;
+        readonly toolCallCount?: number;
+        readonly elapsed?: number;
+        readonly detail?: string;
+        readonly critic?: WorkerOrchestrationSessionRef['actor'];
+        readonly target?: WorkerOrchestrationSessionRef['actor'];
+        readonly verdict?: 'approved' | 'revise' | 'blocked';
+        readonly feedback?: string;
+        readonly attempt?: number;
+        readonly reason?: string;
+        readonly waitFor?: 'awaiting_user_reply' | 'awaiting_approval' | 'external_input';
+        readonly replyPreview?: string;
+        readonly totalChars?: number;
+        readonly totalToolCalls?: number;
+        readonly totalDurationMs?: number;
+        readonly error?: string;
+        readonly failureKind?: 'blocked' | 'bounded_failure';
+    };
+}
+
 // ─── Approval Gate Messages (HITL) ────────────────────────────────
 
 /** Daemon requests user approval for a destructive/intrusive tool */
@@ -295,7 +347,8 @@ export type DaemonMessage =
     | ApprovalRequestMessage
     | ApprovalResolvedMessage
     | WorkerTaskCompletedMessage
-    | WorkerTaskFailedMessage;
+    | WorkerTaskFailedMessage
+    | WorkerOrchestrationMessage;
 
 export type ClientMessage =
     | PingMessage

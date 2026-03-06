@@ -6,7 +6,7 @@
  */
 
 import type { DaemonWsServer } from '../infra/ws-server.js';
-import type { ChatRequestMessage } from '@redbusagent/shared';
+import type { ChatRequestMessage, WorkerOrchestrationMessage } from '@redbusagent/shared';
 import { PersonaManager, Vault } from '@redbusagent/shared';
 import { askLive, askTier2, type RouterExecutionMode } from './cognitive-router.js';
 import { getLiveEngineConfig } from '../infra/llm-config.js';
@@ -20,7 +20,7 @@ import { HeavyTaskQueue } from './heavy-task-queue.js';
 import type { HeartbeatManager } from './gateway/heartbeat.js';
 import { createThinkingFilter } from './thinking-filter.js';
 import { userInputManager } from './tools/ask-user.js';
-import { engineBus } from './engine-message-bus.js';
+import { engineBus, type OrchestrationEvent } from './engine-message-bus.js';
 
 interface ActiveForgeContext {
     requestId: string;
@@ -65,11 +65,43 @@ function buildForgeLifecycleMessage(
     };
 }
 
+const ORCHESTRATION_EVENT_TYPES = [
+    'task_created',
+    'delegated',
+    'tool_called',
+    'tool_result',
+    'progress_updated',
+    'critic_feedback',
+    'repair_requested',
+    'yield_requested',
+    'user_reply_received',
+    'resumed',
+    'completed',
+    'failed',
+] as const;
+
+function buildWorkerOrchestrationMessage(event: OrchestrationEvent): WorkerOrchestrationMessage {
+    return {
+        type: 'worker:orchestration',
+        timestamp: new Date(event.timestamp).toISOString(),
+        payload: {
+            ...event,
+            event: event.type,
+        },
+    };
+}
+
 export class ChatHandler {
     private forceLive = false;
     private heartbeat: HeartbeatManager | null = null;
 
     constructor(private readonly wsServer: DaemonWsServer) {
+        for (const eventType of ORCHESTRATION_EVENT_TYPES) {
+            engineBus.onEvent(`orchestration:${eventType}`, (event) => {
+                this.wsServer.broadcast(buildWorkerOrchestrationMessage(event));
+            });
+        }
+
         // ─── Generalized Approval Gate ──────────────────────────────────
         approvalGate.on('approval_requested', (request: ApprovalRequest) => {
             const emoji = request.reason === 'destructive' ? '⚠️' : '📱';

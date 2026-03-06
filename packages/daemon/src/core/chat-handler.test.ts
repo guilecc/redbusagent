@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
     processMonitorEmitter: {
         on: vi.fn(),
     },
+    engineBusHandlers: new Map<string, (event: unknown) => void>(),
 }));
 
 vi.mock('@redbusagent/shared', () => ({
@@ -58,7 +59,12 @@ vi.mock('./tools/ask-user.js', () => ({
 }));
 
 vi.mock('./engine-message-bus.js', () => ({
-    engineBus: { isWorkerActive: () => false },
+    engineBus: {
+        isWorkerActive: () => false,
+        onEvent: (event: string, handler: (payload: unknown) => void) => {
+            mocks.engineBusHandlers.set(event, handler);
+        },
+    },
 }));
 
 vi.mock('./thinking-filter.js', () => ({
@@ -87,6 +93,7 @@ function createWsServer() {
 describe('ChatHandler explicit /worker routing', () => {
     beforeEach(() => {
         vi.clearAllMocks();
+        mocks.engineBusHandlers.clear();
         mocks.vaultRead.mockReturnValue({ worker_engine: { enabled: true } });
         mocks.askLive.mockResolvedValue({ tier: 'live', model: 'live-test' });
         mocks.askTier2.mockResolvedValue({ tier: 'cloud', model: 'cloud-test' });
@@ -203,5 +210,37 @@ describe('ChatHandler explicit /worker routing', () => {
             skillName: 'broken-helper',
             error: 'Sandbox failed: missing execute export',
         });
+    });
+
+    it('broadcasts structured worker orchestration events for observability clients', async () => {
+        const wsServer = createWsServer();
+        new ChatHandler(wsServer);
+
+        const handler = mocks.engineBusHandlers.get('orchestration:progress_updated');
+        expect(handler).toBeTypeOf('function');
+
+        handler?.({
+            type: 'progress_updated',
+            sessionId: 'task-1',
+            taskId: 'task-1',
+            mode: 'collaborative',
+            actor: 'worker',
+            charsGenerated: 120,
+            toolCallCount: 2,
+            elapsed: 18,
+            detail: 'forge_and_test_skill',
+            timestamp: 123,
+        });
+
+        expect(wsServer.broadcast).toHaveBeenCalledWith(expect.objectContaining({
+            type: 'worker:orchestration',
+            payload: expect.objectContaining({
+                event: 'progress_updated',
+                taskId: 'task-1',
+                charsGenerated: 120,
+                toolCallCount: 2,
+                detail: 'forge_and_test_skill',
+            }),
+        }));
     });
 });

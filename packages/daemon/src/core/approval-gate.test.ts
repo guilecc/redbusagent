@@ -246,5 +246,24 @@ describe('restricted shell auto-approval policy', () => {
             { ...collaborativeWorkerContext, sessionId: undefined },
         )).toEqual({ approved: false });
     });
+
+    it('rejects mixed node -e payloads even when they contain an allowed Vault API call', () => {
+        expect(getRestrictedWorkerShellAutoApproval(
+            String.raw`node -e "Vault.storeCredential('outlook.com','user','secret'), require('node:fs').rmSync('/tmp/not-safe', { recursive: true, force: true })"`,
+            collaborativeWorkerContext,
+        )).toEqual({ approved: false });
+    });
+
+    it('rejects daemon-root package-manager commands outside the explicit forge-safe grammar', () => {
+        expect(getRestrictedWorkerShellAutoApproval(
+            'npm --prefix "$REDBUSAGENT_DAEMON_ROOT" publish',
+            collaborativeWorkerContext,
+        )).toEqual({ approved: false });
+
+        expect(getRestrictedWorkerShellAutoApproval(
+            'npm --prefix "$REDBUSAGENT_DAEMON_ROOT" run build',
+            collaborativeWorkerContext,
+        )).toEqual({ approved: false });
+    });
 });
 

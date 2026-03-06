@@ -40,6 +40,7 @@ import { detectToolCallLoop, hashToolCall, hashResult, type ToolCallHistoryEntry
 import { evaluateContextWindowGuard, estimateTokens } from './context-window-guard.js';
 import { repairToolUseResultPairing } from './transcript-repair.js';
 import { compactHistory } from './compaction.js';
+import { clearToolExecutionContext, registerToolExecutionContext, type ToolExecutionContext } from './approval-gate.js';
 import { applyToolPolicy, type SenderRole } from './tool-policy.js';
 import { getRelevantSkillPrompt } from './skills.js';
 import { calculateComplexityScore, classifyTaskIntent } from './heuristic-router.js';
@@ -342,6 +343,29 @@ export interface AskLiveOptions {
     forceExecutionMode?: RouterExecutionMode;
 }
 
+interface AskTier2Options {
+    disableTools?: boolean;
+    toolExecutionContext?: Pick<ToolExecutionContext, 'actor' | 'mode' | 'sessionId' | 'taskId'>;
+}
+
+function registerScopedToolExecutionContext(
+    toolCallId: string,
+    toolName: string,
+    input: unknown,
+    carrier?: Pick<ToolExecutionContext, 'actor' | 'mode' | 'sessionId' | 'taskId'>,
+): void {
+    if (!toolCallId || !carrier) return;
+    registerToolExecutionContext({
+        toolCallId,
+        toolName,
+        args: input && typeof input === 'object' ? input as Record<string, unknown> : {},
+        actor: carrier.actor,
+        mode: carrier.mode,
+        sessionId: carrier.sessionId,
+        taskId: carrier.taskId,
+    });
+}
+
 export function resolveLiveExecutionPlan(
     prompt: string,
     options: ExecutionModeSelectionOptions & { forceExecutionMode?: RouterExecutionMode } = {},
@@ -527,7 +551,7 @@ export async function askLive(
             'Execution mode: cloud-only. Handle this request entirely in the cloud lane without delegating it back to the live lane.',
             messagesFromClient,
             senderRole,
-            options ? { disableTools: options.disableTools } : undefined,
+            options ? { disableTools: options.disableTools, toolExecutionContext: { actor: 'cloud', mode: 'cloud-only' } } : { toolExecutionContext: { actor: 'cloud', mode: 'cloud-only' } },
         );
     }
 
@@ -594,7 +618,6 @@ export async function askLive(
                 let workerToolCalls = 0;
                 let workerCharsGenerated = 0;
                 let lastToolName = '';
-                let lastVisibleStatusTime = Date.now();
                 let workerErrorMessage: string | null = null;
                 let lastFailedToolName: string | null = null;
                 let lastFailedToolResult: string | null = null;
@@ -703,15 +726,6 @@ export async function askLive(
                 const STATUS_INTERVAL_MS = 12_000;
                 const statusInterval = setInterval(() => {
                     const elapsed = Math.round((Date.now() - startTime) / 1000);
-                    let statusMsg = '';
-
-                    if (lastToolName) {
-                        statusMsg = `⏳ [Live Observer] Worker is active (${elapsed}s) — ${workerToolCalls} tool call${workerToolCalls !== 1 ? 's' : ''}, last: \`${lastToolName}\``;
-                    } else if (workerCharsGenerated > 0) {
-                        statusMsg = `⏳ [Live Observer] Worker is reasoning (${elapsed}s) — ${workerCharsGenerated} chars generated so far`;
-                    } else {
-                        statusMsg = `⏳ [Live Observer] Worker is initializing (${elapsed}s)...`;
-                    }
 
                     engineBus.emitOrchestrationEvent({
                         type: 'progress_updated',
@@ -725,15 +739,18 @@ export async function askLive(
                         detail: lastToolName || undefined,
                         timestamp: Date.now(),
                     });
-
-                    if (Date.now() - lastVisibleStatusTime >= STATUS_INTERVAL_MS - 1000) {
-                        callbacks.onChunk(`\n${statusMsg}\n`);
-                        lastVisibleStatusTime = Date.now();
-                    }
                 }, STATUS_INTERVAL_MS);
 
                 try {
-                    await askTier2(params.task_prompt, workerCallbacks, undefined, messagesFromClient, senderRole, { disableTools: false });
+                    await askTier2(params.task_prompt, workerCallbacks, undefined, messagesFromClient, senderRole, {
+                        disableTools: false,
+                        toolExecutionContext: {
+                            actor: 'worker',
+                            mode,
+                            sessionId: taskId,
+                            taskId,
+                        },
+                    });
 
                     const totalDuration = Date.now() - startTime;
                     const durationSec = Math.round(totalDuration / 1000);
@@ -781,7 +798,6 @@ export async function askLive(
                             timestamp: Date.now(),
                         });
                         console.log(`  ❌ [Router]: Worker task ${taskId} FAILED in ${durationSec}s — ${failureMessage}`);
-                        callbacks.onChunk(`\n❌ [Live Observer] Worker Engine encountered an error: ${failureMessage}\n`);
                         return outcome.message;
                     }
 
@@ -825,7 +841,6 @@ export async function askLive(
                         failureKind: 'blocked',
                         timestamp: Date.now(),
                     });
-                    callbacks.onChunk(`\n❌ [Live Observer] Worker Engine encountered an error: ${error.message}\n`);
                     return `The Worker Engine is blocked by error: ${error.message}. The user has not seen a final answer yet. Inform the user about the blocker and ask whether they want to retry.`;
                 } finally {
                     clearInterval(statusInterval);
@@ -930,6 +945,7 @@ export async function askLive(
             // text after tool results properly to the user.
             let stepText = '';
             let afterToolResult = false;
+            const liveToolExecutionContext = { actor: 'live' as const, mode: executionPlan.mode };
             const delegationPending = executionPlan.enableDelegation
                 && !toolCallHistory.some((entry) => entry.toolName === 'delegate_to_worker_engine');
 
@@ -975,6 +991,7 @@ export async function askLive(
                 } else if (part.type === 'tool-call') {
                     nativeToolUsed = true;
                     console.log(`  🔧 [live] Native Tool call: ${part.toolName} (step ${stepCount})`);
+                    registerScopedToolExecutionContext(part.toolCallId, part.toolName, part.input, liveToolExecutionContext);
 
                     // 🧠 Thinking Protocol: Reject forge calls without <thinking> block
                     const thinkingCheck = validateThinkingProtocol(part.toolName, fullText);
@@ -1019,6 +1036,7 @@ export async function askLive(
                             ? part.output
                             : JSON.stringify(part.output, null, 2),
                     );
+                    clearToolExecutionContext(part.toolCallId);
 
                     // 🔄 Tool Loop Detection
                     const toolArgs = (part as any).args || (part as any).input || {};
@@ -1045,6 +1063,8 @@ export async function askLive(
                 } else if (part.type === 'error') {
                     console.error('  ❌ [live] Stream error event:', part.error);
                     callbacks.onError(part.error instanceof Error ? part.error : new Error(String(part.error)));
+                } else if (part.type === 'tool-error') {
+                    clearToolExecutionContext(part.toolCallId);
                 }
             }
 
@@ -1162,12 +1182,15 @@ export async function askLive(
                 const toolStart = Date.now();
 
                 if (toolFn) {
+                    registerScopedToolExecutionContext('raw-1', rawToolCall.name, rawToolCall.arguments || {}, liveToolExecutionContext);
                     try {
                         const res = await toolFn.execute(rawToolCall.arguments || {}, { toolCallId: 'raw-1', messages: [] });
                         toolOutput = typeof res === 'string' ? res : JSON.stringify(res);
                         success = true;
                     } catch (e: any) {
                         toolOutput = e.message || String(e);
+                    } finally {
+                        clearToolExecutionContext('raw-1');
                     }
                 } else {
                     toolOutput = `Error: Tool '${rawToolCall.name}' not found.`;
@@ -1243,7 +1266,7 @@ export async function askTier2(
     context?: string,
     messagesFromClient?: any[],
     senderRole: SenderRole = 'owner',
-    options?: { disableTools?: boolean }
+    options?: AskTier2Options,
 ): Promise<CognitiveRouterResult> {
     const validation = validateTier2Config();
     if (!validation.valid) {
@@ -1454,6 +1477,7 @@ export async function askTier2(
                     toolTimers.set(part.toolName, Date.now());
                     lastToolCallArgs = part.input;
                     console.log(`  🔧 [tier2] Tool call: ${part.toolName}`);
+                    registerScopedToolExecutionContext(part.toolCallId, part.toolName, part.input, options?.toolExecutionContext);
                     Transcript.append({
                         role: 'tool-call',
                         content: JSON.stringify(part.input),
@@ -1492,6 +1516,7 @@ export async function askTier2(
                         },
                     });
                     callbacks.onToolResult?.(part.toolName, toolSuccess, toolOutput);
+                    clearToolExecutionContext(part.toolCallId);
 
                     // 🔄 Tool Loop Detection
                     tier2ToolHistory.push({
@@ -1506,6 +1531,10 @@ export async function askTier2(
                     }
                     break;
                 }
+
+                case 'tool-error':
+                    clearToolExecutionContext(part.toolCallId);
+                    break;
 
                 case 'error':
                     console.error('  ❌ [tier2] Stream error event:', part.error);
@@ -1550,12 +1579,15 @@ export async function askTier2(
                         const toolStart = Date.now();
 
                         if (toolFn) {
+                            registerScopedToolExecutionContext('raw-2', rawToolCall.name, rawToolCall.arguments || {}, options?.toolExecutionContext);
                             try {
                                 const res = await toolFn.execute(rawToolCall.arguments || {}, { toolCallId: 'raw-2', messages: [] });
                                 toolOutput = typeof res === 'string' ? res : JSON.stringify(res);
                                 success = true;
                             } catch (e: any) {
                                 toolOutput = e.message || String(e);
+                            } finally {
+                                clearToolExecutionContext('raw-2');
                             }
                         } else {
                             toolOutput = `Error: Tool '${rawToolCall.name}' not found.`;
@@ -1582,7 +1614,10 @@ export async function askTier2(
                         console.log(`  🔄 [tier2] Feeding XML tool result back to model...`);
                         const followUpPrompt = `[System Tool Execution Result for ${rawToolCall.name}]:\n${toolOutput}\n\nWhen you receive a tool execution output, formulate a natural language response to the user based on that output. DO NOT output JSON anymore unless another tool is needed.`;
 
-                        return await askTier2(followUpPrompt, callbacks, context, messagesFromClient, senderRole, { disableTools: false });
+                        return await askTier2(followUpPrompt, callbacks, context, messagesFromClient, senderRole, {
+                            disableTools: false,
+                            toolExecutionContext: options?.toolExecutionContext,
+                        });
                     }
                 }
             } catch (err) {

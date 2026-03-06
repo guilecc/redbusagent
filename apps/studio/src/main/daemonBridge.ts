@@ -123,6 +123,58 @@ function buildForgeSummary(payload: DaemonForgeLifecycleEvent['payload']): strin
     }
 }
 
+export function buildWorkerThought(payload: Extract<DaemonMessage, { type: 'worker:orchestration' }>['payload']) {
+    switch (payload.event) {
+        case 'task_created':
+            return { text: 'Worker task created.', status: 'thinking' as const };
+        case 'delegated':
+            return { text: payload.summary ?? 'Live delegated work to the Worker Engine.', status: 'action' as const };
+        case 'tool_called':
+        case 'tool_result':
+            return null;
+        case 'progress_updated':
+            if (payload.toolCallCount && payload.toolCallCount > 0) {
+                return {
+                    text: `Worker active · ${payload.toolCallCount} tool call${payload.toolCallCount === 1 ? '' : 's'}${payload.detail ? ` · last: ${payload.detail}` : ''} · ${payload.elapsed ?? 0}s`,
+                    status: 'thinking' as const,
+                };
+            }
+            if (payload.charsGenerated && payload.charsGenerated > 0) {
+                return {
+                    text: `Worker reasoning · ${payload.charsGenerated} chars generated · ${payload.elapsed ?? 0}s`,
+                    status: 'thinking' as const,
+                };
+            }
+            return { text: `Worker initializing · ${payload.elapsed ?? 0}s`, status: 'thinking' as const };
+        case 'critic_feedback':
+            return {
+                text: payload.feedback
+                    ? `Critic ${payload.verdict ?? 'updated'} · ${payload.feedback}`
+                    : `Critic ${payload.verdict ?? 'updated'} the worker run.`,
+                status: payload.verdict === 'approved' ? 'done' as const : 'action' as const,
+            };
+        case 'repair_requested':
+            return {
+                text: `Repair attempt ${payload.attempt ?? 1}${payload.toolName ? ` via ${payload.toolName}` : ''} · ${payload.reason ?? 'Worker requested another pass.'}`,
+                status: 'action' as const,
+            };
+        case 'yield_requested':
+            return { text: `Worker paused · ${payload.reason ?? 'Awaiting input.'}`, status: 'action' as const };
+        case 'user_reply_received':
+            return { text: `User reply received${payload.replyPreview ? ` · ${payload.replyPreview}` : ''}`, status: 'action' as const };
+        case 'resumed':
+            return { text: `Worker resumed · ${payload.reason ?? 'Continuing execution.'}`, status: 'action' as const };
+        case 'completed':
+            return {
+                text: payload.summary
+                    ?? `Worker completed${payload.totalToolCalls != null ? ` · ${payload.totalToolCalls} tool call${payload.totalToolCalls === 1 ? '' : 's'}` : ''}`,
+                status: 'done' as const,
+            };
+        case 'failed':
+            return { text: `Worker failed · ${payload.error ?? 'Unknown worker error.'}`, status: 'action' as const };
+    }
+}
+
 export function applyForgeLifecycleSnapshot(
     current: StudioForgeSnapshot,
     payload: DaemonForgeLifecycleEvent['payload'],
@@ -660,6 +712,20 @@ export class StudioDaemonBridge {
                     payload: message.payload,
                 });
                 return;
+
+            case 'worker:orchestration': {
+                const thought = buildWorkerThought(message.payload);
+                if (!thought) {
+                    return;
+                }
+
+                this.emit({
+                    version: STUDIO_IPC_VERSION,
+                    type: 'daemon/thought',
+                    payload: thought,
+                });
+                return;
+            }
 
             case 'log':
                 this.emit({

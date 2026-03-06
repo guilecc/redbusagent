@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
     streamText: vi.fn(),
@@ -83,9 +83,14 @@ function textStream(text: string) {
 
 describe('askLive collaborative delegation guard', () => {
     beforeEach(() => {
+        vi.useFakeTimers();
         vi.clearAllMocks();
         mocks.workerConfig.enabled = true;
         mocks.workerConfig.model = 'worker-test';
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
     });
 
     it('delegates instead of returning a live-model refusal when collaborative handoff is available', async () => {
@@ -152,5 +157,38 @@ describe('askLive collaborative delegation guard', () => {
         expect(mocks.streamText).not.toHaveBeenCalled();
         expect(doneText).toContain('Worker Engine is disabled');
         expect(doneText).toContain('worker_engine.model');
+    });
+
+    it('keeps live observer progress out of the user-visible stream during long worker runs', async () => {
+        mocks.streamText
+            .mockReturnValueOnce(textStream('I cannot access Outlook or log into your email account for you.'))
+            .mockReturnValueOnce({
+                fullStream: (async function* () {
+                    await new Promise((resolve) => setTimeout(resolve, 13_000));
+                    yield { type: 'text-delta', text: 'Worker completed the automation routine.' };
+                })(),
+            })
+            .mockReturnValueOnce(textStream('Done: delegated to the Worker Engine and returned the automation result.'));
+
+        const chunks: string[] = [];
+        const run = askLive(
+            'create a routine that visits outlook.com and summarizes my emails',
+            {
+                onChunk: (chunk) => chunks.push(chunk),
+                onDone: () => undefined,
+                onError: (error) => {
+                    throw error;
+                },
+            },
+        );
+
+        await vi.advanceTimersByTimeAsync(12_500);
+        expect(chunks.join('')).not.toContain('[Live Observer]');
+
+        await vi.advanceTimersByTimeAsync(1_000);
+        await run;
+
+        expect(chunks.join('')).toContain('Delegating complex task to the Engineering Worker Engine');
+        expect(chunks.join('')).not.toContain('[Live Observer]');
     });
 });

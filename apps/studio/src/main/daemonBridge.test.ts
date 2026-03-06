@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
     applyForgeLifecycleSnapshot,
+    buildWorkerThought,
     buildSkillsApiUrl,
     buildCompatibilityYieldRequest,
     classifyYieldKind,
@@ -80,4 +81,23 @@ test('forge lifecycle snapshot accumulates stream content and success metadata',
 
 test('buildSkillsApiUrl targets the local forwarded daemon API route', () => {
     assert.equal(buildSkillsApiUrl(8765), 'http://127.0.0.1:8765/api/skills');
+});
+
+test('worker orchestration progress becomes a concise Studio thought', () => {
+    const thought = buildWorkerThought({
+        event: 'progress_updated',
+        sessionId: 'task-1',
+        taskId: 'task-1',
+        mode: 'collaborative',
+        actor: 'worker',
+        charsGenerated: 120,
+        toolCallCount: 2,
+        elapsed: 18,
+        detail: 'forge_and_test_skill',
+    });
+
+    assert.deepEqual(thought, {
+        text: 'Worker active · 2 tool calls · last: forge_and_test_skill · 18s',
+        status: 'thinking',
+    });
 });
