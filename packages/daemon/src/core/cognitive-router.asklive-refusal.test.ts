@@ -1,10 +1,19 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
     streamText: vi.fn(),
     searchMemory: vi.fn(async () => []),
     enrich: vi.fn(async (prompt: string) => ({ enrichedPrompt: prompt })),
     append: vi.fn(),
+    workerConfig: {
+        url: '',
+        model: 'worker-test',
+        enabled: true,
+        num_threads: 8,
+        num_ctx: 8192,
+        provider: 'anthropic',
+        apiKey: 'worker-key',
+    },
 }));
 
 vi.mock('ai', () => ({
@@ -28,15 +37,7 @@ vi.mock('../infra/llm-config.js', () => ({
         enabled: true,
         provider: 'ollama',
     }),
-    getWorkerEngineConfig: () => ({
-        url: '',
-        model: 'worker-test',
-        enabled: true,
-        num_threads: 8,
-        num_ctx: 8192,
-        provider: 'anthropic',
-        apiKey: 'worker-key',
-    }),
+    getWorkerEngineConfig: () => mocks.workerConfig,
 }));
 
 vi.mock('./system-prompt.js', () => ({
@@ -72,17 +73,31 @@ vi.mock('./engine-message-bus.js', () => ({
 
 const { askLive } = await import('./cognitive-router.js');
 
-describe('askLive collaborative delegation gap', () => {
-    it('passes through a live refusal even when delegation is enabled and explicitly prompted', async () => {
+function textStream(text: string) {
+    return {
+        fullStream: (async function* () {
+            yield { type: 'text-delta', text };
+        })(),
+    };
+}
+
+describe('askLive collaborative delegation guard', () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+        mocks.workerConfig.enabled = true;
+        mocks.workerConfig.model = 'worker-test';
+    });
+
+    it('delegates instead of returning a live-model refusal when collaborative handoff is available', async () => {
         const refusal = 'I cannot access Outlook or log into your email account for you.';
-        mocks.streamText.mockReturnValue({
-            fullStream: (async function* () {
-                yield { type: 'text-delta', text: refusal };
-            })(),
-        });
+        mocks.streamText
+            .mockReturnValueOnce(textStream(refusal))
+            .mockReturnValueOnce(textStream('Worker completed the Outlook automation routine and generated the summary.'))
+            .mockReturnValueOnce(textStream('Done: delegated to the Worker Engine and returned the automation result.'));
 
         let doneText = '';
         const chunks: string[] = [];
+        const toolCalls: Array<{ toolName: string; args: Record<string, unknown> }> = [];
 
         await askLive(
             'create a routine that visits outlook.com, enters my credentials, checks my emails from the last 24 hours (only from colleagues with @numenit.com domain), provides intelligent insights and summary, runs once to show how it would work, and schedules it daily at noon UTC',
@@ -94,14 +109,48 @@ describe('askLive collaborative delegation gap', () => {
                 onError: (error) => {
                     throw error;
                 },
+                onToolCall: (toolName, args) => {
+                    toolCalls.push({ toolName, args });
+                },
             },
         );
 
-        expect(mocks.streamText).toHaveBeenCalledTimes(1);
+        expect(mocks.streamText).toHaveBeenCalledTimes(3);
         const streamArgs = mocks.streamText.mock.calls[0][0];
         expect(streamArgs.system).toContain('delegate_to_worker_engine');
         expect(streamArgs.system).toContain('ALWAYS use delegate_to_worker_engine');
-        expect(doneText).toBe(refusal);
-        expect(chunks.join('')).toContain(refusal);
+        expect(toolCalls).toContainEqual({
+            toolName: 'delegate_to_worker_engine',
+            args: {
+                task_prompt: 'create a routine that visits outlook.com, enters my credentials, checks my emails from the last 24 hours (only from colleagues with @numenit.com domain), provides intelligent insights and summary, runs once to show how it would work, and schedules it daily at noon UTC',
+            },
+        });
+        expect(doneText).toBe('Done: delegated to the Worker Engine and returned the automation result.');
+        expect(chunks.join('')).not.toContain(refusal);
+        expect(chunks.join('')).toContain('Delegating complex task to the Engineering Worker Engine');
+    });
+
+    it('surfaces an actionable blocker instead of calling the live model when worker support is unavailable', async () => {
+        mocks.workerConfig.enabled = false;
+        mocks.workerConfig.model = '';
+
+        let doneText = '';
+
+        await askLive(
+            'create a routine that visits outlook.com, enters my credentials, checks my emails from the last 24 hours (only from colleagues with @numenit.com domain), provides intelligent insights and summary, runs once to show how it would work, and schedules it daily at noon UTC',
+            {
+                onChunk: () => undefined,
+                onDone: (text) => {
+                    doneText = text;
+                },
+                onError: (error) => {
+                    throw error;
+                },
+            },
+        );
+
+        expect(mocks.streamText).not.toHaveBeenCalled();
+        expect(doneText).toContain('Worker Engine is disabled');
+        expect(doneText).toContain('worker_engine.model');
     });
 });

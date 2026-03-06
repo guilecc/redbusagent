@@ -471,6 +471,33 @@ export function buildDelegatedWorkerOutcome(input: DelegatedWorkerOutcomeInput):
     };
 }
 
+function buildWorkerDelegationBlockerMessage(workerConfig: { enabled?: boolean; model?: string | null }): string {
+    const workerEnabled = workerConfig.enabled === true;
+    const workerModelConfigured = typeof workerConfig.model === 'string'
+        ? workerConfig.model.trim().length > 0
+        : Boolean(workerConfig.model);
+
+    if (!workerEnabled && !workerModelConfigured) {
+        return 'This request needs the Worker Engine for automation/delegation, but the Worker Engine is disabled and no worker model is configured. Run redbus config to enable the Worker Engine and set worker_engine.model, then retry.';
+    }
+
+    if (!workerEnabled) {
+        return 'This request needs the Worker Engine for automation/delegation, but the Worker Engine is disabled. Run redbus config to enable it, then retry.';
+    }
+
+    return 'This request needs the Worker Engine for automation/delegation, but no worker model is configured. Set worker_engine.model and retry.';
+}
+
+function looksLikeCapabilityRefusal(text?: string | null): boolean {
+    const normalized = text?.trim().toLowerCase();
+    if (!normalized) return false;
+
+    const refusalPattern = /\b(i can(?:not|'t)|i am unable to|i'm unable to|i do not have the ability to|i don't have the ability to)\b/;
+    const capabilityPattern = /\b(access|log in|log into|browse|visit|open|interact with|control|use|outlook|email|account|credentials|website|websites)\b/;
+
+    return refusalPattern.test(normalized) && capabilityPattern.test(normalized);
+}
+
 // ─── Public API ───────────────────────────────────────────────────
 
 export async function askLive(
@@ -481,9 +508,14 @@ export async function askLive(
     options?: AskLiveOptions,
 ): Promise<CognitiveRouterResult> {
     const workerConfig = getWorkerEngineConfig();
+    const collaborativeIntentRequested = (options?.forceExecutionMode ?? selectExecutionMode(prompt, {
+        workerEnabled: true,
+        recentHistory: messagesFromClient,
+    })) === 'collaborative';
+    const workerDelegationAvailable = workerConfig.enabled && !!workerConfig.model;
     const executionPlan = resolveLiveExecutionPlan(prompt, {
         forceExecutionMode: options?.forceExecutionMode,
-        workerEnabled: workerConfig.enabled && !!workerConfig.model,
+        workerEnabled: workerDelegationAvailable,
         recentHistory: messagesFromClient,
     });
 
@@ -502,6 +534,14 @@ export async function askLive(
     const liveEngineConf = getLiveEngineConfig();
     const modelName = liveEngineConf.model;
     const model = createLiveModel();
+
+    if (collaborativeIntentRequested && !workerDelegationAvailable) {
+        const blockerMessage = buildWorkerDelegationBlockerMessage(workerConfig);
+        Transcript.append({ role: 'user', content: prompt, meta: { tier: 'live', model: modelName } });
+        Transcript.append({ role: 'assistant', content: blockerMessage, meta: { tier: 'live', model: modelName } });
+        callbacks.onDone(blockerMessage);
+        return { tier: 'live', model: modelName };
+    }
 
     // ──── Auto-RAG Pre-flight Injection ────
     const ragResult = await AutoRAG.enrich(prompt);
@@ -884,10 +924,13 @@ export async function askLive(
             let isDetermining = true;
             let hasSentThinking = false;
             let nativeToolUsed = false;
+            let synthesizedDelegation = false;
             // Track text emitted per "step" so we can stream continuation
             // text after tool results properly to the user.
             let stepText = '';
             let afterToolResult = false;
+            const delegationPending = executionPlan.enableDelegation
+                && !toolCallHistory.some((entry) => entry.toolName === 'delegate_to_worker_engine');
 
             for await (const part of result.fullStream) {
                 if (part.type === 'text-delta') {
@@ -915,14 +958,16 @@ export async function askLive(
                             // Only exit determining phase if we haven't seen signs of an upcoming tool call
                             if (!fullText.includes('<tool_call') && !fullText.includes('```xml')) {
                                 isDetermining = false;
-                                callbacks.onChunk(fullText); // Output standard buffer
+                                if (!delegationPending) {
+                                    callbacks.onChunk(fullText); // Output standard buffer
+                                }
                             }
                         }
                     } else if (!isDetermining && !isJsonMode) {
                         // Mid-stream switch to suppression mode if we hit a tool call block
                         if (fullText.includes('<tool_call') || fullText.includes('```xml')) {
                             isJsonMode = true; // Engage silence mode
-                        } else {
+                        } else if (!delegationPending) {
                             callbacks.onChunk(part.text);
                         }
                     }
@@ -1073,6 +1118,22 @@ export async function askLive(
                 }
             }
 
+            const delegationAlreadyAttempted = toolCallHistory.some((entry) => entry.toolName === 'delegate_to_worker_engine');
+            if (
+                executionPlan.enableDelegation
+                && !rawToolCall
+                && !nativeToolUsed
+                && !delegationAlreadyAttempted
+                && looksLikeCapabilityRefusal(fullText)
+            ) {
+                rawToolCall = {
+                    name: 'delegate_to_worker_engine',
+                    arguments: { task_prompt: prompt },
+                };
+                synthesizedDelegation = true;
+                console.log('  🧠 [Router]: Synthesizing Worker delegation after live-model capability refusal');
+            }
+
             // ─── Raw JSON Invisible Execution Loop ───
             if (rawToolCall) {
                 console.log(`  🔧 [live] Raw JSON Tool Call Intercepted: ${rawToolCall.name}`);
@@ -1143,7 +1204,12 @@ export async function askLive(
                     return { tier: 'live', model: modelName };
                 }
 
-                messages.push({ role: 'assistant', content: fullText });
+                messages.push({
+                    role: 'assistant',
+                    content: synthesizedDelegation
+                        ? 'Delegating to the Worker Engine via delegate_to_worker_engine.'
+                        : fullText,
+                });
                 messages.push({ role: 'user', content: `[System Tool Execution Result]:\n${toolOutput}\n\nWhen you receive a tool execution output, formulate a natural language response to the user based on that output. DO NOT output JSON anymore unless another tool is needed.` });
 
                 continue; // Immediately loop again!
